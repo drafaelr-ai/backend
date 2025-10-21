@@ -13,8 +13,8 @@ app = Flask(__name__)
 CORS(app)
 
 # --- CONFIGURAÇÃO DA CONEXÃO (A SUA VERSÃO FUNCIONAL) ---
-DB_USER = "postgres.kwmuiviyqjcxawuiqkrl" 
-DB_PASSWORD = "Controledeobras2025" # A senha simples que funcionou
+DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
+DB_PASSWORD = "Controledeobras2025"
 DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
 DB_PORT = "5432"
 DB_NAME = "postgres"
@@ -66,8 +66,7 @@ class PagamentoEmpreitada(db.Model):
 # --- FIM DOS MODELOS ---
 
 # --- COMANDO PARA CRIAR AS TABELAS ---
-with app.app_context():
-    db.create_all()
+
 # --- FIM DO COMANDO ---
 
 # --- ROTAS DA API (COM INDENTAÇÃO CORRIGIDA) ---
@@ -166,4 +165,5 @@ def export_pdf_pendentes(obra_id):
     response = make_response(bytes(pdf.output())); response.headers['Content-Type'] = 'application/pdf'; response.headers['Content-Disposition'] = f'attachment; filename=pagamentos_pendentes_obra_{obra.id}.pdf'; return response
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
