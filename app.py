@@ -99,6 +99,11 @@ class PagamentoEmpreitada(db.Model):
             "valor": self.valor
         }
 
+# --- FUNÇÃO AUXILIAR PARA FORMATAÇÃO BRASILEIRA ---
+def formatar_real(valor):
+    """Formata valor para padrão brasileiro: R$ 9.915,00"""
+    return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
 # --- ROTAS DA API ---
 
 @app.route('/obras', methods=['GET'])
@@ -310,7 +315,7 @@ def export_pdf_pendentes(obra_id):
             elements.append(no_items)
         else:
             # Preparar dados da tabela
-            data = [['Data', 'Tipo', 'Descricao', 'Valor (R$)', 'PIX']]
+            data = [['Data', 'Tipo', 'Descricao', 'Valor', 'PIX']]
             total_pendente = 0
             
             for item in items:
@@ -318,16 +323,16 @@ def export_pdf_pendentes(obra_id):
                     item.data.strftime('%d/%m/%Y'),
                     item.tipo[:15] if item.tipo else 'N/A',
                     item.descricao[:35] if item.descricao else 'N/A',
-                    f"{item.valor:.2f}",
+                    formatar_real(item.valor),
                     (item.pix or 'Nao informado')[:20]
                 ])
                 total_pendente += item.valor
             
             # Linha de total
-            data.append(['', '', 'TOTAL A PAGAR', f"{total_pendente:.2f}", ''])
+            data.append(['', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
             
             # Criar tabela
-            table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3*cm, 4*cm])
+            table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3.5*cm, 3.5*cm])
             
             # Estilo da tabela
             table.setStyle(TableStyle([
@@ -344,7 +349,7 @@ def export_pdf_pendentes(obra_id):
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white),
                 ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
                 ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),  # Valores alinhados à direita
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
                 ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
