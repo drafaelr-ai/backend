@@ -11,7 +11,7 @@ import os
 
 app = Flask(__name__)
 # Permite conexões do seu frontend local E do seu futuro site na Vercel
-CORS(app, origins=["http://localhost:3000", "https://obras-front-c99asit6-drafaelr-ais-projects.vercel.app"], supports_credentials=True)
+CORS(app, origins=["http://localhost:3000", "https://frontend-exjt85rjo-drafaelr-ais-projects.vercel.app"], supports_credentials=True)
 
 # --- CONFIGURAÇÃO DA CONEXÃO (A SUA VERSÃO FUNCIONAL) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
