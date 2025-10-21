@@ -10,7 +10,8 @@ from fpdf import FPDF
 import os
 
 app = Flask(__name__)
-CORS(app)
+# Permite conexões do seu frontend local E do seu futuro site na Vercel
+CORS(app, origins=["http://localhost:3000", "https://obras-front-c99asit6-drafaelr-ais-projects.vercel.app"], supports_credentials=True)
 
 # --- CONFIGURAÇÃO DA CONEXÃO (A SUA VERSÃO FUNCIONAL) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
@@ -164,6 +165,16 @@ def export_pdf_pendentes(obra_id):
     pdf.set_font("Arial", 'B', 10); pdf.cell(125, 10, 'Total a Pagar', 1); pdf.cell(65, 10, f"{total_pendente:.2f}", 1); pdf.ln(20)
     response = make_response(bytes(pdf.output())); response.headers['Content-Type'] = 'application/pdf'; response.headers['Content-Disposition'] = f'attachment; filename=pagamentos_pendentes_obra_{obra.id}.pdf'; return response
 
+# --- NOVA ROTA PARA DELETAR OBRA ---
+@app.route('/obras/<int:obra_id>', methods=['DELETE'])
+def deletar_obra(obra_id):
+    obra = Obra.query.get_or_404(obra_id)
+    # SQLAlchemy configurado com 'cascade="all, delete-orphan"' nos relacionamentos
+    # irá deletar automaticamente os lançamentos e empreitadas associados.
+    db.session.delete(obra)
+    db.session.commit()
+    return jsonify({"sucesso": f"Obra {obra_id} deletada com sucesso"})
+# --- FIM DA NOVA ROTA ---
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
