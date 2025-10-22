@@ -92,11 +92,13 @@ class PagamentoEmpreitada(db.Model):
     empreitada_id = db.Column(db.Integer, db.ForeignKey('empreitada.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
     valor = db.Column(db.Float, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Pago')
     
     def to_dict(self):
         return {
             "data": self.data.isoformat(),
-            "valor": self.valor
+            "valor": self.valor,
+            "status": self.status
         }
 
 # --- FUNÇÃO AUXILIAR PARA FORMATAÇÃO BRASILEIRA ---
@@ -126,12 +128,36 @@ def add_obra():
 def get_obra_detalhes(obra_id):
     obra = Obra.query.get_or_404(obra_id)
     
-    # Sumários
-    sumarios_query = db.session.query(
+    # Total de lançamentos
+    sumarios_lancamentos = db.session.query(
         func.sum(Lancamento.valor).label('total_geral'),
         func.sum(db.case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
         func.sum(db.case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
     ).filter(Lancamento.obra_id == obra_id).first()
+    
+    # Total de pagamentos de empreitadas
+    sumarios_empreitadas = db.session.query(
+        func.sum(PagamentoEmpreitada.valor).label('total_empreitadas_pago')
+    ).join(Empreitada).filter(
+        Empreitada.obra_id == obra_id,
+        PagamentoEmpreitada.status == 'Pago'
+    ).first()
+    
+    # Calcular totais
+    total_lancamentos = sumarios_lancamentos.total_geral or 0.0
+    total_pago_lancamentos = sumarios_lancamentos.total_pago or 0.0
+    total_pago_empreitadas = sumarios_empreitadas.total_empreitadas_pago or 0.0
+    
+    # Total pago = lançamentos pagos + empreitadas pagas
+    total_pago_geral = total_pago_lancamentos + total_pago_empreitadas
+    
+    # Total geral = lançamentos + todas as empreitadas (valor global)
+    total_empreitadas_global = db.session.query(
+        func.sum(Empreitada.valor_global)
+    ).filter(Empreitada.obra_id == obra_id).scalar() or 0.0
+    
+    total_geral = total_lancamentos + total_empreitadas_global
+    total_a_pagar = total_geral - total_pago_geral
     
     total_por_segmento = db.session.query(
         Lancamento.tipo,
@@ -144,9 +170,9 @@ def get_obra_detalhes(obra_id):
     ).filter(Lancamento.obra_id == obra_id).group_by('mes_ano').all()
     
     sumarios_dict = {
-        "total_geral": sumarios_query.total_geral or 0.0,
-        "total_pago": sumarios_query.total_pago or 0.0,
-        "total_a_pagar": sumarios_query.total_a_pagar or 0.0,
+        "total_geral": total_geral,
+        "total_pago": total_pago_geral,
+        "total_a_pagar": total_a_pagar,
         "total_por_segmento": {tipo: valor for tipo, valor in total_por_segmento},
         "total_por_mes": {mes: valor for mes, valor in total_por_mes}
     }
@@ -249,7 +275,8 @@ def add_pagamento_empreitada(empreitada_id):
     novo_pagamento = PagamentoEmpreitada(
         empreitada_id=empreitada_id,
         data=datetime.date.fromisoformat(dados['data']),
-        valor=float(dados['valor'])
+        valor=float(dados['valor']),
+        status=dados.get('status', 'Pago')
     )
     db.session.add(novo_pagamento)
     db.session.commit()
@@ -349,7 +376,7 @@ def export_pdf_pendentes(obra_id):
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white),
                 ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
                 ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),  # Valores alinhados à direita
+                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
                 ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
