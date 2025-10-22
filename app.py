@@ -270,6 +270,18 @@ def editar_empreitada(empreitada_id):
     db.session.commit()
     return jsonify(empreitada.to_dict())
 
+@app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE'])
+def deletar_empreitada(empreitada_id):
+    try:
+        empreitada = Empreitada.query.get_or_404(empreitada_id)
+        db.session.delete(empreitada)
+        db.session.commit()
+        return jsonify({"sucesso": "Empreitada deletada com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao deletar empreitada: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
 @app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST'])
 def add_pagamento_empreitada(empreitada_id):
     dados = request.json
