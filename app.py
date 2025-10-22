@@ -96,6 +96,7 @@ class PagamentoEmpreitada(db.Model):
     
     def to_dict(self):
         return {
+            "id": self.id,
             "data": self.data.isoformat(),
             "valor": self.valor,
             "status": self.status
@@ -282,6 +283,21 @@ def add_pagamento_empreitada(empreitada_id):
     db.session.commit()
     empreitada_atualizada = Empreitada.query.get(empreitada_id)
     return jsonify(empreitada_atualizada.to_dict())
+
+@app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE'])
+def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
+    try:
+        pagamento = PagamentoEmpreitada.query.filter_by(
+            id=pagamento_id, 
+            empreitada_id=empreitada_id
+        ).first_or_404()
+        db.session.delete(pagamento)
+        db.session.commit()
+        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Erro ao deletar pagamento: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET'])
 def export_csv(obra_id):
