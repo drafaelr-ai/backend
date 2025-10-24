@@ -1,4 +1,4 @@
-import os  # Adicionado para variáveis de ambiente
+import os
 from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -12,30 +12,24 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-import traceback  # Importado para melhor log de erro no PDF
+import traceback  # Importado para log de erros detalhado
 
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
 # Lista de origens permitidas (seu frontend no Vercel e o localhost para testes)
 origins_list = [
-    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app", # URL do Vercel
-    "http://localhost:3000"  # Para desenvolvimento local
-]
-
-# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
-# Lista de origens permitidas
-origins_list = [
-    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # <-- ADICIONE ESTA NOVA URL
-    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL antiga (pode deixar por segurança)
+    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # URL Nova
+    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL Antiga
     "http://localhost:3000"  # Para desenvolvimento local
 ]
 
 # Configuração de CORS explícita para permitir seu frontend
 CORS(app, resources={r"/*": {"origins": origins_list}}, supports_credentials=True)
+
 # --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl" #
-# NUNCA coloque a senha direto no código. Ela será lida do ambiente do Railway.
+# A senha será lida da variável de ambiente 'DB_PASSWORD' no Railway
 DB_PASSWORD = os.environ.get('DB_PASSWORD') 
 DB_HOST = "aws-1-sa-east-1.pooler.supabase.com" #
 DB_PORT = "5432" #
@@ -43,8 +37,8 @@ DB_NAME = "postgres" #
 
 # Verifica se a senha foi carregada do ambiente
 if not DB_PASSWORD:
-    # Esta linha vai parar a aplicação se a senha não for definida no Railway,
-    # o que é bom para evitar erros de conexão.
+    print("ERRO CRÍTICO: Variável de ambiente DB_PASSWORD não definida.")
+    # Isso vai forçar o crash, o que é bom para sabermos que a variável não foi lida.
     raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
 
 encoded_password = quote_plus(DB_PASSWORD)
@@ -63,7 +57,6 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = { #
 db = SQLAlchemy(app)
 
 # --- MODELOS DO BANCO DE DADOS ---
-# (O restante dos seus modelos permanece o mesmo)
 class Obra(db.Model): #
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(150), nullable=False)
@@ -141,7 +134,6 @@ def formatar_real(valor): #
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 # --- ROTAS DA API ---
-# (Todas as suas rotas permanecem as mesmas)
 
 @app.route('/', methods=['GET']) #
 def home():
@@ -153,8 +145,9 @@ def get_obras():
         obras = Obra.query.order_by(Obra.nome).all()
         return jsonify([obra.to_dict() for obra in obras])
     except Exception as e:
-        print(f"Erro ao buscar obras: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao buscar obras: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras', methods=['POST']) #
 def add_obra():
@@ -169,22 +162,21 @@ def add_obra():
         return jsonify(nova_obra.to_dict()), 201
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao adicionar obra: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao adicionar obra: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>', methods=['GET']) #
 def get_obra_detalhes(obra_id):
     try:
         obra = Obra.query.get_or_404(obra_id)
         
-        # Total de lançamentos
         sumarios_lancamentos = db.session.query(
             func.sum(Lancamento.valor).label('total_geral'),
             func.sum(db.case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
             func.sum(db.case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
         ).filter(Lancamento.obra_id == obra_id).first()
         
-        # Total de pagamentos de empreitadas
         sumarios_empreitadas = db.session.query(
             func.sum(PagamentoEmpreitada.valor).label('total_empreitadas_pago')
         ).join(Empreitada).filter(
@@ -192,15 +184,11 @@ def get_obra_detalhes(obra_id):
             PagamentoEmpreitada.status == 'Pago'
         ).first()
         
-        # Calcular totais
         total_lancamentos = sumarios_lancamentos.total_geral or 0.0
         total_pago_lancamentos = sumarios_lancamentos.total_pago or 0.0
         total_pago_empreitadas = sumarios_empreitadas.total_empreitadas_pago or 0.0
-        
-        # Total pago = lançamentos pagos + empreitadas pagas
         total_pago_geral = total_pago_lancamentos + total_pago_empreitadas
         
-        # Total geral = lançamentos + todas as empreitadas (valor global)
         total_empreitadas_global = db.session.query(
             func.sum(Empreitada.valor_global)
         ).filter(Empreitada.obra_id == obra_id).scalar() or 0.0
@@ -233,8 +221,9 @@ def get_obra_detalhes(obra_id):
             "sumarios": sumarios_dict
         })
     except Exception as e:
-        print(f"Erro ao buscar detalhes da obra: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao buscar detalhes da obra: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>', methods=['DELETE']) #
 def deletar_obra(obra_id):
@@ -245,8 +234,9 @@ def deletar_obra(obra_id):
         return jsonify({"sucesso": "Obra deletada com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao deletar obra: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao deletar obra: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/lancamentos', methods=['POST']) #
 def add_lancamento(obra_id):
@@ -266,8 +256,9 @@ def add_lancamento(obra_id):
         return jsonify(novo_lancamento.to_dict()), 201
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao adicionar lançamento: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao adicionar lançamento: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH']) #
 def marcar_como_pago(lancamento_id):
@@ -278,8 +269,9 @@ def marcar_como_pago(lancamento_id):
         return jsonify(lancamento.to_dict())
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao marcar como pago: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao marcar como pago: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT']) #
 def editar_lancamento(lancamento_id):
@@ -296,8 +288,9 @@ def editar_lancamento(lancamento_id):
         return jsonify(lancamento.to_dict())
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao editar lançamento: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao editar lançamento: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE']) #
 def deletar_lancamento(lancamento_id):
@@ -308,8 +301,9 @@ def deletar_lancamento(lancamento_id):
         return jsonify({"sucesso": "Lançamento deletado"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao deletar lançamento: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao deletar lançamento: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/empreitadas', methods=['POST']) #
 def add_empreitada(obra_id):
@@ -327,8 +321,9 @@ def add_empreitada(obra_id):
         return jsonify(nova_empreitada.to_dict()), 201
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao adicionar empreitada: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao adicionar empreitada: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>', methods=['PUT']) #
 def editar_empreitada(empreitada_id):
@@ -343,8 +338,9 @@ def editar_empreitada(empreitada_id):
         return jsonify(empreitada.to_dict())
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao editar empreitada: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao editar empreitada: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE']) #
 def deletar_empreitada(empreitada_id):
@@ -355,8 +351,9 @@ def deletar_empreitada(empreitada_id):
         return jsonify({"sucesso": "Empreitada deletada com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao deletar empreitada: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao deletar empreitada: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST']) #
 def add_pagamento_empreitada(empreitada_id):
@@ -374,8 +371,9 @@ def add_pagamento_empreitada(empreitada_id):
         return jsonify(empreitada_atualizada.to_dict())
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao adicionar pagamento: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao adicionar pagamento: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE']) #
 def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
@@ -389,8 +387,9 @@ def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
         return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao deletar pagamento: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao deletar pagamento: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET']) #
 def export_csv(obra_id):
@@ -417,8 +416,9 @@ def export_csv(obra_id):
         output.headers["Content-type"] = "text/csv"
         return output
     except Exception as e:
-        print(f"Erro ao exportar CSV: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        error_details = traceback.format_exc()
+        print(f"Erro ao exportar CSV: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET']) #
 def export_pdf_pendentes(obra_id):
@@ -509,22 +509,20 @@ def export_pdf_pendentes(obra_id):
         return response
         
     except Exception as e:
-        # Use a importação de traceback para um log mais detalhado
-        error_detail = traceback.format_exc()
+        error_details = traceback.format_exc() #
         print(f"=" * 80)
         print(f"ERRO ao gerar PDF para obra_id={obra_id}")
         print(f"Erro: {str(e)}")
         print(f"Traceback completo:")
-        print(error_detail)
+        print(error_details)
         print(f"=" * 80)
         return jsonify({
             "erro": "Erro ao gerar PDF",
             "mensagem": str(e),
-            "obra_id": obra_id
+            "obra_id": obra_id,
+            "details": error_details
         }), 500
 
 if __name__ == '__main__':
-    # Lê a porta do ambiente (necessário para o Railway)
     port = int(os.environ.get('PORT', 5000)) #
-    # O 'debug=True' é útil, mas em produção real, considere 'debug=False'
     app.run(host='0.0.0.0', port=port, debug=True) #
