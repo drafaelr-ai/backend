@@ -1,6 +1,7 @@
 # Forçando novo deploy com correções 24/10
 import os
 import traceback  # Importado para log de erros detalhado
+import re  # Importado para o CORS com regex
 from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -20,14 +21,18 @@ print("--- [LOG] Iniciando app.py ---")
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
-# Lista de origens permitidas (seu frontend no Vercel e o localhost para testes)
-origins_list = [
-    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # URL Nova
-    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL Antiga
-    "http://localhost:3000"  # Para desenvolvimento local
+# Implementando a sugestão de regex (image_3fb581.png) para aceitar previews do Vercel
+prod_url = os.environ.get('FRONTEND_URL', "").strip()  # URL de produção principal (opcional)
+allowed_origins = [
+    re.compile(r"https://.*-ais-projects\.vercel\.app$"),  # Regex para todos os previews
+    "http://localhost:3000"  # Desenvolvimento local
 ]
-CORS(app, resources={r"/*": {"origins": origins_list}}, supports_credentials=True)
-print(f"--- [LOG] CORS configurado para {len(origins_list)} origens ---")
+if prod_url:
+    allowed_origins.append(prod_url)
+
+CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
+print(f"--- [LOG] CORS configurado com regex e {len(allowed_origins)} padrões ---")
+
 
 # --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
@@ -40,14 +45,16 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD')
 
 if not DB_PASSWORD:
     print("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
-    # Isso vai forçar o crash, o que é bom para sabermos que a variável não foi lida.
     raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
 else:
     print("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
 
 encoded_password = quote_plus(DB_PASSWORD)
-DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-print(f"--- [LOG] String de conexão criada para usuário {DB_USER} ---")
+
+# Implementando a sugestão de SSL (image_3fb5ba.png)
+DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
+
+print(f"--- [LOG] String de conexão criada para usuário {DB_USER} (com sslmode=require) ---")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
