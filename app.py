@@ -23,9 +23,16 @@ origins_list = [
     "http://localhost:3000"  # Para desenvolvimento local
 ]
 
+# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
+# Lista de origens permitidas
+origins_list = [
+    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # <-- ADICIONE ESTA NOVA URL
+    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL antiga (pode deixar por segurança)
+    "http://localhost:3000"  # Para desenvolvimento local
+]
+
 # Configuração de CORS explícita para permitir seu frontend
 CORS(app, resources={r"/*": {"origins": origins_list}}, supports_credentials=True)
-
 # --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl" #
 # NUNCA coloque a senha direto no código. Ela será lida do ambiente do Railway.
