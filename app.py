@@ -22,12 +22,10 @@ app = Flask(__name__)
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
 # Lista de origens permitidas (seu frontend no Vercel e o localhost para testes)
 origins_list = [
-    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # URL Nova [cite: image_17c018.png]
-    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL Antiga [cite: image_3cb233.png]
+    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # URL Nova
+    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL Antiga
     "http://localhost:3000"  # Para desenvolvimento local
 ]
-
-# Configuração de CORS explícita para permitir seu frontend
 CORS(app, resources={r"/*": {"origins": origins_list}}, supports_credentials=True)
 print(f"--- [LOG] CORS configurado para {len(origins_list)} origens ---")
 
@@ -40,7 +38,6 @@ DB_NAME = "postgres"
 print("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
 DB_PASSWORD = os.environ.get('DB_PASSWORD') 
 
-# Verifica se a senha foi carregada do ambiente
 if not DB_PASSWORD:
     print("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
     # Isso vai forçar o crash, o que é bom para sabermos que a variável não foi lida.
@@ -143,6 +140,22 @@ def formatar_real(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 # --- ROTAS DA API ---
+
+# --- ROTA DE ADMINISTRAÇÃO (NOVA) ---
+# Esta rota é para criar as tabelas no banco de dados.
+@app.route('/admin/create_tables', methods=['GET'])
+def create_tables():
+    print("--- [LOG] Rota /admin/create_tables (GET) acessada ---")
+    try:
+        with app.app_context():
+            db.create_all()
+        print("--- [LOG] db.create_all() executado com sucesso. ---")
+        return jsonify({"sucesso": "Tabelas criadas no banco de dados."}), 200
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/create_tables: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": "Falha ao criar tabelas.", "details": error_details}), 500
+# ------------------------------------
 
 @app.route('/', methods=['GET'])
 def home():
@@ -489,7 +502,7 @@ def export_pdf_pendentes(obra_id):
             
             data.append(['', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
             
-            table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3.5*cm, 3.5*cm])
+            table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3*cm, 4*cm])
             
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
@@ -534,7 +547,7 @@ def export_pdf_pendentes(obra_id):
         return response
         
     except Exception as e:
-        # Erro de digitação corrigido aqui (era 'error_detail') [cite: image_3c332c.png]
+        # Erro de digitação corrigido aqui (era 'error_detail')
         error_details = traceback.format_exc()
         print(f"=" * 80)
         print(f"ERRO ao gerar PDF para obra_id={obra_id}")
@@ -546,7 +559,7 @@ def export_pdf_pendentes(obra_id):
             "erro": "Erro ao gerar PDF",
             "mensagem": str(e),
             "obra_id": obra_id,
-            "details": error_details # Corrigido aqui
+            "details": error_details 
         }), 500
 
 if __name__ == '__main__':
@@ -554,3 +567,4 @@ if __name__ == '__main__':
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} (debug=True) ---")
     # debug=True nos dará logs de erro mais detalhados no Railway
     app.run(host='0.0.0.0', port=port, debug=True)
+
