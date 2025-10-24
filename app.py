@@ -1,3 +1,4 @@
+import os  # Adicionado para variáveis de ambiente
 from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -11,24 +12,40 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-import os
+import traceback  # Importado para melhor log de erro no PDF
 
 app = Flask(__name__)
-CORS(app)
 
-# --- CONFIGURAÇÃO DA CONEXÃO ---
-DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
-DB_PASSWORD = "Controledeobras2025"
-DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
-DB_PORT = "5432"
-DB_NAME = "postgres"
+# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
+# Lista de origens permitidas (seu frontend no Vercel e o localhost para testes)
+origins_list = [
+    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app", # URL do Vercel
+    "http://localhost:3000"  # Para desenvolvimento local
+]
+
+# Configuração de CORS explícita para permitir seu frontend
+CORS(app, resources={r"/*": {"origins": origins_list}}, supports_credentials=True)
+
+# --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
+DB_USER = "postgres.kwmuiviyqjcxawuiqkrl" #
+# NUNCA coloque a senha direto no código. Ela será lida do ambiente do Railway.
+DB_PASSWORD = os.environ.get('DB_PASSWORD') 
+DB_HOST = "aws-1-sa-east-1.pooler.supabase.com" #
+DB_PORT = "5432" #
+DB_NAME = "postgres" #
+
+# Verifica se a senha foi carregada do ambiente
+if not DB_PASSWORD:
+    # Esta linha vai parar a aplicação se a senha não for definida no Railway,
+    # o que é bom para evitar erros de conexão.
+    raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
 
 encoded_password = quote_plus(DB_PASSWORD)
-DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}" #
 
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL #
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False #
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = { #
     'pool_pre_ping': True,
     'pool_recycle': 300,
     'pool_timeout': 30,
@@ -39,7 +56,8 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 db = SQLAlchemy(app)
 
 # --- MODELOS DO BANCO DE DADOS ---
-class Obra(db.Model):
+# (O restante dos seus modelos permanece o mesmo)
+class Obra(db.Model): #
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(150), nullable=False)
     cliente = db.Column(db.String(150))
@@ -53,7 +71,7 @@ class Obra(db.Model):
             "cliente": self.cliente
         }
 
-class Lancamento(db.Model):
+class Lancamento(db.Model): #
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     tipo = db.Column(db.String(50), nullable=False)
@@ -75,7 +93,7 @@ class Lancamento(db.Model):
             "pix": self.pix
         }
 
-class Empreitada(db.Model):
+class Empreitada(db.Model): #
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
@@ -95,7 +113,7 @@ class Empreitada(db.Model):
             "pagamentos": [p.to_dict() for p in self.pagamentos]
         }
 
-class PagamentoEmpreitada(db.Model):
+class PagamentoEmpreitada(db.Model): #
     id = db.Column(db.Integer, primary_key=True)
     empreitada_id = db.Column(db.Integer, db.ForeignKey('empreitada.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
@@ -111,17 +129,18 @@ class PagamentoEmpreitada(db.Model):
         }
 
 # --- FUNÇÃO AUXILIAR PARA FORMATAÇÃO BRASILEIRA ---
-def formatar_real(valor):
+def formatar_real(valor): #
     """Formata valor para padrão brasileiro: R$ 9.915,00"""
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 # --- ROTAS DA API ---
+# (Todas as suas rotas permanecem as mesmas)
 
-@app.route('/', methods=['GET'])
+@app.route('/', methods=['GET']) #
 def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
-@app.route('/obras', methods=['GET'])
+@app.route('/obras', methods=['GET']) #
 def get_obras():
     try:
         obras = Obra.query.order_by(Obra.nome).all()
@@ -130,7 +149,7 @@ def get_obras():
         print(f"Erro ao buscar obras: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/obras', methods=['POST'])
+@app.route('/obras', methods=['POST']) #
 def add_obra():
     try:
         dados = request.json
@@ -146,7 +165,7 @@ def add_obra():
         print(f"Erro ao adicionar obra: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/obras/<int:obra_id>', methods=['GET'])
+@app.route('/obras/<int:obra_id>', methods=['GET']) #
 def get_obra_detalhes(obra_id):
     try:
         obra = Obra.query.get_or_404(obra_id)
@@ -210,7 +229,7 @@ def get_obra_detalhes(obra_id):
         print(f"Erro ao buscar detalhes da obra: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/obras/<int:obra_id>', methods=['DELETE'])
+@app.route('/obras/<int:obra_id>', methods=['DELETE']) #
 def deletar_obra(obra_id):
     try:
         obra = Obra.query.get_or_404(obra_id)
@@ -222,7 +241,7 @@ def deletar_obra(obra_id):
         print(f"Erro ao deletar obra: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/obras/<int:obra_id>/lancamentos', methods=['POST'])
+@app.route('/obras/<int:obra_id>/lancamentos', methods=['POST']) #
 def add_lancamento(obra_id):
     try:
         dados = request.json
@@ -243,7 +262,7 @@ def add_lancamento(obra_id):
         print(f"Erro ao adicionar lançamento: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH'])
+@app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH']) #
 def marcar_como_pago(lancamento_id):
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -255,7 +274,7 @@ def marcar_como_pago(lancamento_id):
         print(f"Erro ao marcar como pago: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/lancamentos/<int:lancamento_id>', methods=['PUT'])
+@app.route('/lancamentos/<int:lancamento_id>', methods=['PUT']) #
 def editar_lancamento(lancamento_id):
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -273,7 +292,7 @@ def editar_lancamento(lancamento_id):
         print(f"Erro ao editar lançamento: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE'])
+@app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE']) #
 def deletar_lancamento(lancamento_id):
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -285,7 +304,7 @@ def deletar_lancamento(lancamento_id):
         print(f"Erro ao deletar lançamento: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/obras/<int:obra_id>/empreitadas', methods=['POST'])
+@app.route('/obras/<int:obra_id>/empreitadas', methods=['POST']) #
 def add_empreitada(obra_id):
     try:
         dados = request.json
@@ -304,7 +323,7 @@ def add_empreitada(obra_id):
         print(f"Erro ao adicionar empreitada: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>', methods=['PUT'])
+@app.route('/empreitadas/<int:empreitada_id>', methods=['PUT']) #
 def editar_empreitada(empreitada_id):
     try:
         empreitada = Empreitada.query.get_or_404(empreitada_id)
@@ -320,7 +339,7 @@ def editar_empreitada(empreitada_id):
         print(f"Erro ao editar empreitada: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE'])
+@app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE']) #
 def deletar_empreitada(empreitada_id):
     try:
         empreitada = Empreitada.query.get_or_404(empreitada_id)
@@ -332,7 +351,7 @@ def deletar_empreitada(empreitada_id):
         print(f"Erro ao deletar empreitada: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST'])
+@app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST']) #
 def add_pagamento_empreitada(empreitada_id):
     try:
         dados = request.json
@@ -351,7 +370,7 @@ def add_pagamento_empreitada(empreitada_id):
         print(f"Erro ao adicionar pagamento: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE'])
+@app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE']) #
 def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
     try:
         pagamento = PagamentoEmpreitada.query.filter_by(
@@ -366,7 +385,7 @@ def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
         print(f"Erro ao deletar pagamento: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/obras/<int:obra_id>/export/csv', methods=['GET'])
+@app.route('/obras/<int:obra_id>/export/csv', methods=['GET']) #
 def export_csv(obra_id):
     try:
         obra = Obra.query.get_or_404(obra_id)
@@ -394,7 +413,7 @@ def export_csv(obra_id):
         print(f"Erro ao exportar CSV: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
-@app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET'])
+@app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET']) #
 def export_pdf_pendentes(obra_id):
     try:
         obra = Obra.query.get_or_404(obra_id)
@@ -483,7 +502,7 @@ def export_pdf_pendentes(obra_id):
         return response
         
     except Exception as e:
-        import traceback
+        # Use a importação de traceback para um log mais detalhado
         error_detail = traceback.format_exc()
         print(f"=" * 80)
         print(f"ERRO ao gerar PDF para obra_id={obra_id}")
@@ -498,5 +517,7 @@ def export_pdf_pendentes(obra_id):
         }), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Lê a porta do ambiente (necessário para o Railway)
+    port = int(os.environ.get('PORT', 5000)) #
+    # O 'debug=True' é útil, mas em produção real, considere 'debug=False'
+    app.run(host='0.0.0.0', port=port, debug=True) #
