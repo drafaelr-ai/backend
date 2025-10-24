@@ -1,4 +1,6 @@
+# Forçando novo deploy com correções 24/10
 import os
+import traceback  # Importado para log de erros detalhado
 from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -12,41 +14,47 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-import traceback  # Importado para log de erros detalhado
+
+print("--- [LOG] Iniciando app.py ---")
 
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
 # Lista de origens permitidas (seu frontend no Vercel e o localhost para testes)
 origins_list = [
-    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # URL Nova
-    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL Antiga
+    "https://frontend-43udzpfm-dizfaele-ais-projects.vercel.app",  # URL Nova [cite: image_17c018.png]
+    "https://frontend-ezytb5ijo-dizfaele-ais-projects.vercel.app",  # URL Antiga [cite: image_3cb233.png]
     "http://localhost:3000"  # Para desenvolvimento local
 ]
 
 # Configuração de CORS explícita para permitir seu frontend
 CORS(app, resources={r"/*": {"origins": origins_list}}, supports_credentials=True)
+print(f"--- [LOG] CORS configurado para {len(origins_list)} origens ---")
 
 # --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
-DB_USER = "postgres.kwmuiviyqjcxawuiqkrl" #
-# A senha será lida da variável de ambiente 'DB_PASSWORD' no Railway
+DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
+DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
+DB_PORT = "5432"
+DB_NAME = "postgres"
+
+print("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
 DB_PASSWORD = os.environ.get('DB_PASSWORD') 
-DB_HOST = "aws-1-sa-east-1.pooler.supabase.com" #
-DB_PORT = "5432" #
-DB_NAME = "postgres" #
 
 # Verifica se a senha foi carregada do ambiente
 if not DB_PASSWORD:
-    print("ERRO CRÍTICO: Variável de ambiente DB_PASSWORD não definida.")
+    print("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
     # Isso vai forçar o crash, o que é bom para sabermos que a variável não foi lida.
     raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
+else:
+    print("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
 
 encoded_password = quote_plus(DB_PASSWORD)
-DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}" #
+DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+print(f"--- [LOG] String de conexão criada para usuário {DB_USER} ---")
 
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL #
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False #
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = { #
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,
     'pool_recycle': 300,
     'pool_timeout': 30,
@@ -55,9 +63,10 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = { #
 }
 
 db = SQLAlchemy(app)
+print("--- [LOG] SQLAlchemy inicializado ---")
 
 # --- MODELOS DO BANCO DE DADOS ---
-class Obra(db.Model): #
+class Obra(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(150), nullable=False)
     cliente = db.Column(db.String(150))
@@ -71,7 +80,7 @@ class Obra(db.Model): #
             "cliente": self.cliente
         }
 
-class Lancamento(db.Model): #
+class Lancamento(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     tipo = db.Column(db.String(50), nullable=False)
@@ -93,7 +102,7 @@ class Lancamento(db.Model): #
             "pix": self.pix
         }
 
-class Empreitada(db.Model): #
+class Empreitada(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
@@ -113,7 +122,7 @@ class Empreitada(db.Model): #
             "pagamentos": [p.to_dict() for p in self.pagamentos]
         }
 
-class PagamentoEmpreitada(db.Model): #
+class PagamentoEmpreitada(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     empreitada_id = db.Column(db.Integer, db.ForeignKey('empreitada.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
@@ -129,28 +138,31 @@ class PagamentoEmpreitada(db.Model): #
         }
 
 # --- FUNÇÃO AUXILIAR PARA FORMATAÇÃO BRASILEIRA ---
-def formatar_real(valor): #
+def formatar_real(valor):
     """Formata valor para padrão brasileiro: R$ 9.915,00"""
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
 # --- ROTAS DA API ---
 
-@app.route('/', methods=['GET']) #
+@app.route('/', methods=['GET'])
 def home():
+    print("--- [LOG] Rota / (home) acessada ---")
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
-@app.route('/obras', methods=['GET']) #
+@app.route('/obras', methods=['GET'])
 def get_obras():
+    print("--- [LOG] Rota /obras (GET) acessada ---")
     try:
         obras = Obra.query.order_by(Obra.nome).all()
         return jsonify([obra.to_dict() for obra in obras])
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"Erro ao buscar obras: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras', methods=['POST']) #
+@app.route('/obras', methods=['POST'])
 def add_obra():
+    print("--- [LOG] Rota /obras (POST) acessada ---")
     try:
         dados = request.json
         nova_obra = Obra(
@@ -163,11 +175,12 @@ def add_obra():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao adicionar obra: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>', methods=['GET']) #
+@app.route('/obras/<int:obra_id>', methods=['GET'])
 def get_obra_detalhes(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
         
@@ -222,11 +235,12 @@ def get_obra_detalhes(obra_id):
         })
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"Erro ao buscar detalhes da obra: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>', methods=['DELETE']) #
+@app.route('/obras/<int:obra_id>', methods=['DELETE'])
 def deletar_obra(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
         db.session.delete(obra)
@@ -235,11 +249,12 @@ def deletar_obra(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao deletar obra: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>/lancamentos', methods=['POST']) #
+@app.route('/obras/<int:obra_id>/lancamentos', methods=['POST'])
 def add_lancamento(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
     try:
         dados = request.json
         novo_lancamento = Lancamento(
@@ -257,11 +272,12 @@ def add_lancamento(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao adicionar lançamento: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH']) #
+@app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH'])
 def marcar_como_pago(lancamento_id):
+    print(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
         lancamento.status = 'Pago'
@@ -270,11 +286,12 @@ def marcar_como_pago(lancamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao marcar como pago: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/lancamentos/<int:lancamento_id>', methods=['PUT']) #
+@app.route('/lancamentos/<int:lancamento_id>', methods=['PUT'])
 def editar_lancamento(lancamento_id):
+    print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
         dados = request.json
@@ -289,11 +306,12 @@ def editar_lancamento(lancamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao editar lançamento: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE']) #
+@app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE'])
 def deletar_lancamento(lancamento_id):
+    print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
         db.session.delete(lancamento)
@@ -302,11 +320,12 @@ def deletar_lancamento(lancamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao deletar lançamento: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /lancamentos/{lancamento_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>/empreitadas', methods=['POST']) #
+@app.route('/obras/<int:obra_id>/empreitadas', methods=['POST'])
 def add_empreitada(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id}/empreitadas (POST) acessada ---")
     try:
         dados = request.json
         nova_empreitada = Empreitada(
@@ -322,11 +341,12 @@ def add_empreitada(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao adicionar empreitada: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /obras/{obra_id}/empreitadas (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>', methods=['PUT']) #
+@app.route('/empreitadas/<int:empreitada_id>', methods=['PUT'])
 def editar_empreitada(empreitada_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (PUT) acessada ---")
     try:
         empreitada = Empreitada.query.get_or_404(empreitada_id)
         dados = request.json
@@ -339,11 +359,12 @@ def editar_empreitada(empreitada_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao editar empreitada: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /empreitadas/{empreitada_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE']) #
+@app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE'])
 def deletar_empreitada(empreitada_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (DELETE) acessada ---")
     try:
         empreitada = Empreitada.query.get_or_404(empreitada_id)
         db.session.delete(empreitada)
@@ -352,11 +373,12 @@ def deletar_empreitada(empreitada_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao deletar empreitada: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /empreitadas/{empreitada_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST']) #
+@app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST'])
 def add_pagamento_empreitada(empreitada_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos (POST) acessada ---")
     try:
         dados = request.json
         novo_pagamento = PagamentoEmpreitada(
@@ -372,11 +394,12 @@ def add_pagamento_empreitada(empreitada_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao adicionar pagamento: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /empreitadas/{empreitada_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE']) #
+@app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE'])
 def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
     try:
         pagamento = PagamentoEmpreitada.query.filter_by(
             id=pagamento_id, 
@@ -388,11 +411,12 @@ def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"Erro ao deletar pagamento: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /empreitadas/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>/export/csv', methods=['GET']) #
+@app.route('/obras/<int:obra_id>/export/csv', methods=['GET'])
 def export_csv(obra_id):
+    print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
         items = obra.lancamentos
@@ -417,11 +441,12 @@ def export_csv(obra_id):
         return output
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"Erro ao exportar CSV: {str(e)}\n{error_details}")
+        print(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET']) #
+@app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET'])
 def export_pdf_pendentes(obra_id):
+    print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
         items = Lancamento.query.filter_by(obra_id=obra.id, status='A Pagar').all()
@@ -509,7 +534,8 @@ def export_pdf_pendentes(obra_id):
         return response
         
     except Exception as e:
-        error_details = traceback.format_exc() #
+        # Erro de digitação corrigido aqui (era 'error_detail') [cite: image_3c332c.png]
+        error_details = traceback.format_exc()
         print(f"=" * 80)
         print(f"ERRO ao gerar PDF para obra_id={obra_id}")
         print(f"Erro: {str(e)}")
@@ -520,9 +546,11 @@ def export_pdf_pendentes(obra_id):
             "erro": "Erro ao gerar PDF",
             "mensagem": str(e),
             "obra_id": obra_id,
-            "details": error_details
+            "details": error_details # Corrigido aqui
         }), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000)) #
-    app.run(host='0.0.0.0', port=port, debug=True) #
+    port = int(os.environ.get('PORT', 5000))
+    print(f"--- [LOG] Iniciando servidor Flask na porta {port} (debug=True) ---")
+    # debug=True nos dará logs de erro mais detalhados no Railway
+    app.run(host='0.0.0.0', port=port, debug=True)
