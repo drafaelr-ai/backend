@@ -204,6 +204,7 @@ def get_obra_detalhes(obra_id):
     try:
         obra = Obra.query.get_or_404(obra_id)
         
+        # --- CÁLCULOS DE SUMÁRIOS (mantém igual) ---
         sumarios_lancamentos = db.session.query(
             func.sum(Lancamento.valor).label('total_geral'),
             func.sum(db.case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
@@ -247,10 +248,49 @@ def get_obra_detalhes(obra_id):
             "total_por_mes": {mes: valor for mes, valor in total_por_mes}
         }
         
+        # --- NOVO: HISTÓRICO UNIFICADO ---
+        # Combina lançamentos + pagamentos de empreitadas em um único array
+        historico_unificado = []
+        
+        # Adiciona todos os lançamentos normais
+        for lanc in obra.lancamentos:
+            historico_unificado.append({
+                "id": f"lanc-{lanc.id}",
+                "tipo_registro": "lancamento",
+                "data": lanc.data.isoformat(),
+                "descricao": lanc.descricao,
+                "tipo": lanc.tipo,
+                "valor": lanc.valor,
+                "status": lanc.status,
+                "pix": lanc.pix,
+                "lancamento_id": lanc.id  # ID original para edição/deleção
+            })
+        
+        # Adiciona todos os pagamentos de empreitadas
+        for emp in obra.empreitadas:
+            for pag in emp.pagamentos:
+                historico_unificado.append({
+                    "id": f"emp-pag-{pag.id}",
+                    "tipo_registro": "pagamento_empreitada",
+                    "data": pag.data.isoformat(),
+                    "descricao": f"Empreitada: {emp.nome}",
+                    "tipo": "Empreitada",
+                    "valor": pag.valor,
+                    "status": pag.status,
+                    "pix": emp.pix,
+                    "empreitada_id": emp.id,
+                    "pagamento_id": pag.id,
+                    "empreitada_nome": emp.nome
+                })
+        
+        # Ordena tudo por data (mais recente primeiro)
+        historico_unificado.sort(key=lambda x: x['data'], reverse=True)
+        
         return jsonify({
             "obra": obra.to_dict(),
             "lancamentos": sorted([l.to_dict() for l in obra.lancamentos], key=lambda x: x['data'], reverse=True),
             "empreitadas": [e.to_dict() for e in obra.empreitadas],
+            "historico_unificado": historico_unificado,  # NOVO!
             "sumarios": sumarios_dict
         })
     except Exception as e:
