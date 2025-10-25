@@ -46,14 +46,28 @@ CORS(
 # -----------------------------------------------------------------------------
 # DB (Postgres)
 # -----------------------------------------------------------------------------
+import os
+from flask_sqlalchemy import SQLAlchemy
+
 DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
+
+def normalize_db_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if "sslmode=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+    return url
+
+if DATABASE_URL:
+    DATABASE_URL = normalize_db_url(DATABASE_URL)
+else:
+    from urllib.parse import quote_plus
     DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = quote_plus(os.getenv("DB_PASSWORD", ""))  # cuidado: não fazer log
+    DB_PASSWORD = quote_plus(os.getenv("DB_PASSWORD", ""))
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("DB_NAME", "postgres")
-    # Força SSL em provedores serverless (Railway/Neon/etc.)
     DATABASE_URL = (
         f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
         f"?sslmode=require"
@@ -63,6 +77,7 @@ app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
+
 
 # -----------------------------------------------------------------------------
 # Models
