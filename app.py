@@ -1,120 +1,99 @@
-# app.py
-# Backend Flask para "Minhas Obras"
-# - CORS liberado para Vercel (prod + previews) e localhost
-# - Postgres via DATABASE_URL (preferido) ou variáveis individuais + sslmode=require
-# - Modelos: Obra, Lancamento, Empreitada, EmpreitadaPagamento
-# - Endpoints principais usados pelo frontend
-
+# Forçando novo deploy com correções 24/10
 import os
-import re
-import io
-import csv
-import datetime as dt
-from urllib.parse import quote_plus
-
-from flask import Flask, jsonify, request, send_file
+import traceback  # Importado para log de erros detalhado
+import re  # Importado para o CORS com regex
+from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from urllib.parse import quote_plus
+import datetime
 from sqlalchemy import func
+import io
+import csv
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
-# -----------------------------------------------------------------------------
-# App / CORS
-# -----------------------------------------------------------------------------
+print("--- [LOG] Iniciando app.py ---")
+
 app = Flask(__name__)
 
-FRONTEND_URL = os.getenv(
-    "FRONTEND_URL",
-    "https://frontend-43udpzafm-drafaelr-ais-projects.vercel.app",
-).strip()
-
+# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
+# Implementando a sugestão de regex (image_3fb581.png) para aceitar previews do Vercel
+prod_url = os.environ.get('FRONTEND_URL', "").strip()  # URL de produção principal (opcional)
 allowed_origins = [
-    FRONTEND_URL,
-    re.compile(r"^https://.*-ais-projects\.vercel\.app$"),  # previews do Vercel
-    "http://localhost:3000",
+    re.compile(r"https://.*-ais-projects\.vercel\.app$"),  # Regex para todos os previews
+    "http://localhost:3000"  # Desenvolvimento local
 ]
+if prod_url:
+    allowed_origins.append(prod_url)
 
-CORS(
-    app,
-    resources={r"/**": {"origins": allowed_origins}},
-    supports_credentials=True,
-    allow_headers=["Content-Type", "Authorization"],
-    expose_headers=["Content-Disposition"],
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    max_age=86400,
-)
+CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
+print(f"--- [LOG] CORS configurado com regex e {len(allowed_origins)} padrões ---")
 
-# -----------------------------------------------------------------------------
-# DB (Postgres)
-# -----------------------------------------------------------------------------
-import os
-from flask_sqlalchemy import SQLAlchemy
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
+DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
+DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
+DB_PORT = "5432"
+DB_NAME = "postgres"
 
-def normalize_db_url(url: str) -> str:
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
-    if "sslmode=" not in url:
-        sep = "&" if "?" in url else "?"
-        url = f"{url}{sep}sslmode=require"
-    return url
+print("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
+DB_PASSWORD = os.environ.get('DB_PASSWORD') 
 
-if DATABASE_URL:
-    DATABASE_URL = normalize_db_url(DATABASE_URL)
+if not DB_PASSWORD:
+    print("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
+    raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
 else:
-    from urllib.parse import quote_plus
-    DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = quote_plus(os.getenv("DB_PASSWORD", ""))
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "5432")
-    DB_NAME = os.getenv("DB_NAME", "postgres")
-    DATABASE_URL = (
-        f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-        f"?sslmode=require"
-    )
+    print("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
 
-app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+encoded_password = quote_plus(DB_PASSWORD)
+
+# Implementando a sugestão de SSL (image_3fb5ba.png)
+DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
+
+print(f"--- [LOG] String de conexão criada para usuário {DB_USER} (com sslmode=require) ---")
+
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+    'pool_timeout': 30,
+    'pool_size': 5,
+    'max_overflow': 10
+}
 
 db = SQLAlchemy(app)
+print("--- [LOG] SQLAlchemy inicializado ---")
 
-
-# -----------------------------------------------------------------------------
-# Models
-# -----------------------------------------------------------------------------
-TIPOS_VALIDOS = {"Material", "Mão de Obra", "Serviço", "Equipamentos"}
-STATUS_VALIDOS = {"Pago", "A Pagar"}
-
-
+# --- MODELOS DO BANCO DE DADOS ---
 class Obra(db.Model):
-    __tablename__ = "obras"
     id = db.Column(db.Integer, primary_key=True)
-    nome = db.Column(db.String(120), nullable=False)
-    cliente = db.Column(db.String(120), nullable=True)
-    criado_em = db.Column(db.DateTime, nullable=False, default=func.now())
-
+    nome = db.Column(db.String(150), nullable=False)
+    cliente = db.Column(db.String(150))
+    lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
+    empreitadas = db.relationship('Empreitada', backref='obra', lazy=True, cascade="all, delete-orphan")
+    
     def to_dict(self):
         return {
             "id": self.id,
             "nome": self.nome,
-            "cliente": self.cliente,
-            "criado_em": self.criado_em.isoformat(),
+            "cliente": self.cliente
         }
 
-
 class Lancamento(db.Model):
-    __tablename__ = "lancamentos"
     id = db.Column(db.Integer, primary_key=True)
-    obra_id = db.Column(db.Integer, db.ForeignKey("obras.id"), nullable=False)
-    tipo = db.Column(db.String(50), nullable=False)  # Material / Mão de Obra / Serviço / Equipamentos
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    tipo = db.Column(db.String(50), nullable=False)
     descricao = db.Column(db.String(255), nullable=False)
     valor = db.Column(db.Float, nullable=False)
-    data = db.Column(db.Date, nullable=False, default=func.current_date())
-    status = db.Column(db.String(20), nullable=False, default="A Pagar")  # Pago | A Pagar
-    pix = db.Column(db.String(120), nullable=True)
-
-    obra = db.relationship("Obra", backref=db.backref("lancamentos", lazy=True))
-
+    data = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='A Pagar')
+    pix = db.Column(db.String(100))
+    
     def to_dict(self):
         return {
             "id": self.id,
@@ -124,289 +103,475 @@ class Lancamento(db.Model):
             "valor": self.valor,
             "data": self.data.isoformat(),
             "status": self.status,
-            "pix": self.pix,
+            "pix": self.pix
         }
 
-
 class Empreitada(db.Model):
-    __tablename__ = "empreitadas"
     id = db.Column(db.Integer, primary_key=True)
-    obra_id = db.Column(db.Integer, db.ForeignKey("obras.id"), nullable=False)
-    titulo = db.Column(db.String(160), nullable=False)
-    responsavel = db.Column(db.String(160), nullable=True)
-    valor_total = db.Column(db.Float, nullable=False, default=0.0)
-
-    obra = db.relationship("Obra", backref=db.backref("empreitadas", lazy=True))
-
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    nome = db.Column(db.String(150), nullable=False)
+    responsavel = db.Column(db.String(150))
+    valor_global = db.Column(db.Float, nullable=False)
+    pix = db.Column(db.String(100))
+    pagamentos = db.relationship('PagamentoEmpreitada', backref='empreitada', lazy=True, cascade="all, delete-orphan")
+    
     def to_dict(self):
         return {
             "id": self.id,
             "obra_id": self.obra_id,
-            "titulo": self.titulo,
+            "nome": self.nome,
             "responsavel": self.responsavel,
-            "valor_total": self.valor_total,
+            "valor_global": self.valor_global,
+            "pix": self.pix,
+            "pagamentos": [p.to_dict() for p in self.pagamentos]
         }
 
-
-class EmpreitadaPagamento(db.Model):
-    __tablename__ = "empreitada_pagamentos"
+class PagamentoEmpreitada(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    empreitada_id = db.Column(db.Integer, db.ForeignKey("empreitadas.id"), nullable=False)
-    valor = db.Column(db.Float, nullable=False, default=0.0)
-    status = db.Column(db.String(20), nullable=False, default="A Pagar")  # Pago | A Pagar
-    data = db.Column(db.Date, nullable=False, default=func.current_date())
-
-    empreitada = db.relationship(
-        "Empreitada", backref=db.backref("pagamentos", lazy=True, cascade="all,delete")
-    )
-
+    empreitada_id = db.Column(db.Integer, db.ForeignKey('empreitada.id'), nullable=False)
+    data = db.Column(db.Date, nullable=False)
+    valor = db.Column(db.Float, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Pago')
+    
     def to_dict(self):
         return {
             "id": self.id,
-            "empreitada_id": self.empreitada_id,
-            "valor": self.valor,
-            "status": self.status,
             "data": self.data.isoformat(),
+            "valor": self.valor,
+            "status": self.status
         }
 
+# --- FUNÇÃO AUXILIAR PARA FORMATAÇÃO BRASILEIRA ---
+def formatar_real(valor):
+    """Formata valor para padrão brasileiro: R$ 9.915,00"""
+    return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
-# -----------------------------------------------------------------------------
-# Helpers
-# -----------------------------------------------------------------------------
-def parse_date_yyyy_mm_dd(s: str) -> dt.date:
-    return dt.datetime.strptime(s, "%Y-%m-%d").date()
+# --- ROTAS DA API ---
 
-
-def totais_por_segmento(obra_id: int):
-    # Soma por tipo dos Lançamentos
-    base = db.session.query(
-        Lancamento.tipo,
-        func.coalesce(func.sum(Lancamento.valor), 0.0)
-    ).filter(Lancamento.obra_id == obra_id).group_by(Lancamento.tipo)
-
-    total = {k: 0.0 for k in TIPOS_VALIDOS}
-    for tipo, soma in base:
-        total[tipo] = float(soma or 0.0)
-    return total
-
-
-def resumo_obra(obra: Obra):
-    # Total geral e pagos/pendentes (inclui empreitadas no total geral/pagos/pendentes?)
-    # Aqui: total = soma de lançamentos + soma de pagamentos de empreitadas (o que você vê no print)
-    soma_lanc = db.session.query(func.coalesce(func.sum(Lancamento.valor), 0.0)).filter(
-        Lancamento.obra_id == obra.id
-    ).scalar() or 0.0
-
-    soma_emp = db.session.query(func.coalesce(func.sum(EmpreitadaPagamento.valor), 0.0))\
-        .join(Empreitada, EmpreitadaPagamento.empreitada_id == Empreitada.id)\
-        .filter(Empreitada.obra_id == obra.id).scalar() or 0.0
-
-    total_geral = float(soma_lanc + soma_emp)
-
-    pagos_lanc = db.session.query(func.coalesce(func.sum(Lancamento.valor), 0.0)).filter(
-        Lancamento.obra_id == obra.id, Lancamento.status == "Pago"
-    ).scalar() or 0.0
-
-    pagos_emp = db.session.query(func.coalesce(func.sum(EmpreitadaPagamento.valor), 0.0))\
-        .join(Empreitada, EmpreitadaPagamento.empreitada_id == Empreitada.id)\
-        .filter(Empreitada.obra_id == obra.id, EmpreitadaPagamento.status == "Pago").scalar() or 0.0
-
-    total_pago = float(pagos_lanc + pagos_emp)
-    total_a_pagar = float(total_geral - total_pago)
-
-    return {
-        "total_geral": total_geral,
-        "total_pago": total_pago,
-        "total_a_pagar": total_a_pagar,
-        "por_segmento": totais_por_segmento(obra.id),
-    }
-
-
-# -----------------------------------------------------------------------------
-# Rotas
-# -----------------------------------------------------------------------------
-@app.get("/")
-def root():
-    return jsonify({"ok": True, "service": "obras-backend"})
-
-@app.get("/api/health")
-def health():
-    return jsonify({"status": "ok"})
-
-
-# ----- Obras ------------------------------------------------------------
-@app.get("/obras")
-def listar_obras():
-    obras = Obra.query.order_by(Obra.criado_em.desc()).all()
-    return jsonify([o.to_dict() for o in obras])
-
-@app.post("/obras")
-def criar_obra():
-    data = request.get_json(force=True)
-    nome = (data.get("nome") or "").strip()
-    cliente = (data.get("cliente") or "").strip()
-    if not nome:
-        return jsonify({"erro": "nome é obrigatório"}), 400
-    o = Obra(nome=nome, cliente=cliente)
-    db.session.add(o)
-    db.session.commit()
-    return jsonify(o.to_dict()), 201
-
-@app.delete("/obras/<int:obra_id>")
-def remover_obra(obra_id):
-    obra = Obra.query.get_or_404(obra_id)
-    # cascade: pagamentos de empreitada são apagados via relacionamento;
-    # lançamentos também, se preferir: defina cascade em backref ou delete manual
-    # aqui deletamos manualmente os lançamentos da obra
-    Lancamento.query.filter_by(obra_id=obra.id).delete()
-    # Apaga empreitadas (pagamentos apagam junto por cascade definido)
-    Empreitada.query.filter_by(obra_id=obra.id).delete()
-    db.session.delete(obra)
-    db.session.commit()
-    return jsonify({"ok": True})
-
-
-@app.get("/obras/<int:obra_id>")
-def detalhe_obra(obra_id):
-    obra = Obra.query.get_or_404(obra_id)
-    lanc = [l.to_dict() for l in obra.lancamentos]
-    emp = []
-    for e in obra.empreitadas:
-        emp.append({
-            **e.to_dict(),
-            "pagamentos": [p.to_dict() for p in e.pagamentos]
-        })
-    return jsonify({
-        "obra": obra.to_dict(),
-        "lancamentos": lanc,
-        "empreitadas": emp,
-        "resumo": resumo_obra(obra),
-    })
-
-
-# ----- Lançamentos ------------------------------------------------------
-@app.post("/obras/<int:obra_id>/lancamentos")
-def novo_lancamento(obra_id):
-    Obra.query.get_or_404(obra_id)
-    data = request.get_json(force=True)
-    tipo = data.get("tipo")
-    if tipo not in TIPOS_VALIDOS:
-        return jsonify({"erro": f"tipo inválido. Use um de {sorted(TIPOS_VALIDOS)}"}), 400
-
-    descricao = (data.get("descricao") or "").strip()
-    valor = float(data.get("valor") or 0)
-    status = data.get("status") or "A Pagar"
-    if status not in STATUS_VALIDOS:
-        return jsonify({"erro": "status inválido: use 'Pago' ou 'A Pagar'"}), 400
-
-    data_str = data.get("data")
-    d = parse_date_yyyy_mm_dd(data_str) if data_str else dt.date.today()
-
-    l = Lancamento(
-        obra_id=obra_id,
-        tipo=tipo,
-        descricao=descricao,
-        valor=valor,
-        status=status,
-        data=d,
-        pix=(data.get("pix") or None),
-    )
-    db.session.add(l)
-    db.session.commit()
-    return jsonify(l.to_dict()), 201
-
-@app.delete("/lancamentos/<int:lanc_id>")
-def deletar_lancamento(lanc_id):
-    l = Lancamento.query.get_or_404(lanc_id)
-    db.session.delete(l)
-    db.session.commit()
-    return jsonify({"ok": True})
-
-
-# ----- Empreitadas ------------------------------------------------------
-@app.post("/empreitadas")
-def criar_empreitada():
-    data = request.get_json(force=True)
-    obra_id = int(data.get("obra_id"))
-    Obra.query.get_or_404(obra_id)
-
-    titulo = (data.get("titulo") or "").strip()
-    if not titulo:
-        return jsonify({"erro": "titulo é obrigatório"}), 400
-
-    e = Empreitada(
-        obra_id=obra_id,
-        titulo=titulo,
-        responsavel=(data.get("responsavel") or "").strip() or None,
-        valor_total=float(data.get("valor_total") or 0.0),
-    )
-    db.session.add(e)
-    db.session.commit()
-    return jsonify(e.to_dict()), 201
-
-@app.post("/empreitadas/<int:emp_id>/pagamentos")
-def adicionar_pagamento_empreitada(emp_id):
-    e = Empreitada.query.get_or_404(emp_id)
-    data = request.get_json(force=True)
-
-    valor = float(data.get("valor") or 0.0)
-    status = data.get("status") or "A Pagar"
-    if status not in STATUS_VALIDOS:
-        return jsonify({"erro": "status inválido: use 'Pago' ou 'A Pagar'"}), 400
-
-    data_str = data.get("data")
-    d = parse_date_yyyy_mm_dd(data_str) if data_str else dt.date.today()
-
-    p = EmpreitadaPagamento(
-        empreitada_id=e.id,
-        valor=valor,
-        status=status,
-        data=d,
-    )
-    db.session.add(p)
-    db.session.commit()
-    return jsonify(p.to_dict()), 201
-
-
-# ----- Exportações ------------------------------------------------------
-@app.get("/obras/<int:obra_id>/csv")
-def export_csv(obra_id):
-    # Junta lançamentos + pagamentos de empreitada
-    obra = Obra.query.get_or_404(obra_id)
-    output = io.StringIO()
-    w = csv.writer(output, delimiter=";")
-    w.writerow(["Data", "Descrição", "Tipo", "Status", "Valor"])
-
-    # Lançamentos
-    for l in obra.lancamentos:
-        w.writerow([l.data.isoformat(), l.descricao, l.tipo, l.status, f"{l.valor:.2f}"])
-
-    # Pagamentos de empreitada
-    for e in obra.empreitadas:
-        for p in e.pagamentos:
-            w.writerow([p.data.isoformat(), f"Empreitada: {e.titulo}", "Empreitada", p.status, f"{p.valor:.2f}"])
-
-    output.seek(0)
-    return send_file(
-        io.BytesIO(output.getvalue().encode("utf-8-sig")),
-        mimetype="text/csv; charset=utf-8",
-        as_attachment=True,
-        download_name=f"obra_{obra_id}.csv",
-    )
-
-# (PDF simples, sem reportlab — opcionalmente adicione depois)
-# -----------------------------------------------------------------------------
-
-# ----- util: criar tabelas uma vez (remova/Proteja em produção) -------------
-@app.get("/admin/create_tables")
+# --- ROTA DE ADMINISTRAÇÃO (NOVA) ---
+# Esta rota é para criar as tabelas no banco de dados.
+@app.route('/admin/create_tables', methods=['GET'])
 def create_tables():
-    db.create_all()
-    return jsonify({"ok": True, "msg": "tables created"})
+    print("--- [LOG] Rota /admin/create_tables (GET) acessada ---")
+    try:
+        with app.app_context():
+            db.create_all()
+        print("--- [LOG] db.create_all() executado com sucesso. ---")
+        return jsonify({"sucesso": "Tabelas criadas no banco de dados."}), 200
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/create_tables: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": "Falha ao criar tabelas.", "details": error_details}), 500
+# ------------------------------------
 
-# -----------------------------------------------------------------------------
-# Run (Railway usa $PORT)
-# -----------------------------------------------------------------------------
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    print(f"[BOOT] Running on 0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port)
+@app.route('/', methods=['GET'])
+def home():
+    print("--- [LOG] Rota / (home) acessada ---")
+    return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
+
+@app.route('/obras', methods=['GET'])
+def get_obras():
+    print("--- [LOG] Rota /obras (GET) acessada ---")
+    try:
+        obras = Obra.query.order_by(Obra.nome).all()
+        return jsonify([obra.to_dict() for obra in obras])
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras', methods=['POST'])
+def add_obra():
+    print("--- [LOG] Rota /obras (POST) acessada ---")
+    try:
+        dados = request.json
+        nova_obra = Obra(
+            nome=dados['nome'],
+            cliente=dados.get('cliente')
+        )
+        db.session.add(nova_obra)
+        db.session.commit()
+        return jsonify(nova_obra.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>', methods=['GET'])
+def get_obra_detalhes(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada ---")
+    try:
+        obra = Obra.query.get_or_404(obra_id)
+        
+        sumarios_lancamentos = db.session.query(
+            func.sum(Lancamento.valor).label('total_geral'),
+            func.sum(db.case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
+            func.sum(db.case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
+        ).filter(Lancamento.obra_id == obra_id).first()
+        
+        sumarios_empreitadas = db.session.query(
+            func.sum(PagamentoEmpreitada.valor).label('total_empreitadas_pago')
+        ).join(Empreitada).filter(
+            Empreitada.obra_id == obra_id,
+            PagamentoEmpreitada.status == 'Pago'
+        ).first()
+        
+        total_lancamentos = sumarios_lancamentos.total_geral or 0.0
+        total_pago_lancamentos = sumarios_lancamentos.total_pago or 0.0
+        total_pago_empreitadas = sumarios_empreitadas.total_empreitadas_pago or 0.0
+        total_pago_geral = total_pago_lancamentos + total_pago_empreitadas
+        
+        total_empreitadas_global = db.session.query(
+            func.sum(Empreitada.valor_global)
+        ).filter(Empreitada.obra_id == obra_id).scalar() or 0.0
+        
+        total_geral = total_lancamentos + total_empreitadas_global
+        total_a_pagar = total_geral - total_pago_geral
+        
+        total_por_segmento = db.session.query(
+            Lancamento.tipo,
+            func.sum(Lancamento.valor)
+        ).filter(Lancamento.obra_id == obra_id).group_by(Lancamento.tipo).all()
+        
+        total_por_mes = db.session.query(
+            func.to_char(Lancamento.data, 'MM/YYYY').label('mes_ano'),
+            func.sum(Lancamento.valor)
+        ).filter(Lancamento.obra_id == obra_id).group_by('mes_ano').all()
+        
+        sumarios_dict = {
+            "total_geral": total_geral,
+            "total_pago": total_pago_geral,
+            "total_a_pagar": total_a_pagar,
+            "total_por_segmento": {tipo: valor for tipo, valor in total_por_segmento},
+            "total_por_mes": {mes: valor for mes, valor in total_por_mes}
+        }
+        
+        return jsonify({
+            "obra": obra.to_dict(),
+            "lancamentos": sorted([l.to_dict() for l in obra.lancamentos], key=lambda x: x['data'], reverse=True),
+            "empreitadas": [e.to_dict() for e in obra.empreitadas],
+            "sumarios": sumarios_dict
+        })
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>', methods=['DELETE'])
+def deletar_obra(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
+    try:
+        obra = Obra.query.get_or_404(obra_id)
+        db.session.delete(obra)
+        db.session.commit()
+        return jsonify({"sucesso": "Obra deletada com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/lancamentos', methods=['POST'])
+def add_lancamento(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
+    try:
+        dados = request.json
+        novo_lancamento = Lancamento(
+            obra_id=obra_id,
+            tipo=dados['tipo'],
+            descricao=dados['descricao'],
+            valor=float(dados['valor']),
+            data=datetime.date.fromisoformat(dados['data']),
+            status=dados['status'],
+            pix=dados['pix']
+        )
+        db.session.add(novo_lancamento)
+        db.session.commit()
+        return jsonify(novo_lancamento.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH'])
+def marcar_como_pago(lancamento_id):
+    print(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
+    try:
+        lancamento = Lancamento.query.get_or_404(lancamento_id)
+        lancamento.status = 'Pago'
+        db.session.commit()
+        return jsonify(lancamento.to_dict())
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/lancamentos/<int:lancamento_id>', methods=['PUT'])
+def editar_lancamento(lancamento_id):
+    print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
+    try:
+        lancamento = Lancamento.query.get_or_404(lancamento_id)
+        dados = request.json
+        lancamento.data = datetime.date.fromisoformat(dados['data'])
+        lancamento.descricao = dados['descricao']
+        lancamento.valor = float(dados['valor'])
+        lancamento.tipo = dados['tipo']
+        lancamento.status = dados['status']
+        lancamento.pix = dados['pix']
+        db.session.commit()
+        return jsonify(lancamento.to_dict())
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE'])
+def deletar_lancamento(lancamento_id):
+    print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
+    try:
+        lancamento = Lancamento.query.get_or_404(lancamento_id)
+        db.session.delete(lancamento)
+        db.session.commit()
+        return jsonify({"sucesso": "Lançamento deletado"}), 200
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /lancamentos/{lancamento_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/empreitadas', methods=['POST'])
+def add_empreitada(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id}/empreitadas (POST) acessada ---")
+    try:
+        dados = request.json
+        nova_empreitada = Empreitada(
+            obra_id=obra_id,
+            nome=dados['nome'],
+            responsavel=dados['responsavel'],
+            valor_global=float(dados['valor_global']),
+            pix=dados['pix']
+        )
+        db.session.add(nova_empreitada)
+        db.session.commit()
+        return jsonify(nova_empreitada.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/empreitadas (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/empreitadas/<int:empreitada_id>', methods=['PUT'])
+def editar_empreitada(empreitada_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (PUT) acessada ---")
+    try:
+        empreitada = Empreitada.query.get_or_404(empreitada_id)
+        dados = request.json
+        empreitada.nome = dados.get('nome', empreitada.nome)
+        empreitada.responsavel = dados.get('responsavel', empreitada.responsavel)
+        empreitada.valor_global = float(dados.get('valor_global', empreitada.valor_global))
+        empreitada.pix = dados.get('pix', empreitada.pix)
+        db.session.commit()
+        return jsonify(empreitada.to_dict())
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /empreitadas/{empreitada_id} (PUT): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE'])
+def deletar_empreitada(empreitada_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (DELETE) acessada ---")
+    try:
+        empreitada = Empreitada.query.get_or_404(empreitada_id)
+        db.session.delete(empreitada)
+        db.session.commit()
+        return jsonify({"sucesso": "Empreitada deletada com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /empreitadas/{empreitada_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST'])
+def add_pagamento_empreitada(empreitada_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos (POST) acessada ---")
+    try:
+        dados = request.json
+        novo_pagamento = PagamentoEmpreitada(
+            empreitada_id=empreitada_id,
+            data=datetime.date.fromisoformat(dados['data']),
+            valor=float(dados['valor']),
+            status=dados.get('status', 'Pago')
+        )
+        db.session.add(novo_pagamento)
+        db.session.commit()
+        empreitada_atualizada = Empreitada.query.get(empreitada_id)
+        return jsonify(empreitada_atualizada.to_dict())
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /empreitadas/{empreitada_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE'])
+def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
+    print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
+    try:
+        pagamento = PagamentoEmpreitada.query.filter_by(
+            id=pagamento_id, 
+            empreitada_id=empreitada_id
+        ).first_or_404()
+        db.session.delete(pagamento)
+        db.session.commit()
+        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /empreitadas/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/export/csv', methods=['GET'])
+def export_csv(obra_id):
+    print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
+    try:
+        obra = Obra.query.get_or_404(obra_id)
+        items = obra.lancamentos
+        
+        si = io.StringIO()
+        cw = csv.writer(si)
+        cw.writerow(['Data', 'Descricao', 'Tipo', 'Valor', 'Status', 'PIX'])
+        
+        for item in items:
+            cw.writerow([
+                item.data.isoformat(),
+                item.descricao,
+                item.tipo,
+                item.valor,
+                item.status,
+                item.pix
+            ])
+        
+        output = make_response(si.getvalue())
+        output.headers["Content-Disposition"] = f"attachment; filename=relatorio_obra_{obra.id}.csv"
+        output.headers["Content-type"] = "text/csv"
+        return output
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET'])
+def export_pdf_pendentes(obra_id):
+    print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
+    try:
+        obra = Obra.query.get_or_404(obra_id)
+        items = Lancamento.query.filter_by(obra_id=obra.id, status='A Pagar').all()
+        
+        buffer = io.BytesIO()
+        
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            topMargin=2*cm,
+            bottomMargin=2*cm,
+            leftMargin=2*cm,
+            rightMargin=2*cm
+        )
+        elements = []
+        
+        styles = getSampleStyleSheet()
+        
+        title_text = f"<b>Relatorio de Pagamentos Pendentes</b><br/><br/>Obra: {obra.nome}<br/>Cliente: {obra.cliente or 'N/A'}"
+        title = Paragraph(title_text, styles['Title'])
+        elements.append(title)
+        elements.append(Spacer(1, 1*cm))
+        
+        if not items:
+            no_items = Paragraph("Nenhum pagamento pendente nesta obra.", styles['Normal'])
+            elements.append(no_items)
+        else:
+            data = [['Data', 'Tipo', 'Descricao', 'Valor', 'PIX']]
+            total_pendente = 0
+            
+            for item in items:
+                data.append([
+                    item.data.strftime('%d/%m/%Y'),
+                    item.tipo[:15] if item.tipo else 'N/A',
+                    item.descricao[:35] if item.descricao else 'N/A',
+                    formatar_real(item.valor),
+                    (item.pix or 'Nao informado')[:20]
+                ])
+                total_pendente += item.valor
+            
+            data.append(['', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
+            
+            table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3*cm, 4*cm])
+            
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 11),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('TOPPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#28a745')),
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, -1), (-1, -1), 11),
+                ('ALIGN', (2, -1), (3, -1), 'RIGHT'),
+            ]))
+            
+            elements.append(table)
+        
+        elements.append(Spacer(1, 1*cm))
+        data_geracao = f"Gerado em: {datetime.datetime.now().strftime('%d/%m/%Y as %H:%M')}"
+        footer = Paragraph(data_geracao, styles['Normal'])
+        elements.append(footer)
+        
+        doc.build(elements)
+        
+        buffer.seek(0)
+        pdf_data = buffer.read()
+        buffer.close()
+        
+        response = make_response(pdf_data)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=pagamentos_pendentes_obra_{obra.id}.pdf'
+        
+        return response
+        
+    except Exception as e:
+        # Erro de digitação corrigido aqui (era 'error_detail')
+        error_details = traceback.format_exc()
+        print(f"=" * 80)
+        print(f"ERRO ao gerar PDF para obra_id={obra_id}")
+        print(f"Erro: {str(e)}")
+        print(f"Traceback completo:")
+        print(error_details)
+        print(f"=" * 80)
+        return jsonify({
+            "erro": "Erro ao gerar PDF",
+            "mensagem": str(e),
+            "obra_id": obra_id,
+            "details": error_details 
+        }), 500
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f"--- [LOG] Iniciando servidor Flask na porta {port} (debug=True) ---")
+    # debug=True nos dará logs de erro mais detalhados no Railway
+    app.run(host='0.0.0.0', port=port, debug=True)
+
