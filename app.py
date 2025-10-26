@@ -540,6 +540,17 @@ def export_csv(obra_id):
     )
 
 # -----------------------------------------------------------------------------
+# Inicializar tabelas automaticamente (Railway)
+# -----------------------------------------------------------------------------
+with app.app_context():
+    try:
+        print("[INIT] Verificando/criando tabelas no banco de dados...")
+        db.create_all()
+        print("[INIT] ✅ Tabelas verificadas com sucesso!")
+    except Exception as e:
+        print(f"[INIT] ⚠️ Erro ao criar tabelas: {e}")
+
+# -----------------------------------------------------------------------------
 # Run (Railway usa $PORT)
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
