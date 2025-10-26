@@ -33,15 +33,17 @@ allowed_origins = [
     "http://localhost:3000",
 ]
 
+# CORS: trocar "/**" por r"/*"
 CORS(
     app,
-    resources={r"/**": {"origins": allowed_origins}},
+    resources={r"/*": {"origins": allowed_origins}},  # <<<< AQUI
     supports_credentials=True,
     allow_headers=["Content-Type", "Authorization"],
     expose_headers=["Content-Disposition"],
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     max_age=86400,
 )
+
 
 # -----------------------------------------------------------------------------
 # DB (Postgres)
