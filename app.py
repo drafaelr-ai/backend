@@ -26,7 +26,6 @@ print("--- [LOG] Iniciando app.py ---")
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
-# !! CORREÇÃO PARA O LOGIN DO NAVEGADOR: Permitindo todas as origens !!
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS ('*') ---")
 # -----------------------------------------------------------------
@@ -185,7 +184,7 @@ def formatar_real(valor):
     """Formata valor para padrão brasileiro: R$ 9.915,00"""
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
-# --- NOVO: FUNÇÕES DE VERIFICAÇÃO DE PERMISSÃO ---
+# --- FUNÇÕES DE VERIFICAÇÃO DE PERMISSÃO ---
 
 def get_current_user():
     """Busca o usuário (objeto SQLAlchemy) a partir do token JWT."""
@@ -237,7 +236,7 @@ def create_tables():
 
 # --- ROTAS DE AUTENTICAÇÃO (Públicas) ---
 
-@app.route('/register', methods=['POST'])
+@app.route('/register', methods=['POST', 'OPTIONS']) # <-- CORREÇÃO AQUI
 def register():
     print("--- [LOG] Rota /register (POST) acessada ---")
     try:
@@ -267,7 +266,7 @@ def register():
         print(f"--- [ERRO] /register (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/login', methods=['POST'])
+@app.route('/login', methods=['POST', 'OPTIONS']) # <-- CORREÇÃO AQUI
 def login():
     """Rota para autenticar um usuário e retornar um token JWT"""
     print("--- [LOG] Rota /login (POST) acessada ---")
@@ -354,41 +353,35 @@ def get_obra_detalhes(obra_id):
             
         obra = Obra.query.get_or_404(obra_id)
         
+        # ... (Sua lógica de sumários) ...
         sumarios_lancamentos = db.session.query(
             func.sum(Lancamento.valor).label('total_geral'),
             func.sum(db.case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
             func.sum(db.case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
         ).filter(Lancamento.obra_id == obra_id).first()
-        
         sumarios_empreitadas = db.session.query(
             func.sum(PagamentoEmpreitada.valor).label('total_empreitadas_pago')
         ).join(Empreitada).filter(
             Empreitada.obra_id == obra_id,
             PagamentoEmpreitada.status == 'Pago'
         ).first()
-        
         total_lancamentos = sumarios_lancamentos.total_geral or 0.0
         total_pago_lancamentos = sumarios_lancamentos.total_pago or 0.0
         total_pago_empreitadas = sumarios_empreitadas.total_empreitadas_pago or 0.0
         total_pago_geral = total_pago_lancamentos + total_pago_empreitadas
-        
         total_empreitadas_global = db.session.query(
             func.sum(Empreitada.valor_global)
         ).filter(Empreitada.obra_id == obra_id).scalar() or 0.0
-        
         total_geral = total_lancamentos + total_empreitadas_global
         total_a_pagar = total_geral - total_pago_geral
-        
         total_por_segmento = db.session.query(
             Lancamento.tipo,
             func.sum(Lancamento.valor)
         ).filter(Lancamento.obra_id == obra_id).group_by(Lancamento.tipo).all()
-        
         total_por_mes = db.session.query(
             func.to_char(Lancamento.data, 'MM/YYYY').label('mes_ano'),
             func.sum(Lancamento.valor)
         ).filter(Lancamento.obra_id == obra_id).group_by('mes_ano').all()
-        
         sumarios_dict = {
             "total_geral": total_geral,
             "total_pago": total_pago_geral,
@@ -774,6 +767,102 @@ def export_pdf_pendentes(obra_id):
             "erro": "Erro ao gerar PDF", "mensagem": str(e),
             "obra_id": obra_id, "details": error_details 
         }), 500
+        
+# --- NOVO: ROTAS DE ADMINISTRAÇÃO DE USUÁRIOS ---
+# (Protegidas para 'administrador')
+
+@app.route('/admin/users', methods=['GET'])
+@check_permission(roles=['administrador'])
+def get_all_users():
+    """Retorna uma lista de todos os usuários (exceto o próprio admin)"""
+    print("--- [LOG] Rota /admin/users (GET) acessada ---")
+    try:
+        current_user = get_current_user()
+        # Pega todos os usuários que NÃO são o admin que está fazendo a requisição
+        users = User.query.filter(User.id != current_user.id).order_by(User.username).all()
+        return jsonify([user.to_dict() for user in users]), 200
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/users (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/admin/users', methods=['POST'])
+@check_permission(roles=['administrador'])
+def create_user():
+    """Cria um novo usuário (master ou comum)"""
+    print("--- [LOG] Rota /admin/users (POST) acessada ---")
+    try:
+        dados = request.json
+        username = dados.get('username')
+        password = dados.get('password')
+        role = dados.get('role', 'comum')
+
+        if not username or not password:
+            return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
+        
+        if role not in ['master', 'comum']:
+             return jsonify({"erro": "Role deve ser 'master' ou 'comum'"}), 400
+
+        if User.query.filter_by(username=username).first():
+            return jsonify({"erro": "Nome de usuário já existe"}), 409
+
+        novo_usuario = User(username=username, role=role)
+        novo_usuario.set_password(password)
+        
+        db.session.add(novo_usuario)
+        db.session.commit()
+        
+        print(f"--- [LOG] Admin criou usuário '{username}' com role '{role}' ---")
+        return jsonify(novo_usuario.to_dict()), 201
+
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/users (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/admin/users/<int:user_id>/permissions', methods=['GET'])
+@check_permission(roles=['administrador'])
+def get_user_permissions(user_id):
+    """Retorna a lista de IDs de obras que um usuário pode acessar"""
+    print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
+    try:
+        user = User.query.get_or_404(user_id)
+        obra_ids = [obra.id for obra in user.obras_permitidas]
+        return jsonify({"user_id": user.id, "obra_ids": obra_ids}), 200
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/users/{user_id}/permissions (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/admin/users/<int:user_id>/permissions', methods=['PUT'])
+@check_permission(roles=['administrador'])
+def set_user_permissions(user_id):
+    """Define a lista de obras que um usuário pode acessar"""
+    print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
+    try:
+        user = User.query.get_or_404(user_id)
+        dados = request.json
+        obra_ids_para_permitir = dados.get('obra_ids', []) # Espera um array de IDs: [1, 2, 5]
+
+        # 1. Encontra os objetos Obra correspondentes aos IDs
+        obras_permitidas = Obra.query.filter(Obra.id.in_(obra_ids_para_permitir)).all()
+        
+        # 2. Define a lista de permissões do usuário
+        user.obras_permitidas = obras_permitidas
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Permissões atualizadas para user_id={user_id}. Obras permitidas: {obra_ids_para_permitir} ---")
+        return jsonify({"sucesso": f"Permissões atualizadas para {user.username}"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# ---------------------------------------------------
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
