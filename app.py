@@ -26,16 +26,10 @@ print("--- [LOG] Iniciando app.py ---")
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
-prod_url = os.environ.get('FRONTEND_URL', "").strip()
-allowed_origins = [
-    re.compile(r"https://.*-ais-projects\.vercel\.app$"),
-    "http://localhost:3000"
-]
-if prod_url:
-    allowed_origins.append(prod_url)
-
-CORS(app, resources={r"/*": {"origins": allowed_origins}}, supports_credentials=True)
-print(f"--- [LOG] CORS configurado com regex e {len(allowed_origins)} padrões ---")
+# !! CORREÇÃO PARA O LOGIN DO NAVEGADOR: Permitindo todas as origens !!
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS ('*') ---")
+# -----------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
 app.config["JWT_SECRET_KEY"] = os.environ.get('JWT_SECRET_KEY', 'sua-chave-secreta-muito-forte-aqui-mude-depois')
@@ -195,20 +189,17 @@ def formatar_real(valor):
 
 def get_current_user():
     """Busca o usuário (objeto SQLAlchemy) a partir do token JWT."""
-    # --- CORREÇÃO (Conforme sua imagem) ---
     user_id_str = get_jwt_identity() # Agora é uma string
     if not user_id_str:
         return None
     user = db.session.get(User, int(user_id_str)) # Converte para int para buscar no DB
     return user
-    # -------------------------------------
 
 def user_has_access_to_obra(user, obra_id):
     """Verifica se o usuário tem permissão para acessar uma obra específica."""
     if user.role == 'administrador':
         return True # Admin pode ver tudo
     
-    # Verifica se a obra está na lista de permitidas do usuário
     obra_ids_permitidas = [obra.id for obra in user.obras_permitidas]
     return obra_id in obra_ids_permitidas
 
@@ -291,11 +282,9 @@ def login():
         user = User.query.filter_by(username=username).first()
 
         if user and user.check_password(password):
-            # --- CORREÇÃO FINAL (Conforme sua imagem) ---
             identity = str(user.id) # A identidade DEVE ser uma string
             additional_claims = {"username": user.username, "role": user.role}
             access_token = create_access_token(identity=identity, additional_claims=additional_claims)
-            # --------------------------------------------
             
             print(f"--- [LOG] Login bem-sucedido para '{username}' ---")
             return jsonify(access_token=access_token, user=user.to_dict())
@@ -317,17 +306,15 @@ def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 @app.route('/obras', methods=['GET'])
-@jwt_required() # Protegido
+@jwt_required() 
 def get_obras():
     print("--- [LOG] Rota /obras (GET) acessada ---")
     try:
-        user = get_current_user() # Pega o usuário do token
+        user = get_current_user() 
         
         if user.role == 'administrador':
-            # Administrador vê todas as obras
             obras = Obra.query.order_by(Obra.nome).all()
         else:
-            # Master e Comum veem apenas as obras permitidas
             obras = user.obras_permitidas
             
         return jsonify([obra.to_dict() for obra in obras])
@@ -337,7 +324,7 @@ def get_obras():
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras', methods=['POST'])
-@check_permission(roles=['administrador']) # Apenas Admin pode criar novas obras
+@check_permission(roles=['administrador']) 
 def add_obra():
     print("--- [LOG] Rota /obras (POST) acessada ---")
     try:
@@ -356,19 +343,17 @@ def add_obra():
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>', methods=['GET'])
-@jwt_required() # Protegido
+@jwt_required() 
 def get_obra_detalhes(obra_id):
     print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada ---")
     try:
         user = get_current_user()
         
-        # Verifica se o usuário (Master ou Comum) tem acesso a esta obra
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
         obra = Obra.query.get_or_404(obra_id)
         
-        # (O resto da sua lógica de sumários permanece o mesmo)
         sumarios_lancamentos = db.session.query(
             func.sum(Lancamento.valor).label('total_geral'),
             func.sum(db.case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
@@ -442,7 +427,7 @@ def get_obra_detalhes(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>', methods=['DELETE'])
-@check_permission(roles=['administrador']) # Apenas Admin pode deletar
+@check_permission(roles=['administrador']) 
 def deletar_obra(obra_id):
     print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
     try:
@@ -457,12 +442,11 @@ def deletar_obra(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/lancamentos', methods=['POST'])
-@check_permission(roles=['administrador', 'master']) # Admin e Master podem adicionar
+@check_permission(roles=['administrador', 'master']) 
 def add_lancamento(obra_id):
     print(f"--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
     try:
         user = get_current_user()
-        # Verifica se o usuário tem acesso a esta obra
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
@@ -486,14 +470,13 @@ def add_lancamento(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH'])
-@check_permission(roles=['administrador', 'master']) # Admin e Master podem marcar como pago
+@check_permission(roles=['administrador', 'master']) 
 def marcar_como_pago(lancamento_id):
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
     try:
         user = get_current_user()
         lancamento = Lancamento.query.get_or_404(lancamento_id)
         
-        # Verifica se o usuário tem acesso à obra deste lançamento
         if not user_has_access_to_obra(user, lancamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
@@ -507,14 +490,13 @@ def marcar_como_pago(lancamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT'])
-@check_permission(roles=['administrador', 'master']) # Admin e Master podem editar
+@check_permission(roles=['administrador', 'master']) 
 def editar_lancamento(lancamento_id):
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
         lancamento = Lancamento.query.get_or_404(lancamento_id)
         
-        # Verifica se o usuário tem acesso à obra deste lançamento
         if not user_has_access_to_obra(user, lancamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
@@ -534,12 +516,11 @@ def editar_lancamento(lancamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE'])
-@check_permission(roles=['administrador']) # Apenas Admin pode deletar
+@check_permission(roles=['administrador']) 
 def deletar_lancamento(lancamento_id):
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
-        # (Admin pode deletar de qualquer obra, não precisamos verificar permissão)
         db.session.delete(lancamento)
         db.session.commit()
         return jsonify({"sucesso": "Lançamento deletado"}), 200
@@ -550,7 +531,7 @@ def deletar_lancamento(lancamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/empreitadas', methods=['POST'])
-@check_permission(roles=['administrador', 'master']) # Admin e Master
+@check_permission(roles=['administrador', 'master']) 
 def add_empreitada(obra_id):
     print(f"--- [LOG] Rota /obras/{obra_id}/empreitadas (POST) acessada ---")
     try:
@@ -576,7 +557,7 @@ def add_empreitada(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>', methods=['PUT'])
-@check_permission(roles=['administrador', 'master']) # Admin e Master
+@check_permission(roles=['administrador', 'master']) 
 def editar_empreitada(empreitada_id):
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (PUT) acessada ---")
     try:
@@ -600,7 +581,7 @@ def editar_empreitada(empreitada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE'])
-@check_permission(roles=['administrador']) # Apenas Admin
+@check_permission(roles=['administrador']) 
 def deletar_empreitada(empreitada_id):
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (DELETE) acessada ---")
     try:
@@ -615,7 +596,7 @@ def deletar_empreitada(empreitada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST'])
-@check_permission(roles=['administrador', 'master']) # Admin e Master
+@check_permission(roles=['administrador', 'master']) 
 def add_pagamento_empreitada(empreitada_id):
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos (POST) acessada ---")
     try:
@@ -643,7 +624,7 @@ def add_pagamento_empreitada(empreitada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE'])
-@check_permission(roles=['administrador']) # Apenas Admin
+@check_permission(roles=['administrador']) 
 def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
     try:
@@ -651,8 +632,6 @@ def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
             id=pagamento_id, 
             empreitada_id=empreitada_id
         ).first_or_404()
-        
-        # Admin pode deletar, não precisa checar
         
         db.session.delete(pagamento)
         db.session.commit()
@@ -666,21 +645,15 @@ def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
 # --- ROTAS DE EXPORTAÇÃO (PROTEGIDAS) ---
 
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET'])
-@jwt_required() # Protegido
+@jwt_required() 
 def export_csv(obra_id):
     print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
-        # Adicionar verificação de token na URL (método alternativo para links)
-        # Ou, idealmente, o frontend faria o fetch com JS e construiria o blob
-        verify_jwt_in_request(optional=True) # Tenta verificar
+        verify_jwt_in_request(optional=True) 
         user = get_current_user()
         
         if not user or not user_has_access_to_obra(user, obra_id):
-           # Se o token não for passado ou o usuário não tiver acesso
-           # (Esta verificação é simplificada, exportação de links é complexa com JWT)
            print(f"--- [AVISO] Tentativa de export CSV sem permissão ou token (obra_id={obra_id}) ---")
-           # Idealmente, o frontend deve passar o token no header via fetch
-           # Vamos assumir que o frontend fará isso. Se não, a rota falhará no @jwt_required()
            pass
 
         obra = Obra.query.get_or_404(obra_id)
@@ -706,7 +679,7 @@ def export_csv(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET'])
-@jwt_required() # Protegido
+@jwt_required() 
 def export_pdf_pendentes(obra_id):
     print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
     try:
