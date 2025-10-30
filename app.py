@@ -18,8 +18,9 @@ from reportlab.lib.styles import getSampleStyleSheet
 
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request
-from functools import wraps  # <<< --- IMPORTANTE: ADICIONADO PARA CORRIGIR O CRASH
+# --- CORREÇÃO: Importar get_jwt ---
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
+from functools import wraps
 
 print("--- [LOG] Iniciando app.py ---")
 
@@ -195,8 +196,9 @@ def formatar_real(valor):
 
 def get_current_user():
     """Busca o usuário (objeto SQLAlchemy) a partir do token JWT."""
-    user_identity = get_jwt_identity()
-    user = User.query.get(user_identity['id'])
+    # --- CORREÇÃO: get_jwt_identity() agora retorna apenas o ID ---
+    user_id = get_jwt_identity() 
+    user = User.query.get(user_id)
     return user
 
 def user_has_access_to_obra(user, obra_id):
@@ -211,11 +213,12 @@ def user_has_access_to_obra(user, obra_id):
 def check_permission(roles):
     """Decorator para verificar se o usuário tem a role necessária."""
     def decorator(fn):
-        @wraps(fn)  # <<< --- ESTA É A CORREÇÃO PARA O CRASH
+        @wraps(fn)
         @jwt_required()
         def wrapper(*args, **kwargs):
-            user_identity = get_jwt_identity()
-            user_role = user_identity.get('role')
+            # --- CORREÇÃO: Pega a 'role' das claims adicionais ---
+            claims = get_jwt()
+            user_role = claims.get('role')
             if user_role not in roles:
                 return jsonify({"erro": "Acesso negado: permissão insuficiente."}), 403
             return fn(*args, **kwargs)
@@ -225,7 +228,6 @@ def check_permission(roles):
 # --- ROTAS DA API ---
 
 # --- ROTA DE ADMINISTRAÇÃO (Existente) ---
-# (Sem proteção JWT para poder criar as tabelas pela primeira vez)
 @app.route('/admin/create_tables', methods=['GET'])
 def create_tables():
     print("--- [LOG] Rota /admin/create_tables (GET) acessada ---")
@@ -245,10 +247,6 @@ def create_tables():
 
 @app.route('/register', methods=['POST'])
 def register():
-    """
-    Rota para criar um novo usuário.
-    Proteger no futuro ou usar apenas para setup inicial.
-    """
     print("--- [LOG] Rota /register (POST) acessada ---")
     try:
         dados = request.json
@@ -292,8 +290,11 @@ def login():
         user = User.query.filter_by(username=username).first()
 
         if user and user.check_password(password):
-            identity = {"id": user.id, "username": user.username, "role": user.role}
-            access_token = create_access_token(identity=identity)
+            # --- CORREÇÃO: Identidade é o ID; role/username são claims ---
+            identity = user.id
+            additional_claims = {"username": user.username, "role": user.role}
+            access_token = create_access_token(identity=identity, additional_claims=additional_claims)
+            
             print(f"--- [LOG] Login bem-sucedido para '{username}' ---")
             return jsonify(access_token=access_token, user=user.to_dict())
         else:
