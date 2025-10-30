@@ -60,7 +60,7 @@ if not DB_PASSWORD:
 print("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
 
 encoded_password = quote_plus(DB_PASSWORD)
-DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
+DATABASE_URL = f"postgresql+psycopg://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
 print(f"--- [LOG] String de conexão criada para usuário {DB_USER} (com sslmode=require) ---")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
