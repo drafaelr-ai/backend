@@ -18,7 +18,6 @@ from reportlab.lib.styles import getSampleStyleSheet
 
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
-# --- CORREÇÃO: Importar get_jwt ---
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
@@ -196,10 +195,13 @@ def formatar_real(valor):
 
 def get_current_user():
     """Busca o usuário (objeto SQLAlchemy) a partir do token JWT."""
-    # --- CORREÇÃO: get_jwt_identity() agora retorna apenas o ID ---
-    user_id = get_jwt_identity() 
-    user = User.query.get(user_id)
+    # --- CORREÇÃO (Conforme sua imagem) ---
+    user_id_str = get_jwt_identity() # Agora é uma string
+    if not user_id_str:
+        return None
+    user = db.session.get(User, int(user_id_str)) # Converte para int para buscar no DB
     return user
+    # -------------------------------------
 
 def user_has_access_to_obra(user, obra_id):
     """Verifica se o usuário tem permissão para acessar uma obra específica."""
@@ -216,7 +218,6 @@ def check_permission(roles):
         @wraps(fn)
         @jwt_required()
         def wrapper(*args, **kwargs):
-            # --- CORREÇÃO: Pega a 'role' das claims adicionais ---
             claims = get_jwt()
             user_role = claims.get('role')
             if user_role not in roles:
@@ -290,10 +291,11 @@ def login():
         user = User.query.filter_by(username=username).first()
 
         if user and user.check_password(password):
-            # --- CORREÇÃO: Identidade é o ID; role/username são claims ---
-            identity = user.id
+            # --- CORREÇÃO FINAL (Conforme sua imagem) ---
+            identity = str(user.id) # A identidade DEVE ser uma string
             additional_claims = {"username": user.username, "role": user.role}
             access_token = create_access_token(identity=identity, additional_claims=additional_claims)
+            # --------------------------------------------
             
             print(f"--- [LOG] Login bem-sucedido para '{username}' ---")
             return jsonify(access_token=access_token, user=user.to_dict())
