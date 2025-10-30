@@ -51,7 +51,7 @@ DB_PORT = "5432"
 DB_NAME = "postgres"
 
 print("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
-DB_PASSWORD = os.environ.get('DB_PASSWORD') 
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
 
 if not DB_PASSWORD:
     print("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
