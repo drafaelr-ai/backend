@@ -26,7 +26,6 @@ print("--- [LOG] Iniciando app.py ---")
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
-# Permitindo todas as origens para consertar o "Failed to fetch"
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS ('*') ---")
 # -----------------------------------------------------------------
@@ -173,6 +172,9 @@ def check_permission(roles):
         @wraps(fn)
         @jwt_required()
         def wrapper(*args, **kwargs):
+            # --- CORREÇÃO: Adicionado check de OPTIONS aqui ---
+            if request.method == 'OPTIONS':
+                return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
             claims = get_jwt()
             user_role = claims.get('role')
             if user_role not in roles:
@@ -200,8 +202,9 @@ def create_tables():
 
 
 # --- ROTAS DE AUTENTICAÇÃO (Públicas) ---
+# (Já corrigidas com a verificação de OPTIONS)
 
-@app.route('/register', methods=['POST', 'OPTIONS']) # <-- CORRIGIDO PARA O ERRO 'Failed to fetch'
+@app.route('/register', methods=['POST', 'OPTIONS'])
 def register():
     print("--- [LOG] Rota /register (POST) acessada ---")
     if request.method == 'OPTIONS':
@@ -215,26 +218,22 @@ def register():
 
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-
         if User.query.filter_by(username=username).first():
             return jsonify({"erro": "Nome de usuário já existe"}), 409
-
         novo_usuario = User(username=username, role=role)
         novo_usuario.set_password(password)
-        
         db.session.add(novo_usuario)
         db.session.commit()
         
         print(f"--- [LOG] Usuário '{username}' criado com role '{role}' ---")
         return jsonify(novo_usuario.to_dict()), 201
-
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /register (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/login', methods=['POST', 'OPTIONS']) # <-- CORRIGIDO PARA O ERRO 'Failed to fetch'
+@app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
     """Rota para autenticar um usuário e retornar um token JWT"""
     print("--- [LOG] Rota /login (POST) acessada ---")
@@ -245,23 +244,18 @@ def login():
         dados = request.json
         username = dados.get('username')
         password = dados.get('password')
-
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-
         user = User.query.filter_by(username=username).first()
-
         if user and user.check_password(password):
-            identity = str(user.id) # A identidade DEVE ser uma string
+            identity = str(user.id)
             additional_claims = {"username": user.username, "role": user.role}
             access_token = create_access_token(identity=identity, additional_claims=additional_claims)
-            
             print(f"--- [LOG] Login bem-sucedido para '{username}' ---")
             return jsonify(access_token=access_token, user=user.to_dict())
         else:
             print(f"--- [LOG] Falha no login para '{username}' (usuário ou senha incorretos) ---")
             return jsonify({"erro": "Credenciais inválidas"}), 401
-    
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /login (POST): {str(e)}\n{error_details} ---")
@@ -269,7 +263,7 @@ def login():
 # ------------------------------------
 
 # --- ROTAS DE API (PROTEGIDAS) ---
-# Adicionando 'OPTIONS' a todas as rotas para garantir o CORS
+# Adicionando 'OPTIONS' e a verificação em CADA ROTA PROTEGIDA
 
 @app.route('/', methods=['GET'])
 def home():
@@ -279,6 +273,9 @@ def home():
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
+    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     print("--- [LOG] Rota /obras (GET) acessada ---")
     try:
         user = get_current_user() 
@@ -295,7 +292,7 @@ def get_obras():
 @app.route('/obras', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def add_obra():
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print("--- [LOG] Rota /obras (POST) acessada ---")
     try:
         dados = request.json
@@ -312,7 +309,9 @@ def add_obra():
 @app.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obra_detalhes(obra_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada ---")
     try:
         user = get_current_user()
@@ -375,7 +374,7 @@ def get_obra_detalhes(obra_id):
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_obra(obra_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
@@ -391,7 +390,7 @@ def deletar_obra(obra_id):
 @app.route('/obras/<int:obra_id>/lancamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_lancamento(obra_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
     try:
         user = get_current_user()
@@ -415,7 +414,7 @@ def add_lancamento(obra_id):
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def marcar_como_pago(lancamento_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
     try:
         user = get_current_user()
@@ -434,7 +433,7 @@ def marcar_como_pago(lancamento_id):
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_lancamento(lancamento_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
@@ -459,7 +458,7 @@ def editar_lancamento(lancamento_id):
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_lancamento(lancamento_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -475,7 +474,7 @@ def deletar_lancamento(lancamento_id):
 @app.route('/obras/<int:obra_id>/empreitadas', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_empreitada(obra_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /obras/{obra_id}/empreitadas (POST) acessada ---")
     try:
         user = get_current_user()
@@ -498,7 +497,7 @@ def add_empreitada(obra_id):
 @app.route('/empreitadas/<int:empreitada_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_empreitada(empreitada_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (PUT) acessada ---")
     try:
         user = get_current_user()
@@ -521,7 +520,7 @@ def editar_empreitada(empreitada_id):
 @app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_empreitada(empreitada_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (DELETE) acessada ---")
     try:
         empreitada = Empreitada.query.get_or_404(empreitada_id)
@@ -537,7 +536,7 @@ def deletar_empreitada(empreitada_id):
 @app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_pagamento_empreitada(empreitada_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos (POST) acessada ---")
     try:
         user = get_current_user()
@@ -562,7 +561,7 @@ def add_pagamento_empreitada(empreitada_id):
 @app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
     try:
         pagamento = PagamentoEmpreitada.query.filter_by(id=pagamento_id, empreitada_id=empreitada_id).first_or_404()
@@ -580,7 +579,9 @@ def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_csv(obra_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
         verify_jwt_in_request(optional=True) 
@@ -610,7 +611,9 @@ def export_csv(obra_id):
 @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes(obra_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
     try:
         user = get_current_user()
@@ -701,7 +704,7 @@ def export_pdf_pendentes(obra_id):
 @app.route('/admin/users', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_all_users():
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print("--- [LOG] Rota /admin/users (GET) acessada ---")
     try:
         current_user = get_current_user()
@@ -715,7 +718,7 @@ def get_all_users():
 @app.route('/admin/users', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def create_user():
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print("--- [LOG] Rota /admin/users (POST) acessada ---")
     try:
         dados = request.json
@@ -746,7 +749,7 @@ def create_user():
 @app.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_user_permissions(user_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
@@ -760,7 +763,7 @@ def get_user_permissions(user_id):
 @app.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def set_user_permissions(user_id):
-    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
