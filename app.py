@@ -7,7 +7,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from urllib.parse import quote_plus
 import datetime
-from sqlalchemy import func
+from sqlalchemy import func, case
 import io
 import csv
 from reportlab.lib.pagesizes import A4
@@ -21,7 +21,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py ---")
+print("--- [LOG] Iniciando app.py (VERSÃO DE MIGRAÇÃO) ---")
 
 app = Flask(__name__)
 
@@ -95,13 +95,18 @@ class User(db.Model):
 # ---------------------------------------------
 
 
-# --- MODELOS DO BANCO DE DADOS (Existentes) ---
+# --- MODELOS DO BANCO DE DADOS (MIGRAÇÃO) ---
+# Contém os modelos ANTIGOS e NOVOS
+
 class Obra(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(150), nullable=False)
     cliente = db.Column(db.String(150))
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
-    empreitadas = db.relationship('Empreitada', backref='obra', lazy=True, cascade="all, delete-orphan")
+    # Ambos os relacionamentos existem temporariamente
+    empreitadas = db.relationship('Empreitada', backref='obra_empreitada', lazy=True, cascade="all, delete-orphan")
+    servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
+    
     def to_dict(self):
         return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
 
@@ -121,7 +126,9 @@ class Lancamento(db.Model):
             "status": self.status, "pix": self.pix
         }
 
+# --- MODELO ANTIGO (PARA LEITURA) ---
 class Empreitada(db.Model):
+    __tablename__ = 'empreitada' # Garante que está lendo a tabela correta
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
@@ -129,25 +136,60 @@ class Empreitada(db.Model):
     valor_global = db.Column(db.Float, nullable=False)
     pix = db.Column(db.String(100))
     pagamentos = db.relationship('PagamentoEmpreitada', backref='empreitada', lazy=True, cascade="all, delete-orphan")
-    def to_dict(self):
-        return {
-            "id": self.id, "obra_id": self.obra_id, "nome": self.nome,
-            "responsavel": self.responsavel, "valor_global": self.valor_global,
-            "pix": self.pix, "pagamentos": [p.to_dict() for p in self.pagamentos]
-        }
 
 class PagamentoEmpreitada(db.Model):
+    __tablename__ = 'pagamento_empreitada' # Garante que está lendo a tabela correta
     id = db.Column(db.Integer, primary_key=True)
     empreitada_id = db.Column(db.Integer, db.ForeignKey('empreitada.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
     valor = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pago')
+# -----------------------------------
+
+
+# --- MODELO NOVO (PARA ESCRITA) ---
+class Servico(db.Model):
+    __tablename__ = 'servico'
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    nome = db.Column(db.String(150), nullable=False)
+    responsavel = db.Column(db.String(150))
+    valor_global_mao_de_obra = db.Column(db.Float, nullable=False, default=0.0)
+    valor_global_material = db.Column(db.Float, nullable=False, default=0.0)
+    pix = db.Column(db.String(100))
+    pagamentos = db.relationship('PagamentoServico', backref='servico', lazy=True, cascade="all, delete-orphan")
+    
+    def to_dict(self):
+        total = (self.valor_global_mao_de_obra or 0.0) + (self.valor_global_material or 0.0)
+        return {
+            "id": self.id, "obra_id": self.obra_id, "nome": self.nome,
+            "responsavel": self.responsavel,
+            "valor_global_mao_de_obra": self.valor_global_mao_de_obra,
+            "valor_global_material": self.valor_global_material,
+            "valor_global_total": total,
+            "pix": self.pix,
+            "pagamentos": [p.to_dict() for p in self.pagamentos]
+        }
+
+class PagamentoServico(db.Model):
+    __tablename__ = 'pagamento_servico'
+    id = db.Column(db.Integer, primary_key=True)
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=False)
+    data = db.Column(db.Date, nullable=False)
+    valor = db.Column(db.Float, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Pago')
+    tipo_pagamento = db.Column(db.String(20), nullable=False) # 'mao_de_obra' ou 'material'
+    
     def to_dict(self):
         return {
             "id": self.id, "data": self.data.isoformat(),
-            "valor": self.valor, "status": self.status
+            "valor": self.valor, "status": self.status,
+            "tipo_pagamento": self.tipo_pagamento
         }
 # ----------------------------------------------------
+
+# (Funções auxiliares e de permissão permanecem as mesmas)
+# ... (Omitido por brevidade) ...
 
 # --- FUNÇÕES AUXILIARES ---
 def formatar_real(valor):
@@ -172,7 +214,6 @@ def check_permission(roles):
         @wraps(fn)
         @jwt_required()
         def wrapper(*args, **kwargs):
-            # --- CORREÇÃO: Adicionado check de OPTIONS aqui ---
             if request.method == 'OPTIONS':
                 return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
             claims = get_jwt()
@@ -183,6 +224,7 @@ def check_permission(roles):
         return wrapper
     return decorator
 
+
 # --- ROTAS DA API ---
 
 # --- ROTA DE ADMINISTRAÇÃO (Existente) ---
@@ -192,7 +234,7 @@ def create_tables():
     try:
         with app.app_context():
             db.create_all()
-        print("--- [LOG] db.create_all() executado com sucesso (incluindo tabelas de usuário). ---")
+        print("--- [LOG] db.create_all() executado com sucesso (criando tabelas novas ao lado das antigas). ---")
         return jsonify({"sucesso": "Tabelas criadas no banco de dados."}), 200
     except Exception as e:
         error_details = traceback.format_exc()
@@ -201,21 +243,87 @@ def create_tables():
 # ------------------------------------
 
 
-# --- ROTAS DE AUTENTICAÇÃO (Públicas) ---
-# (Já corrigidas com a verificação de OPTIONS)
+# --- ROTA DE MIGRAÇÃO (NOVA E TEMPORÁRIA) ---
+@app.route('/admin/migrate_data', methods=['GET'])
+@check_permission(roles=['administrador']) # Protegida para admin
+def migrate_data():
+    """
+    Script de migração único. 
+    Lê de 'empreitada' e 'pagamento_empreitada'.
+    Escreve em 'servico' e 'pagamento_servico'.
+    """
+    print("--- [LOG] Rota /admin/migrate_data (GET) acessada ---")
+    try:
+        empreitadas_antigas = Empreitada.query.all()
+        
+        servicos_criados = 0
+        pagamentos_criados = 0
+        
+        for emp_antiga in empreitadas_antigas:
+            # 1. Verifica se já não migramos este (para evitar duplicatas)
+            serv_existente = Servico.query.filter_by(nome=emp_antiga.nome, obra_id=emp_antiga.obra_id).first()
+            
+            if serv_existente:
+                continue # Pula, já foi migrado
+                
+            # 2. Cria o novo Serviço
+            novo_servico = Servico(
+                obra_id=emp_antiga.obra_id,
+                nome=emp_antiga.nome,
+                responsavel=emp_antiga.responsavel,
+                pix=emp_antiga.pix,
+                # Lógica de migração: 100% para Mão de Obra
+                valor_global_mao_de_obra=emp_antiga.valor_global,
+                valor_global_material=0.0 
+            )
+            db.session.add(novo_servico)
+            servicos_criados += 1
+            
+            # 3. Precisamos dar "flush" para obter o ID do novo_servico
+            db.session.flush()
+            
+            # 4. Copia os pagamentos
+            for pag_antigo in emp_antiga.pagamentos:
+                novo_pagamento = PagamentoServico(
+                    servico_id=novo_servico.id,
+                    data=pag_antigo.data,
+                    valor=pag_antigo.valor,
+                    status=pag_antigo.status,
+                    # Lógica de migração: 100% para Mão de Obra
+                    tipo_pagamento='mao_de_obra' 
+                )
+                db.session.add(novo_pagamento)
+                pagamentos_criados += 1
+        
+        # 5. Salva tudo no banco
+        db.session.commit()
+        
+        return jsonify({
+            "sucesso": "Migração concluída.",
+            "servicos_migrados": servicos_criados,
+            "pagamentos_migrados": pagamentos_criados
+        }), 200
 
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/migrate_data: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": "Falha ao migrar dados.", "details": error_details}), 500
+# ------------------------------------------------
+
+
+# --- ROTAS DE AUTENTICAÇÃO (Públicas) ---
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register():
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /register (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    
     try:
         dados = request.json
         username = dados.get('username')
         password = dados.get('password')
         role = dados.get('role', 'comum') 
-
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
         if User.query.filter_by(username=username).first():
@@ -224,7 +332,6 @@ def register():
         novo_usuario.set_password(password)
         db.session.add(novo_usuario)
         db.session.commit()
-        
         print(f"--- [LOG] Usuário '{username}' criado com role '{role}' ---")
         return jsonify(novo_usuario.to_dict()), 201
     except Exception as e:
@@ -235,11 +342,10 @@ def register():
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
-    """Rota para autenticar um usuário e retornar um token JWT"""
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /login (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-
     try:
         dados = request.json
         username = dados.get('username')
@@ -263,7 +369,7 @@ def login():
 # ------------------------------------
 
 # --- ROTAS DE API (PROTEGIDAS) ---
-# Adicionando 'OPTIONS' e a verificação em CADA ROTA PROTEGIDA
+# (Todas as rotas /obras, /lancamentos, etc. usam os NOVOS modelos)
 
 @app.route('/', methods=['GET'])
 def home():
@@ -273,7 +379,6 @@ def home():
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
-    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     print("--- [LOG] Rota /obras (GET) acessada ---")
@@ -292,7 +397,6 @@ def get_obras():
 @app.route('/obras', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def add_obra():
-    # A verificação de OPTIONS já está no decorator @check_permission
     print("--- [LOG] Rota /obras (POST) acessada ---")
     try:
         dados = request.json
@@ -309,7 +413,6 @@ def add_obra():
 @app.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obra_detalhes(obra_id):
-    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada ---")
@@ -319,30 +422,41 @@ def get_obra_detalhes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # ... (Sua lógica de sumários) ...
+        # --- CÁLCULOS DE SUMÁRIOS (Atualizados para Servicos) ---
         sumarios_lancamentos = db.session.query(
             func.sum(Lancamento.valor).label('total_geral'),
-            func.sum(db.case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
-            func.sum(db.case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
+            func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
+            func.sum(case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
         ).filter(Lancamento.obra_id == obra_id).first()
-        sumarios_empreitadas = db.session.query(
-            func.sum(PagamentoEmpreitada.valor).label('total_empreitadas_pago')
-        ).join(Empreitada).filter(Empreitada.obra_id == obra_id, PagamentoEmpreitada.status == 'Pago').first()
+        sumarios_servicos_pagos = db.session.query(
+            func.sum(PagamentoServico.valor).label('total_servicos_pago')
+        ).join(Servico).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.status == 'Pago'
+        ).first()
+        sumarios_servicos_global = db.session.query(
+            func.sum(Servico.valor_global_mao_de_obra).label('total_global_mo'),
+            func.sum(Servico.valor_global_material).label('total_global_mat')
+        ).filter(Servico.obra_id == obra_id).first()
         total_lancamentos = sumarios_lancamentos.total_geral or 0.0
         total_pago_lancamentos = sumarios_lancamentos.total_pago or 0.0
-        total_pago_empreitadas = sumarios_empreitadas.total_empreitadas_pago or 0.0
-        total_pago_geral = total_pago_lancamentos + total_pago_empreitadas
-        total_empreitadas_global = db.session.query(func.sum(Empreitada.valor_global)).filter(Empreitada.obra_id == obra_id).scalar() or 0.0
-        total_geral = total_lancamentos + total_empreitadas_global
-        total_a_pagar = total_geral - total_pago_geral
-        total_por_segmento = db.session.query(Lancamento.tipo, func.sum(Lancamento.valor)).filter(Lancamento.obra_id == obra_id).group_by(Lancamento.tipo).all()
-        total_por_mes = db.session.query(func.to_char(Lancamento.data, 'MM/YYYY').label('mes_ano'), func.sum(Lancamento.valor)).filter(Lancamento.obra_id == obra_id).group_by('mes_ano').all()
+        total_pago_servicos = sumarios_servicos_pagos.total_servicos_pago or 0.0
+        total_global_mo = sumarios_servicos_global.total_global_mo or 0.0
+        total_global_mat = sumarios_servicos_global.total_global_mat or 0.0
+        total_global_servicos = total_global_mo + total_global_mat
+        total_geral = total_lancamentos + total_global_servicos
+        total_pago = total_pago_lancamentos + total_pago_servicos
+        total_a_pagar = total_geral - total_pago
+        total_por_segmento = db.session.query(
+            Lancamento.tipo,
+            func.sum(Lancamento.valor)
+        ).filter(Lancamento.obra_id == obra_id).group_by(Lancamento.tipo).all()
         sumarios_dict = {
-            "total_geral": total_geral, "total_pago": total_pago_geral, "total_a_pagar": total_a_pagar,
+            "total_geral": total_geral, "total_pago": total_pago, "total_a_pagar": total_a_pagar,
             "total_por_segmento": {tipo: valor for tipo, valor in total_por_segmento},
-            "total_por_mes": {mes: valor for mes, valor in total_por_mes}
         }
         
+        # --- HISTÓRICO UNIFICADO (Atualizado para Servicos) ---
         historico_unificado = []
         for lanc in obra.lancamentos:
             historico_unificado.append({
@@ -350,20 +464,21 @@ def get_obra_detalhes(obra_id):
                 "descricao": lanc.descricao, "tipo": lanc.tipo, "valor": lanc.valor,
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id
             })
-        for emp in obra.empreitadas:
-            for pag in emp.pagamentos:
+        for serv in obra.servicos: # <-- Usa o novo modelo
+            for pag in serv.pagamentos:
+                desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
                 historico_unificado.append({
-                    "id": f"emp-pag-{pag.id}", "tipo_registro": "pagamento_empreitada", "data": pag.data.isoformat(),
-                    "descricao": f"Empreitada: {emp.nome}", "tipo": "Empreitada", "valor": pag.valor,
-                    "status": pag.status, "pix": emp.pix, "empreitada_id": emp.id,
-                    "pagamento_id": pag.id, "empreitada_nome": emp.nome
+                    "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data.isoformat(),
+                    "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", "valor": pag.valor,
+                    "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
+                    "pagamento_id": pag.id,
                 })
         historico_unificado.sort(key=lambda x: x['data'], reverse=True)
         
         return jsonify({
             "obra": obra.to_dict(),
             "lancamentos": sorted([l.to_dict() for l in obra.lancamentos], key=lambda x: x['data'], reverse=True),
-            "empreitadas": [e.to_dict() for e in obra.empreitadas],
+            "servicos": [s.to_dict() for s in obra.servicos], # <-- Usa o novo modelo
             "historico_unificado": historico_unificado, "sumarios": sumarios_dict
         })
     except Exception as e:
@@ -374,7 +489,6 @@ def get_obra_detalhes(obra_id):
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_obra(obra_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
@@ -387,10 +501,10 @@ def deletar_obra(obra_id):
         print(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# --- Rotas de Lançamento (Geral) ---
 @app.route('/obras/<int:obra_id>/lancamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_lancamento(obra_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
     try:
         user = get_current_user()
@@ -414,14 +528,18 @@ def add_lancamento(obra_id):
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def marcar_como_pago(lancamento_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
     try:
         user = get_current_user()
         lancamento = Lancamento.query.get_or_404(lancamento_id)
         if not user_has_access_to_obra(user, lancamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
-        lancamento.status = 'Pago'
+        
+        if lancamento.status == 'Pago':
+            lancamento.status = 'A Pagar'
+        else:
+            lancamento.status = 'Pago'
+        
         db.session.commit()
         return jsonify(lancamento.to_dict())
     except Exception as e:
@@ -433,7 +551,6 @@ def marcar_como_pago(lancamento_id):
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_lancamento(lancamento_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
@@ -458,7 +575,6 @@ def editar_lancamento(lancamento_id):
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_lancamento(lancamento_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -471,117 +587,162 @@ def deletar_lancamento(lancamento_id):
         print(f"--- [ERRO] /lancamentos/{lancamento_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>/empreitadas', methods=['POST', 'OPTIONS'])
+
+# --- ROTAS DE SERVIÇO (Antigas Empreitadas) ---
+
+@app.route('/obras/<int:obra_id>/servicos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
-def add_empreitada(obra_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
-    print(f"--- [LOG] Rota /obras/{obra_id}/empreitadas (POST) acessada ---")
+def add_servico(obra_id):
+    print(f"--- [LOG] Rota /obras/{obra_id}/servicos (POST) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
         dados = request.json
-        nova_empreitada = Empreitada(
-            obra_id=obra_id, nome=dados['nome'], responsavel=dados['responsavel'],
-            valor_global=float(dados['valor_global']), pix=dados['pix']
+        novo_servico = Servico(
+            obra_id=obra_id,
+            nome=dados['nome'],
+            responsavel=dados['responsavel'],
+            valor_global_mao_de_obra=float(dados.get('valor_global_mao_de_obra', 0.0)),
+            valor_global_material=float(dados.get('valor_global_material', 0.0)),
+            pix=dados.get('pix')
         )
-        db.session.add(nova_empreitada)
+        db.session.add(novo_servico)
         db.session.commit()
-        return jsonify(nova_empreitada.to_dict()), 201
+        return jsonify(novo_servico.to_dict()), 201
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/empreitadas (POST): {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] /obras/{obra_id}/servicos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>', methods=['PUT', 'OPTIONS'])
+@app.route('/servicos/<int:servico_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
-def editar_empreitada(empreitada_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
-    print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (PUT) acessada ---")
+def editar_servico(servico_id):
+    print(f"--- [LOG] Rota /servicos/{servico_id} (PUT) acessada ---")
     try:
         user = get_current_user()
-        empreitada = Empreitada.query.get_or_404(empreitada_id)
-        if not user_has_access_to_obra(user, empreitada.obra_id):
+        servico = Servico.query.get_or_404(servico_id)
+        
+        if not user_has_access_to_obra(user, servico.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
         dados = request.json
-        empreitada.nome = dados.get('nome', empreitada.nome)
-        empreitada.responsavel = dados.get('responsavel', empreitada.responsavel)
-        empreitada.valor_global = float(dados.get('valor_global', empreitada.valor_global))
-        empreitada.pix = dados.get('pix', empreitada.pix)
+        servico.nome = dados.get('nome', servico.nome)
+        servico.responsavel = dados.get('responsavel', servico.responsavel)
+        servico.valor_global_mao_de_obra = float(dados.get('valor_global_mao_de_obra', servico.valor_global_mao_de_obra))
+        servico.valor_global_material = float(dados.get('valor_global_material', servico.valor_global_material))
+        servico.pix = dados.get('pix', servico.pix)
         db.session.commit()
-        return jsonify(empreitada.to_dict())
+        return jsonify(servico.to_dict())
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /empreitadas/{empreitada_id} (PUT): {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] /servicos/{servico_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>', methods=['DELETE', 'OPTIONS'])
+@app.route('/servicos/<int:servico_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
-def deletar_empreitada(empreitada_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
-    print(f"--- [LOG] Rota /empreitadas/{empreitada_id} (DELETE) acessada ---")
+def deletar_servico(servico_id):
+    print(f"--- [LOG] Rota /servicos/{servico_id} (DELETE) acessada ---")
     try:
-        empreitada = Empreitada.query.get_or_404(empreitada_id)
-        db.session.delete(empreitada)
+        servico = Servico.query.get_or_404(servico_id)
+        db.session.delete(servico)
         db.session.commit()
-        return jsonify({"sucesso": "Empreitada deletada com sucesso"}), 200
+        return jsonify({"sucesso": "Serviço deletado com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /empreitadas/{empreitada_id} (DELETE): {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>/pagamentos', methods=['POST', 'OPTIONS'])
+@app.route('/servicos/<int:servico_id>/pagamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
-def add_pagamento_empreitada(empreitada_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
-    print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos (POST) acessada ---")
+def add_pagamento_servico(servico_id):
+    print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos (POST) acessada ---")
     try:
         user = get_current_user()
-        empreitada = Empreitada.query.get_or_404(empreitada_id)
-        if not user_has_access_to_obra(user, empreitada.obra_id):
+        servico = Servico.query.get_or_404(servico_id)
+
+        if not user_has_access_to_obra(user, servico.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
         dados = request.json
-        novo_pagamento = PagamentoEmpreitada(
-            empreitada_id=empreitada_id, data=datetime.date.fromisoformat(dados['data']),
-            valor=float(dados['valor']), status=dados.get('status', 'Pago')
+        
+        tipo_pagamento = dados.get('tipo_pagamento')
+        if tipo_pagamento not in ['mao_de_obra', 'material']:
+            return jsonify({"erro": "O 'tipo_pagamento' é obrigatório e deve ser 'mao_de_obra' ou 'material'"}), 400
+            
+        novo_pagamento = PagamentoServico(
+            servico_id=servico_id,
+            data=datetime.date.fromisoformat(dados['data']),
+            valor=float(dados['valor']),
+            status=dados.get('status', 'Pago'),
+            tipo_pagamento=tipo_pagamento
         )
         db.session.add(novo_pagamento)
         db.session.commit()
-        empreitada_atualizada = Empreitada.query.get(empreitada_id)
-        return jsonify(empreitada_atualizada.to_dict())
+        servico_atualizado = Servico.query.get(servico_id)
+        return jsonify(servico_atualizado.to_dict())
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /empreitadas/{empreitada_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] /servicos/{servico_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/empreitadas/<int:empreitada_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
+@app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
-def deletar_pagamento_empreitada(empreitada_id, pagamento_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
-    print(f"--- [LOG] Rota /empreitadas/{empreitada_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
+def deletar_pagamento_servico(servico_id, pagamento_id):
+    print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
     try:
-        pagamento = PagamentoEmpreitada.query.filter_by(id=pagamento_id, empreitada_id=empreitada_id).first_or_404()
+        pagamento = PagamentoServico.query.filter_by(
+            id=pagamento_id, 
+            servico_id=servico_id
+        ).first_or_404()
+        
         db.session.delete(pagamento)
         db.session.commit()
         return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /empreitadas/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# --- ROTAS DE EXPORTAÇÃO (PROTEGIDAS) ---
+@app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def toggle_pagamento_servico_status(pagamento_id):
+    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/status (PATCH) acessada ---")
+    try:
+        user = get_current_user()
+        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+        servico = Servico.query.get(pagamento.servico_id)
+        
+        if not user_has_access_to_obra(user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        if pagamento.status == 'Pago':
+            pagamento.status = 'A Pagar'
+        else:
+            pagamento.status = 'Pago'
+            
+        db.session.commit()
+        return jsonify(pagamento.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# ---------------------------------------------------
 
+
+# --- ROTAS DE EXPORTAÇÃO (PROTEGIDAS) ---
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_csv(obra_id):
-    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
         verify_jwt_in_request(optional=True) 
@@ -611,9 +772,7 @@ def export_csv(obra_id):
 @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes(obra_id):
-    # --- CORREÇÃO CORS: Adicionado check de OPTIONS ---
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
     try:
         user = get_current_user()
@@ -649,24 +808,17 @@ def export_pdf_pendentes(obra_id):
             table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3*cm, 4*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 11),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('TOPPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -2), colors.white),
-                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 11),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12), ('TOPPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -2), colors.white), ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'), ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
                 ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#28a745')),
                 ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
-                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, -1), (-1, -1), 11),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, -1), (-1, -1), 11),
                 ('ALIGN', (2, -1), (3, -1), 'RIGHT'),
             ]))
             elements.append(table)
@@ -693,18 +845,12 @@ def export_pdf_pendentes(obra_id):
         print(f"Traceback completo:")
         print(error_details)
         print(f"=" * 80)
-        return jsonify({
-            "erro": "Erro ao gerar PDF", "mensagem": str(e),
-            "obra_id": obra_id, "details": error_details 
-        }), 500
+        return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
         
-# --- NOVO: ROTAS DE ADMINISTRAÇÃO DE USUÁRIOS ---
-# (Protegidas para 'administrador' e com OPTIONS)
-
+# --- ROTAS DE ADMINISTRAÇÃO DE USUÁRIOS ---
 @app.route('/admin/users', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_all_users():
-    # A verificação de OPTIONS já está no decorator @check_permission
     print("--- [LOG] Rota /admin/users (GET) acessada ---")
     try:
         current_user = get_current_user()
@@ -718,7 +864,6 @@ def get_all_users():
 @app.route('/admin/users', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def create_user():
-    # A verificação de OPTIONS já está no decorator @check_permission
     print("--- [LOG] Rota /admin/users (POST) acessada ---")
     try:
         dados = request.json
@@ -749,7 +894,6 @@ def create_user():
 @app.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_user_permissions(user_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
@@ -763,7 +907,6 @@ def get_user_permissions(user_id):
 @app.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def set_user_permissions(user_id):
-    # A verificação de OPTIONS já está no decorator @check_permission
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
@@ -780,7 +923,6 @@ def set_user_permissions(user_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
-
 # ---------------------------------------------------
 
 if __name__ == '__main__':
