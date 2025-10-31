@@ -165,7 +165,6 @@ class PagamentoServico(db.Model):
 # ----------------------------------------------------
 
 # (Funções auxiliares e de permissão permanecem as mesmas)
-# ... (Omitido por brevidade) ...
 def formatar_real(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 def get_current_user():
@@ -273,7 +272,7 @@ def home():
     print("--- [LOG] Rota / (home) acessada ---")
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
-# --- INÍCIO DA ROTA MODIFICADA (NOVA LÓGICA DE CÁLCULO) ---
+# --- ROTA /obras (Tela inicial) ---
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
@@ -333,7 +332,7 @@ def get_obras():
                 user_obra_association.c.user_id == user.id
             ).order_by(Obra.nome).all()
 
-        # 6. Formata a Saída (NOVA LÓGICA DE CÁLCULO)
+        # 6. Formata a Saída (Lógica de Orçamento Restante)
         resultados = []
         for obra, lanc_geral, lanc_pago, serv_budget_mo, pag_pago, pag_material_geral in obras_com_totais:
             
@@ -360,7 +359,7 @@ def get_obras():
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
-# --- FIM DA ROTA CORRIGIDA ---
+# --- FIM DA ROTA ---
 
 
 @app.route('/obras', methods=['POST', 'OPTIONS'])
@@ -379,13 +378,13 @@ def add_obra():
         print(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# --- INÍCIO DA ROTA MODIFICADA (get_obra_detalhes) ---
+# --- ROTA /obras/<id> (Dashboard Interno) ---
 @app.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Nova Lógica KPIs) ---")
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Lógica Supressão KPI Laranja) ---")
     try:
         user = get_current_user()
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -426,18 +425,16 @@ def get_obra_detalhes(obra_id):
         # KPI VERDE: Total Pago
         kpi_total_pago = total_lancamentos_pago + total_servicos_pago
         
-        # NOVO KPI (LARANJA): Liberado para Pagamento (A Pagar)
+        # (Valor "A Pagar" real, que seria do KPI Laranja)
         kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
         
         # KPI AZUL: Total Comprometido (Pago + A Pagar)
         kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
         
         # Custo Total Previsto (Orçamento)
-        # = (Todos Lançamentos) + (Orçamento MO) + (Pagamentos Rápidos de Material)
         kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_servicos_material_geral
         
         # KPI VERMELHO: Restante do Orçamento (Total em Aberto)
-        # = (Custo Total Previsto) - (Total Pago)
         kpi_total_em_aberto_orcamento = kpi_total_previsto - kpi_total_pago
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
@@ -449,10 +446,11 @@ def get_obra_detalhes(obra_id):
             Lancamento.servico_id.is_(None) # Apenas não vinculados
         ).group_by(Lancamento.tipo).all()
         
+        # *** DICIONÁRIO DE SUMÁRIOS (REVERTIDO PARA 3 CARDS) ***
         sumarios_dict = {
             "total_geral": kpi_total_geral_comprometido,       # AZUL
             "total_pago": kpi_total_pago,                    # VERDE
-            "total_liberado_pagamento": kpi_liberado_pagamento, # NOVO (LARANJA)
+            # "total_liberado_pagamento": kpi_liberado_pagamento, # SUPRIMIDO
             "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento, # VERMELHO
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
         }
@@ -518,7 +516,7 @@ def get_obra_detalhes(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO GERAL] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
-# --- FIM DA ROTA MODIFICADA ---
+# --- FIM DA ROTA ---
 
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
@@ -876,7 +874,7 @@ def export_pdf_pendentes(obra_id):
             table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3*cm, 4*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 11),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12), ('TOPPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white), ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
