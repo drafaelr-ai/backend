@@ -122,6 +122,9 @@ class Lancamento(db.Model):
     # Coluna de Prioridade
     prioridade = db.Column(db.Integer, nullable=False, default=0) 
     
+    # <--- MUDANÇA: Adicionada coluna Fornecedor
+    fornecedor = db.Column(db.String(150), nullable=True)
+    
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
     
@@ -131,9 +134,10 @@ class Lancamento(db.Model):
             "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
             "status": self.status, "pix": self.pix,
             "prioridade": self.prioridade, 
+            "fornecedor": self.fornecedor, # <--- MUDANÇA: Adicionado ao dict
             "servico_id": self.servico_id, 
             "servico_nome": self.servico.nome if self.servico else None,
-            "lancamento_id": self.id # Adicionado para consistência com o frontend
+            "lancamento_id": self.id 
         }
 
 class Servico(db.Model):
@@ -166,6 +170,9 @@ class PagamentoServico(db.Model):
     
     # Coluna de Prioridade
     prioridade = db.Column(db.Integer, nullable=False, default=0)
+    
+    # <--- MUDANÇA: Adicionada coluna Fornecedor
+    fornecedor = db.Column(db.String(150), nullable=True)
 
     def to_dict(self):
         return {
@@ -173,7 +180,8 @@ class PagamentoServico(db.Model):
             "valor": self.valor, "status": self.status,
             "tipo_pagamento": self.tipo_pagamento,
             "prioridade": self.prioridade,
-            "pagamento_id": self.id # Adicionado para consistência com o frontend
+            "fornecedor": self.fornecedor, # <--- MUDANÇA: Adicionado ao dict
+            "pagamento_id": self.id 
         }
 
 # NOVO MODELO: Orçamento
@@ -514,7 +522,8 @@ def get_obra_detalhes(obra_id):
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
                 "descricao": descricao, "tipo": lanc.tipo, "valor": float(lanc.valor or 0.0),
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
-                "prioridade": lanc.prioridade 
+                "prioridade": lanc.prioridade,
+                "fornecedor": lanc.fornecedor # <--- MUDANÇA
             })
         
         for serv in obra.servicos:
@@ -525,7 +534,8 @@ def get_obra_detalhes(obra_id):
                     "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", "valor": float(pag.valor or 0.0),
                     "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
                     "pagamento_id": pag.id,
-                    "prioridade": pag.prioridade 
+                    "prioridade": pag.prioridade,
+                    "fornecedor": pag.fornecedor # <--- MUDANÇA
                 })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
@@ -605,7 +615,8 @@ def add_lancamento(obra_id):
             data=datetime.date.fromisoformat(dados['data']),
             status=dados['status'], 
             pix=dados.get('pix'),
-            prioridade=int(dados.get('prioridade', 0)), 
+            prioridade=int(dados.get('prioridade', 0)),
+            fornecedor=dados.get('fornecedor'), # <--- MUDANÇA
             servico_id=dados.get('servico_id')
         )
         db.session.add(novo_lancamento)
@@ -656,7 +667,8 @@ def editar_lancamento(lancamento_id):
         lancamento.tipo = dados['tipo']
         lancamento.status = dados['status']
         lancamento.pix = dados.get('pix')
-        lancamento.prioridade = int(dados.get('prioridade', lancamento.prioridade)) 
+        lancamento.prioridade = int(dados.get('prioridade', lancamento.prioridade))
+        lancamento.fornecedor = dados.get('fornecedor', lancamento.fornecedor) # <--- MUDANÇA
         lancamento.servico_id = dados.get('servico_id')
         db.session.commit()
         return jsonify(lancamento.to_dict())
@@ -772,7 +784,8 @@ def add_pagamento_servico(servico_id):
             valor=float(dados['valor']),
             status=dados.get('status', 'Pago'),
             tipo_pagamento=tipo_pagamento,
-            prioridade=int(dados.get('prioridade', 0)) 
+            prioridade=int(dados.get('prioridade', 0)),
+            fornecedor=dados.get('fornecedor') # <--- MUDANÇA
         )
         db.session.add(novo_pagamento)
         db.session.commit()
@@ -916,8 +929,9 @@ def aprovar_orcamento(orcamento_id):
         
         # 2. Criar o novo Lançamento (Pendência)
         desc_lancamento = f"{orcamento.descricao}"
-        if orcamento.fornecedor:
-            desc_lancamento = f"{orcamento.descricao} (Forn: {orcamento.fornecedor})"
+        # <--- MUDANÇA: Não adicionar Fornecedor na descrição, ele agora tem campo próprio
+        # if orcamento.fornecedor:
+        #     desc_lancamento = f"{orcamento.descricao} (Forn: {orcamento.fornecedor})"
         
         novo_lancamento = Lancamento(
             obra_id=orcamento.obra_id,
@@ -928,6 +942,7 @@ def aprovar_orcamento(orcamento_id):
             status='A Pagar',
             pix=orcamento.dados_pagamento,
             prioridade=0, # Padrão 0, pode ser editado depois
+            fornecedor=orcamento.fornecedor, # <--- MUDANÇA
             servico_id=orcamento.servico_id # Mantém o vínculo se já existia
         )
         
@@ -942,7 +957,6 @@ def aprovar_orcamento(orcamento_id):
         print(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# --- NOVA ROTA PARA CONVERTER ORÇAMENTO EM SERVIÇO ---
 @app.route('/orcamentos/<int:orcamento_id>/converter_para_servico', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def converter_orcamento_para_servico(orcamento_id):
@@ -992,12 +1006,13 @@ def converter_orcamento_para_servico(orcamento_id):
             novo_lancamento = Lancamento(
                 obra_id=orcamento.obra_id,
                 tipo=orcamento.tipo,
-                descricao=f"{orcamento.descricao} (Forn: {orcamento.fornecedor})",
+                descricao=orcamento.descricao, # <--- MUDANÇA (não precisa mais do Forn: na desc)
                 valor=orcamento.valor,
                 data=datetime.date.today(),
                 status='A Pagar',
                 pix=orcamento.dados_pagamento,
                 prioridade=0,
+                fornecedor=orcamento.fornecedor, # <--- MUDANÇA
                 servico_id=novo_servico.id # Vínculo com o serviço recém-criado
             )
             db.session.add(novo_lancamento)
@@ -1009,7 +1024,6 @@ def converter_orcamento_para_servico(orcamento_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /orcamentos/{orcamento_id}/converter_para_servico (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
-# --- FIM DA NOVA ROTA ---
 
 @app.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -1052,11 +1066,13 @@ def export_csv(obra_id):
         items = obra.lancamentos
         si = io.StringIO()
         cw = csv.writer(si)
-        cw.writerow(['Data', 'Descricao', 'Tipo', 'Valor', 'Status', 'PIX', 'ServicoID'])
+        # <--- MUDANÇA: Adicionado Fornecedor ao CSV
+        cw.writerow(['Data', 'Descricao', 'Tipo', 'Valor', 'Status', 'PIX', 'ServicoID', 'Fornecedor'])
         for item in items:
             cw.writerow([
                 item.data.isoformat(), item.descricao, item.tipo,
-                item.valor, item.status, item.pix, item.servico_id
+                item.valor, item.status, item.pix, item.servico_id,
+                item.fornecedor
             ])
         output = make_response(si.getvalue())
         output.headers["Content-Disposition"] = f"attachment; filename=relatorio_obra_{obra_id}.csv"
@@ -1134,7 +1150,6 @@ def export_pdf_pendentes(obra_id):
                 ])
                 total_pendente += item['valor']
             
-            # <--- CORREÇÃO AQUI (6 colunas, não 7)
             data.append(['', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
             
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
