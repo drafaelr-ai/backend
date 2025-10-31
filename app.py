@@ -102,7 +102,10 @@ class Obra(db.Model):
     cliente = db.Column(db.String(150))
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
-    
+    orcamentos = db.relationship('Orcamento', backref='obra', lazy=True, cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
     def to_dict(self):
         return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
 
@@ -366,7 +369,37 @@ def get_obras():
         print(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA ROTA ---
+# [app.py] - Adicione este novo modelo
 
+class Orcamento(db.Model):
+    __tablename__ = 'orcamento'
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+
+    descricao = db.Column(db.String(255), nullable=False)
+    fornecedor = db.Column(db.String(150), nullable=True)
+    valor = db.Column(db.Float, nullable=False)
+    dados_pagamento = db.Column(db.String(150), nullable=True)
+    tipo = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Pendente') # Pendente, Aprovado, Rejeitado
+
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
+    servico = db.relationship('Servico', backref='orcamentos_vinculados', lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "descricao": self.descricao,
+            "fornecedor": self.fornecedor,
+            "valor": self.valor,
+            "dados_pagamento": self.dados_pagamento,
+            "tipo": self.tipo,
+            "status": self.status,
+            "servico_id": self.servico_id,
+            "servico_nome": self.servico.nome if self.servico else None
+        }
+# ----------------------------------------------------
 
 @app.route('/obras', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
@@ -1026,7 +1059,7 @@ def export_pdf_pendentes_todas_obras():
             bottomMargin=2*cm, 
             leftMargin=2*cm, 
             rightMargin=2*cm
-        )
+        ) 
         elements = []
         styles = getSampleStyleSheet()
         
