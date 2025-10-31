@@ -291,7 +291,7 @@ def get_obras():
             func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago')
         ).group_by(Lancamento.obra_id).subquery()
 
-        # 2. Subquery para totais de Pagamentos de Serviços (*** INDENTAÇÃO CORRIGIDA ***)
+        # 2. Subquery para totais de Pagamentos de Serviços (INDENTAÇÃO CORRIGIDA)
         pagamentos_sum = db.session.query(
             Servico.obra_id,
             func.sum(PagamentoServico.valor).label('total_geral'),
@@ -300,8 +300,6 @@ def get_obras():
          .join(Servico, PagamentoServico.servico_id == Servico.id) \
          .group_by(Servico.obra_id) \
          .subquery()
-        # Usei barras invertidas (\) para garantir a quebra de linha, mas o principal
-        # é que removi os espaços extras antes de .join, .group_by, e .subquery
 
         # 3. Query Principal (Inalterada)
         obras_query = db.session.query(
@@ -326,11 +324,11 @@ def get_obras():
                 user_obra_association.c.user_id == user.id
             ).order_by(Obra.nome).all()
 
-        # 5. Formata a saída (Inalterado)
+        # 5. Formata a saída (*** MODIFICADO PARA INCLUIR total_pago ***)
         resultados = []
         for obra, lanc_geral, lanc_pago, pag_geral, pag_pago in obras_com_totais:
             total_geral = float(lanc_geral) + float(pag_geral)
-            total_pago = float(lanc_pago) + float(pag_pago)
+            total_pago = float(lanc_pago) + float(pag_pago) # <-- Valor calculado
             total_a_pagar = total_geral - total_pago
             
             resultados.append({
@@ -338,6 +336,7 @@ def get_obras():
                 "nome": obra.nome,
                 "cliente": obra.cliente,
                 "total_geral": total_geral, 
+                "total_pago": total_pago, # <-- NOVO DADO ENVIADO
                 "total_a_pagar": total_a_pagar 
             })
         
@@ -379,7 +378,7 @@ def get_obra_detalhes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # --- CORREÇÃO: Lógica de KPIs refeita ---
+        # --- Lógica de KPIs (CORRETA) ---
         
         # 1. Todos os Lançamentos (Gerais + Vinculados)
         sumarios_lancamentos = db.session.query(
@@ -402,7 +401,7 @@ def get_obra_detalhes(obra_id):
         total_pago_servicos = float(sumarios_servicos.total_pago or 0.0)
         total_a_pagar_servicos = float(sumarios_servicos.total_a_pagar or 0.0)
 
-        # KPIs Finais
+        # KPIs Finais (Esta é a lógica que você confirmou)
         total_pago = total_pago_lancamentos + total_pago_servicos
         total_a_pagar = total_a_pagar_lancamentos + total_a_pagar_servicos
         total_geral = total_pago + total_a_pagar
@@ -456,7 +455,7 @@ def get_obra_detalhes(obra_id):
             if item['data']:
                 item['data'] = item['data'].isoformat()
             
-        # --- CORREÇÃO: Cálculo dos totais de serviço (removido status="Pago") ---
+        # --- Cálculo dos totais de serviço ---
         servicos_com_totais = []
         for s in obra.servicos:
             serv_dict = s.to_dict()
