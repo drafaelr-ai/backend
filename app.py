@@ -21,7 +21,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO DE MIGRAÇÃO) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO FINAL PÓS-MIGRAÇÃO) ---")
 
 app = Flask(__name__)
 
@@ -95,16 +95,12 @@ class User(db.Model):
 # ---------------------------------------------
 
 
-# --- MODELOS DO BANCO DE DADOS (MIGRAÇÃO) ---
-# Contém os modelos ANTIGOS e NOVOS
-
+# --- MODELOS DO BANCO DE DADOS (PRINCIPAIS) ---
 class Obra(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(150), nullable=False)
     cliente = db.Column(db.String(150))
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
-    # Ambos os relacionamentos existem temporariamente
-    empreitadas = db.relationship('Empreitada', backref='obra_empreitada', lazy=True, cascade="all, delete-orphan")
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
@@ -126,30 +122,8 @@ class Lancamento(db.Model):
             "status": self.status, "pix": self.pix
         }
 
-# --- MODELO ANTIGO (PARA LEITURA) ---
-class Empreitada(db.Model):
-    __tablename__ = 'empreitada' # Garante que está lendo a tabela correta
-    id = db.Column(db.Integer, primary_key=True)
-    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
-    nome = db.Column(db.String(150), nullable=False)
-    responsavel = db.Column(db.String(150))
-    valor_global = db.Column(db.Float, nullable=False)
-    pix = db.Column(db.String(100))
-    pagamentos = db.relationship('PagamentoEmpreitada', backref='empreitada', lazy=True, cascade="all, delete-orphan")
-
-class PagamentoEmpreitada(db.Model):
-    __tablename__ = 'pagamento_empreitada' # Garante que está lendo a tabela correta
-    id = db.Column(db.Integer, primary_key=True)
-    empreitada_id = db.Column(db.Integer, db.ForeignKey('empreitada.id'), nullable=False)
-    data = db.Column(db.Date, nullable=False)
-    valor = db.Column(db.Float, nullable=False)
-    status = db.Column(db.String(20), nullable=False, default='Pago')
-# -----------------------------------
-
-
-# --- MODELO NOVO (PARA ESCRITA) ---
 class Servico(db.Model):
-    __tablename__ = 'servico'
+    __tablename__ = 'servico' # Especificar o nome da tabela
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
@@ -172,7 +146,7 @@ class Servico(db.Model):
         }
 
 class PagamentoServico(db.Model):
-    __tablename__ = 'pagamento_servico'
+    __tablename__ = 'pagamento_servico' # Especificar o nome da tabela
     id = db.Column(db.Integer, primary_key=True)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
@@ -187,9 +161,6 @@ class PagamentoServico(db.Model):
             "tipo_pagamento": self.tipo_pagamento
         }
 # ----------------------------------------------------
-
-# (Funções auxiliares e de permissão permanecem as mesmas)
-# ... (Omitido por brevidade) ...
 
 # --- FUNÇÕES AUXILIARES ---
 def formatar_real(valor):
@@ -224,7 +195,6 @@ def check_permission(roles):
         return wrapper
     return decorator
 
-
 # --- ROTAS DA API ---
 
 # --- ROTA DE ADMINISTRAÇÃO (Existente) ---
@@ -234,7 +204,7 @@ def create_tables():
     try:
         with app.app_context():
             db.create_all()
-        print("--- [LOG] db.create_all() executado com sucesso (criando tabelas novas ao lado das antigas). ---")
+        print("--- [LOG] db.create_all() executado com sucesso. ---")
         return jsonify({"sucesso": "Tabelas criadas no banco de dados."}), 200
     except Exception as e:
         error_details = traceback.format_exc()
@@ -243,87 +213,19 @@ def create_tables():
 # ------------------------------------
 
 
-# --- ROTA DE MIGRAÇÃO (NOVA E TEMPORÁRIA) ---
-@app.route('/admin/migrate_data', methods=['GET'])
-@check_permission(roles=['administrador']) # Protegida para admin
-def migrate_data():
-    """
-    Script de migração único. 
-    Lê de 'empreitada' e 'pagamento_empreitada'.
-    Escreve em 'servico' e 'pagamento_servico'.
-    """
-    print("--- [LOG] Rota /admin/migrate_data (GET) acessada ---")
-    try:
-        empreitadas_antigas = Empreitada.query.all()
-        
-        servicos_criados = 0
-        pagamentos_criados = 0
-        
-        for emp_antiga in empreitadas_antigas:
-            # 1. Verifica se já não migramos este (para evitar duplicatas)
-            serv_existente = Servico.query.filter_by(nome=emp_antiga.nome, obra_id=emp_antiga.obra_id).first()
-            
-            if serv_existente:
-                continue # Pula, já foi migrado
-                
-            # 2. Cria o novo Serviço
-            novo_servico = Servico(
-                obra_id=emp_antiga.obra_id,
-                nome=emp_antiga.nome,
-                responsavel=emp_antiga.responsavel,
-                pix=emp_antiga.pix,
-                # Lógica de migração: 100% para Mão de Obra
-                valor_global_mao_de_obra=emp_antiga.valor_global,
-                valor_global_material=0.0 
-            )
-            db.session.add(novo_servico)
-            servicos_criados += 1
-            
-            # 3. Precisamos dar "flush" para obter o ID do novo_servico
-            db.session.flush()
-            
-            # 4. Copia os pagamentos
-            for pag_antigo in emp_antiga.pagamentos:
-                novo_pagamento = PagamentoServico(
-                    servico_id=novo_servico.id,
-                    data=pag_antigo.data,
-                    valor=pag_antigo.valor,
-                    status=pag_antigo.status,
-                    # Lógica de migração: 100% para Mão de Obra
-                    tipo_pagamento='mao_de_obra' 
-                )
-                db.session.add(novo_pagamento)
-                pagamentos_criados += 1
-        
-        # 5. Salva tudo no banco
-        db.session.commit()
-        
-        return jsonify({
-            "sucesso": "Migração concluída.",
-            "servicos_migrados": servicos_criados,
-            "pagamentos_migrados": pagamentos_criados
-        }), 200
-
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /admin/migrate_data: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": "Falha ao migrar dados.", "details": error_details}), 500
-# ------------------------------------------------
-
-
 # --- ROTAS DE AUTENTICAÇÃO (Públicas) ---
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register():
-    # ... (código inalterado) ...
     print("--- [LOG] Rota /register (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
     try:
         dados = request.json
         username = dados.get('username')
         password = dados.get('password')
         role = dados.get('role', 'comum') 
+
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
         if User.query.filter_by(username=username).first():
@@ -332,6 +234,7 @@ def register():
         novo_usuario.set_password(password)
         db.session.add(novo_usuario)
         db.session.commit()
+        
         print(f"--- [LOG] Usuário '{username}' criado com role '{role}' ---")
         return jsonify(novo_usuario.to_dict()), 201
     except Exception as e:
@@ -342,10 +245,11 @@ def register():
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
-    # ... (código inalterado) ...
+    """Rota para autenticar um usuário e retornar um token JWT"""
     print("--- [LOG] Rota /login (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+
     try:
         dados = request.json
         username = dados.get('username')
@@ -369,7 +273,6 @@ def login():
 # ------------------------------------
 
 # --- ROTAS DE API (PROTEGIDAS) ---
-# (Todas as rotas /obras, /lancamentos, etc. usam os NOVOS modelos)
 
 @app.route('/', methods=['GET'])
 def home():
