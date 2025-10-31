@@ -829,7 +829,6 @@ def toggle_pagamento_servico_status(pagamento_id):
         print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# --- NOVA ROTA ---
 @app.route('/servicos/pagamentos/<int:pagamento_id>/prioridade', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def editar_pagamento_servico_prioridade(pagamento_id):
@@ -900,7 +899,7 @@ def add_orcamento(obra_id):
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def aprovar_orcamento(orcamento_id):
-    """Aprova um orçamento e o converte em um Lançamento 'A Pagar'"""
+    """Aprova um orçamento e o converte em um Lançamento 'A Pagar' (OPÇÃO A)"""
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/aprovar (POST) acessada ---")
     try:
         user = get_current_user()
@@ -929,7 +928,7 @@ def aprovar_orcamento(orcamento_id):
             status='A Pagar',
             pix=orcamento.dados_pagamento,
             prioridade=0, # Padrão 0, pode ser editado depois
-            servico_id=orcamento.servico_id
+            servico_id=orcamento.servico_id # Mantém o vínculo se já existia
         )
         
         db.session.add(novo_lancamento)
@@ -943,6 +942,75 @@ def aprovar_orcamento(orcamento_id):
         print(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# --- NOVA ROTA PARA CONVERTER ORÇAMENTO EM SERVIÇO ---
+@app.route('/orcamentos/<int:orcamento_id>/converter_para_servico', methods=['POST', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def converter_orcamento_para_servico(orcamento_id):
+    """Aprova um orçamento e o converte em um NOVO Serviço (OPÇÃO B1 ou B2)"""
+    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/converter_para_servico (POST) acessada ---")
+    try:
+        user = get_current_user()
+        orcamento = Orcamento.query.get_or_404(orcamento_id)
+        
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        if orcamento.status != 'Pendente':
+            return jsonify({"erro": "Este orçamento já foi processado."}), 400
+            
+        dados = request.json
+        destino_valor = dados.get('destino_valor') # 'orcamento_mo' (B1) ou 'pagamento_vinculado' (B2)
+        
+        if destino_valor not in ['orcamento_mo', 'pagamento_vinculado']:
+            return jsonify({"erro": "Destino do valor inválido."}), 400
+
+        # 1. Mudar status do orçamento
+        orcamento.status = 'Aprovado'
+        
+        # 2. Criar o NOVO Serviço
+        novo_servico = Servico(
+            obra_id=orcamento.obra_id,
+            nome=orcamento.descricao,
+            responsavel=orcamento.fornecedor,
+            pix=orcamento.dados_pagamento,
+            valor_global_mao_de_obra=0.0 # Valor padrão
+        )
+        
+        # 3. Lógica B1 vs B2
+        if destino_valor == 'orcamento_mo':
+            # Opção B1: Valor vira Orçamento de Mão de Obra
+            novo_servico.valor_global_mao_de_obra = orcamento.valor
+            db.session.add(novo_servico)
+            db.session.commit()
+            return jsonify({"sucesso": "Orçamento aprovado e novo serviço criado", "servico": novo_servico.to_dict()}), 200
+
+        else: # destino_valor == 'pagamento_vinculado'
+            # Opção B2: Valor vira uma Pendência vinculada ao novo serviço
+            db.session.add(novo_servico)
+            db.session.commit() # Commit para obter o novo_servico.id
+
+            novo_lancamento = Lancamento(
+                obra_id=orcamento.obra_id,
+                tipo=orcamento.tipo,
+                descricao=f"{orcamento.descricao} (Forn: {orcamento.fornecedor})",
+                valor=orcamento.valor,
+                data=datetime.date.today(),
+                status='A Pagar',
+                pix=orcamento.dados_pagamento,
+                prioridade=0,
+                servico_id=novo_servico.id # Vínculo com o serviço recém-criado
+            )
+            db.session.add(novo_lancamento)
+            db.session.commit()
+            return jsonify({"sucesso": "Serviço criado e pendência gerada", "servico": novo_servico.to_dict(), "lancamento": novo_lancamento.to_dict()}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /orcamentos/{orcamento_id}/converter_para_servico (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DA NOVA ROTA ---
+
 @app.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def rejeitar_orcamento(orcamento_id):
@@ -954,12 +1022,7 @@ def rejeitar_orcamento(orcamento_id):
         
         if not user_has_access_to_obra(user, orcamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
-
-        # Você pode mudar o status para 'Rejeitado' se quiser manter o histórico
-        # orcamento.status = 'Rejeitado'
-        # db.session.commit()
         
-        # Ou simplesmente deletar
         db.session.delete(orcamento)
         db.session.commit()
         
@@ -1015,8 +1078,6 @@ def export_pdf_pendentes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # --- MUDANÇA: PDF agora inclui TODOS os itens a pagar ---
-        
         # 1. Lançamentos a pagar
         lancamentos_apagar = Lancamento.query.filter_by(obra_id=obra.id, status='A Pagar').all()
         
@@ -1062,7 +1123,6 @@ def export_pdf_pendentes(obra_id):
         if not items:
             elements.append(Paragraph("Nenhum pagamento pendente nesta obra.", styles['Normal']))
         else:
-            # Cabeçalho da tabela atualizado
             data = [['Prior.', 'Data', 'Tipo', 'Descricao', 'Valor', 'PIX']]
             total_pendente = 0
             for item in items:
@@ -1074,10 +1134,9 @@ def export_pdf_pendentes(obra_id):
                 ])
                 total_pendente += item['valor']
             
-            # <--- CORREÇÃO: Linha de total ajustada para 6 colunas
+            # <--- CORREÇÃO AQUI (6 colunas, não 7)
             data.append(['', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
             
-            # ColWidths atualizado para 6 colunas
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
@@ -1089,7 +1148,7 @@ def export_pdf_pendentes(obra_id):
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
-                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#dc3545')), # <-- Mudado para Vermelho
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#dc3545')),
                 ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, -1), (-1, -1), 11),
                 ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # Alinhamento da linha de total
@@ -1280,8 +1339,8 @@ def export_pdf_pendentes_todas_obras():
                     (item['pix'] or 'Não informado')[:15]
                 ])
             
-            # <--- CORREÇÃO: Linha de total ajustada para 6 colunas
-            data.append(['', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
+            # <--- CORREÇÃO AQUI (6 colunas, não 7)
+            data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
             
             # ColWidths atualizado
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
