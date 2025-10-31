@@ -116,6 +116,8 @@ class Lancamento(db.Model):
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
     pix = db.Column(db.String(100))
     
+    prioridade = db.Column(db.Integer, nullable=False, default=0) # <--- MUDANÇA
+    
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
     
@@ -124,6 +126,7 @@ class Lancamento(db.Model):
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
             "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
             "status": self.status, "pix": self.pix,
+            "prioridade": self.prioridade, # <--- MUDANÇA
             "servico_id": self.servico_id, 
             "servico_nome": self.servico.nome if self.servico else None
         }
@@ -156,11 +159,14 @@ class PagamentoServico(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False) # 'mao_de_obra' ou 'material'
     
+    prioridade = db.Column(db.Integer, nullable=False, default=0) # <--- MUDANÇA
+    
     def to_dict(self):
         return {
             "id": self.id, "data": self.data.isoformat(),
             "valor": self.valor, "status": self.status,
-            "tipo_pagamento": self.tipo_pagamento
+            "tipo_pagamento": self.tipo_pagamento,
+            "prioridade": self.prioridade # <--- MUDANÇA
         }
 # ----------------------------------------------------
 
@@ -470,7 +476,8 @@ def get_obra_detalhes(obra_id):
             historico_unificado.append({
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
                 "descricao": descricao, "tipo": lanc.tipo, "valor": float(lanc.valor or 0.0),
-                "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id
+                "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
+                "prioridade": lanc.prioridade # <--- MUDANÇA
             })
         
         for serv in obra.servicos:
@@ -481,6 +488,7 @@ def get_obra_detalhes(obra_id):
                     "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", "valor": float(pag.valor or 0.0),
                     "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
                     "pagamento_id": pag.id,
+                    "prioridade": pag.prioridade # <--- MUDANÇA
                 })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
@@ -551,6 +559,7 @@ def add_lancamento(obra_id):
             data=datetime.date.fromisoformat(dados['data']),
             status=dados['status'], 
             pix=dados.get('pix'),
+            prioridade=int(dados.get('prioridade', 0)), # <--- MUDANÇA
             servico_id=dados.get('servico_id')
         )
         db.session.add(novo_lancamento)
@@ -601,6 +610,7 @@ def editar_lancamento(lancamento_id):
         lancamento.tipo = dados['tipo']
         lancamento.status = dados['status']
         lancamento.pix = dados.get('pix')
+        lancamento.prioridade = int(dados.get('prioridade', lancamento.prioridade)) # <--- MUDANÇA
         lancamento.servico_id = dados.get('servico_id')
         db.session.commit()
         return jsonify(lancamento.to_dict())
@@ -715,7 +725,8 @@ def add_pagamento_servico(servico_id):
             data=datetime.date.fromisoformat(dados['data']),
             valor=float(dados['valor']),
             status=dados.get('status', 'Pago'),
-            tipo_pagamento=tipo_pagamento
+            tipo_pagamento=tipo_pagamento,
+            prioridade=int(dados.get('prioridade', 0)) # <--- MUDANÇA
         )
         db.session.add(novo_pagamento)
         db.session.commit()
@@ -834,7 +845,8 @@ def export_pdf_pendentes(obra_id):
                 desc = f"{lanc.descricao} (Serviço: {lanc.servico.nome})"
             items.append({
                 "data": lanc.data, "tipo": lanc.tipo, "descricao": desc,
-                "valor": lanc.valor, "pix": lanc.pix
+                "valor": lanc.valor, "pix": lanc.pix,
+                "prioridade": lanc.prioridade # <--- MUDANÇA
             })
             
         for pag in pagamentos_servico_apagar:
@@ -842,10 +854,12 @@ def export_pdf_pendentes(obra_id):
             items.append({
                 "data": pag.data, "tipo": "Serviço", 
                 "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
-                "valor": pag.valor, "pix": pag.servico.pix
+                "valor": pag.valor, "pix": pag.servico.pix,
+                "prioridade": pag.prioridade # <--- MUDANÇA
             })
             
-        items.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1))
+        # <--- MUDANÇA: Ordenação atualizada por prioridade (maior primeiro), depois data (mais antiga primeiro)
+        items.sort(key=lambda x: (-x.get('prioridade', 0), x['data'] if x['data'] else datetime.date(1900, 1, 1)))
 
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2*cm, bottomMargin=2*cm, leftMargin=2*cm, rightMargin=2*cm)
@@ -860,18 +874,22 @@ def export_pdf_pendentes(obra_id):
         if not items:
             elements.append(Paragraph("Nenhum pagamento pendente nesta obra.", styles['Normal']))
         else:
-            data = [['Data', 'Tipo', 'Descricao', 'Valor', 'PIX']]
+            # <--- MUDANÇA: Cabeçalho da tabela atualizado
+            data = [['Prior.', 'Data', 'Tipo', 'Descricao', 'Valor', 'PIX']]
             total_pendente = 0
             for item in items:
                 data.append([
+                    item.get('prioridade', 0), # <--- MUDANÇA
                     item['data'].strftime('%d/%m/%Y'), item['tipo'][:15] if item['tipo'] else 'N/A',
                     item['descricao'][:35] if item['descricao'] else 'N/A', formatar_real(item['valor']),
                     (item['pix'] or 'Nao informado')[:20]
                 ])
                 total_pendente += item['valor']
-            data.append(['', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
+            # <--- MUDANÇA: Linha de total ajustada para 6 colunas
+            data.append(['', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
             
-            table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3*cm, 4*cm])
+            # <--- MUDANÇA: ColWidths atualizado para 6 colunas
+            table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
@@ -885,7 +903,7 @@ def export_pdf_pendentes(obra_id):
                 ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#dc3545')), # <-- Mudado para Vermelho
                 ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, -1), (-1, -1), 11),
-                ('ALIGN', (2, -1), (3, -1), 'RIGHT'),
+                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # <--- MUDANÇA: Alinhamento da linha de total
             ]))
             elements.append(table)
         
@@ -913,6 +931,214 @@ def export_pdf_pendentes(obra_id):
         print(f"=" * 80)
         return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
         
+
+# 🆕 NOVA ROTA: Export PDF de TODAS as obras com pendências
+@app.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
+@jwt_required() 
+def export_pdf_pendentes_todas_obras():
+    """Exporta PDF com pendências de TODAS as obras que o usuário tem acesso"""
+    if request.method == 'OPTIONS': 
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print("--- [LOG] Rota /export/pdf_pendentes_todas_obras (GET) acessada ---")
+    
+    try:
+        user = get_current_user()
+        if not user:
+            return jsonify({"erro": "Usuário não encontrado"}), 404
+        
+        # 1. Buscar obras que o usuário tem acesso
+        if user.role == 'administrador':
+            obras = Obra.query.order_by(Obra.nome).all()
+        else:
+            obras = user.obras_permitidas
+        
+        if not obras:
+            return jsonify({"erro": "Nenhuma obra encontrada"}), 404
+        
+        # 2. Para cada obra, buscar pendências
+        obras_com_pendencias = []
+        total_geral_pendente = 0.0
+        
+        for obra in obras:
+            # Lançamentos a pagar
+            lancamentos_apagar = Lancamento.query.filter_by(
+                obra_id=obra.id, 
+                status='A Pagar'
+            ).all()
+            
+            # Pagamentos de Serviços a pagar
+            pagamentos_servico_apagar = PagamentoServico.query.join(Servico).filter(
+                Servico.obra_id == obra.id,
+                PagamentoServico.status == 'A Pagar'
+            ).all()
+            
+            items = []
+            
+            # Adicionar lançamentos
+            for lanc in lancamentos_apagar:
+                desc = lanc.descricao
+                if lanc.servico:
+                    desc = f"{lanc.descricao} (Serviço: {lanc.servico.nome})"
+                items.append({
+                    "data": lanc.data, 
+                    "tipo": lanc.tipo, 
+                    "descricao": desc,
+                    "valor": lanc.valor, 
+                    "pix": lanc.pix,
+                    "prioridade": lanc.prioridade # <--- MUDANÇA
+                })
+            
+            # Adicionar pagamentos de serviço
+            for pag in pagamentos_servico_apagar:
+                desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
+                items.append({
+                    "data": pag.data, 
+                    "tipo": "Serviço", 
+                    "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
+                    "valor": pag.valor, 
+                    "pix": pag.servico.pix,
+                    "prioridade": pag.prioridade # <--- MUDANÇA
+                })
+            
+            # Se tem pendências, adicionar na lista
+            if items:
+                # <--- MUDANÇA: Ordenação atualizada
+                items.sort(key=lambda x: (-x.get('prioridade', 0), x['data'] if x['data'] else datetime.date(1900, 1, 1)))
+                total_obra = sum(item['valor'] for item in items)
+                total_geral_pendente += total_obra
+                
+                obras_com_pendencias.append({
+                    "obra": obra,
+                    "items": items,
+                    "total": total_obra
+                })
+        
+        # 3. Gerar PDF
+        if not obras_com_pendencias:
+            return jsonify({"mensagem": "Nenhuma pendência encontrada em todas as obras"}), 200
+        
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer, 
+            pagesize=A4, 
+            topMargin=2*cm, 
+            bottomMargin=2*cm, 
+            leftMargin=2*cm, 
+            rightMargin=2*cm
+        )
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Título principal
+        title_text = f"<b>Relatório de Pagamentos Pendentes - Todas as Obras</b><br/><br/>Total de Obras com Pendências: {len(obras_com_pendencias)}"
+        title = Paragraph(title_text, styles['Title'])
+        elements.append(title)
+        elements.append(Spacer(1, 0.8*cm))
+        
+        # Para cada obra com pendências
+        for idx, obra_data in enumerate(obras_com_pendencias):
+            obra = obra_data['obra']
+            items = obra_data['items']
+            total_obra = obra_data['total']
+            
+            # Cabeçalho da obra
+            obra_header = f"<b>Obra: {obra.nome}</b>"
+            if obra.cliente:
+                obra_header += f" | Cliente: {obra.cliente}"
+            obra_header += f" | Total: {formatar_real(total_obra)}"
+            
+            elements.append(Paragraph(obra_header, styles['Heading2']))
+            elements.append(Spacer(1, 0.3*cm))
+            
+            # Tabela de pendências da obra
+            # <--- MUDANÇA: Cabeçalho da tabela atualizado
+            data = [['Prior.', 'Data', 'Tipo', 'Descrição', 'Valor', 'PIX']]
+            
+            for item in items:
+                data.append([
+                    item.get('prioridade', 0), # <--- MUDANÇA
+                    item['data'].strftime('%d/%m/%Y') if item['data'] else 'N/A',
+                    item['tipo'][:15] if item['tipo'] else 'N/A',
+                    item['descricao'][:30] if item['descricao'] else 'N/A',
+                    formatar_real(item['valor']),
+                    (item['pix'] or 'Não informado')[:15]
+                ])
+            
+            # <--- MUDANÇA: Linha de total da obra ajustada
+            data.append(['', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
+            
+            # <--- MUDANÇA: ColWidths atualizado
+            table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
+            table.setStyle(TableStyle([
+                # Cabeçalho
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                ('TOPPADDING', (0, 0), (-1, 0), 10),
+                
+                # Corpo
+                ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
+                
+                # Linha de subtotal
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#10b981')),
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, -1), (-1, -1), 10),
+                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # <--- MUDANÇA: Alinhamento da linha de total
+            ]))
+            elements.append(table)
+            
+            # Separador entre obras (não adicionar após a última)
+            if idx < len(obras_com_pendencias) - 1:
+                elements.append(Spacer(1, 0.8*cm))
+        
+        # Total geral
+        elements.append(Spacer(1, 1*cm))
+        total_geral_text = f"<b>TOTAL GERAL A PAGAR: {formatar_real(total_geral_pendente)}</b>"
+        total_geral_para = Paragraph(total_geral_text, styles['Heading1'])
+        elements.append(total_geral_para)
+        
+        # Data de geração
+        elements.append(Spacer(1, 0.5*cm))
+        data_geracao = f"Gerado em: {datetime.datetime.now().strftime('%d/%m/%Y às %H:%M')}"
+        elements.append(Paragraph(data_geracao, styles['Normal']))
+        
+        # Gerar PDF
+        doc.build(elements)
+        buffer.seek(0)
+        pdf_data = buffer.read()
+        buffer.close()
+        
+        response = make_response(pdf_data)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=pagamentos_pendentes_todas_obras.pdf'
+        return response
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"=" * 80)
+        print(f"ERRO ao gerar PDF de todas as obras")
+        print(f"Erro: {str(e)}")
+        print(f"Traceback completo:")
+        print(error_details)
+        print(f"=" * 80)
+        return jsonify({
+            "erro": "Erro ao gerar PDF", 
+            "mensagem": str(e), 
+            "details": error_details
+        }), 500
+
 # --- ROTAS DE ADMINISTRAÇÃO DE USUÁRIOS ---
 @app.route('/admin/users', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
