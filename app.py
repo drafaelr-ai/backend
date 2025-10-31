@@ -828,7 +828,42 @@ def toggle_pagamento_servico_status(pagamento_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+
+# --- NOVA ROTA ---
+@app.route('/servicos/pagamentos/<int:pagamento_id>/prioridade', methods=['PATCH', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def editar_pagamento_servico_prioridade(pagamento_id):
+    """Edita apenas a prioridade de um pagamento de serviço específico."""
+    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/prioridade (PATCH) acessada ---")
+    if request.method == 'OPTIONS': 
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+        
+    try:
+        user = get_current_user()
+        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+        servico = Servico.query.get(pagamento.servico_id)
+        
+        if not user_has_access_to_obra(user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json
+        nova_prioridade = dados.get('prioridade')
+        
+        if nova_prioridade is None or not isinstance(nova_prioridade, int):
+            return jsonify({"erro": "Prioridade inválida. Deve ser um número."}), 400
+            
+        pagamento.prioridade = int(nova_prioridade)
+        db.session.commit()
+        
+        return jsonify(pagamento.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /servicos/pagamentos/.../prioridade (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 # ---------------------------------------------------
+
 
 # --- ROTAS DE ORÇAMENTO (NOVO) ---
 
