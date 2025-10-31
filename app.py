@@ -1073,8 +1073,9 @@ def export_pdf_pendentes(obra_id):
                     (item['pix'] or 'Nao informado')[:20]
                 ])
                 total_pendente += item['valor']
-            # Linha de total ajustada para 6 colunas
-            data.append(['', '', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
+            
+            # <--- CORREÇÃO: Linha de total ajustada para 6 colunas
+            data.append(['', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
             
             # ColWidths atualizado para 6 colunas
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
@@ -1279,8 +1280,8 @@ def export_pdf_pendentes_todas_obras():
                     (item['pix'] or 'Não informado')[:15]
                 ])
             
-            # Linha de total da obra ajustada
-            data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
+            # <--- CORREÇÃO: Linha de total ajustada para 6 colunas
+            data.append(['', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
             
             # ColWidths atualizado
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
