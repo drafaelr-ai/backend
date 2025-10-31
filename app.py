@@ -398,12 +398,19 @@ def get_obra_detalhes(obra_id):
             if item['data']:
                 item['data'] = item['data'].isoformat()
             
-        # --- Cálculo dos totais de serviço (Inalterado) ---
+        # --- CORREÇÃO: Cálculo dos totais de serviço (removido status="Pago") ---
         servicos_com_totais = []
         for s in obra.servicos:
             serv_dict = s.to_dict()
-            gastos_vinculados_mo = sum(float(l.valor or 0.0) for l in todos_lancamentos if l.servico_id == s.id and l.tipo == 'Mão de Obra' and l.status == 'Pago')
-            gastos_vinculados_mat = sum(float(l.valor or 0.0) for l in todos_lancamentos if l.servico_id == s.id and l.tipo == 'Material' and l.status == 'Pago')
+            # Calcula totais de gastos vinculados (Pago + A Pagar)
+            gastos_vinculados_mo = sum(
+                float(l.valor or 0.0) for l in todos_lancamentos 
+                if l.servico_id == s.id and l.tipo == 'Mão de Obra'
+            )
+            gastos_vinculados_mat = sum(
+                float(l.valor or 0.0) for l in todos_lancamentos 
+                if l.servico_id == s.id and l.tipo == 'Material'
+            )
             serv_dict['total_gastos_vinculados_mo'] = gastos_vinculados_mo
             serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
             servicos_com_totais.append(serv_dict)
@@ -802,7 +809,7 @@ def export_pdf_pendentes(obra_id):
         
         response = make_response(pdf_data)
         response.headers['Content-Type'] = 'application/pdf'
-        response.headers['Content-Disposition'] = f'attachment; filename=pagamentos_pendentes_obra_{obra_id}.pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=pagamentos_pendentes_obra_{obra.id}.pdf'
         return response
         
     except Exception as e:
