@@ -21,7 +21,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO FINAL PÓS-MIGRAÇÃO) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO FINAL com Lançamentos Vinculados) ---")
 
 app = Flask(__name__)
 
@@ -115,38 +115,45 @@ class Lancamento(db.Model):
     data = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
     pix = db.Column(db.String(100))
+    
+    # --- NOVO: Link opcional para um serviço ---
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
+    servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
+    
     def to_dict(self):
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
             "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
-            "status": self.status, "pix": self.pix
+            "status": self.status, "pix": self.pix,
+            "servico_id": self.servico_id, # <-- NOVO
+            "servico_nome": self.servico.nome if self.servico else None # <-- NOVO
         }
 
 class Servico(db.Model):
-    __tablename__ = 'servico' # Especificar o nome da tabela
+    __tablename__ = 'servico'
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
     responsavel = db.Column(db.String(150))
+    
+    # --- MUDANÇA: 'valor_global_material' foi REMOVIDO ---
     valor_global_mao_de_obra = db.Column(db.Float, nullable=False, default=0.0)
-    valor_global_material = db.Column(db.Float, nullable=False, default=0.0)
+    
     pix = db.Column(db.String(100))
     pagamentos = db.relationship('PagamentoServico', backref='servico', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
-        total = (self.valor_global_mao_de_obra or 0.0) + (self.valor_global_material or 0.0)
+        # O total agora é apenas Mão de Obra. O material será calculado na rota.
         return {
             "id": self.id, "obra_id": self.obra_id, "nome": self.nome,
             "responsavel": self.responsavel,
             "valor_global_mao_de_obra": self.valor_global_mao_de_obra,
-            "valor_global_material": self.valor_global_material,
-            "valor_global_total": total,
             "pix": self.pix,
             "pagamentos": [p.to_dict() for p in self.pagamentos]
         }
 
 class PagamentoServico(db.Model):
-    __tablename__ = 'pagamento_servico' # Especificar o nome da tabela
+    __tablename__ = 'pagamento_servico'
     id = db.Column(db.Integer, primary_key=True)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
@@ -162,24 +169,19 @@ class PagamentoServico(db.Model):
         }
 # ----------------------------------------------------
 
-# --- FUNÇÕES AUXILIARES ---
+# (Funções auxiliares e de permissão permanecem as mesmas)
+# ... (Omitido por brevidade) ...
 def formatar_real(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-
-# --- FUNÇÕES DE VERIFICAÇÃO DE PERMISSÃO ---
 def get_current_user():
     user_id_str = get_jwt_identity()
-    if not user_id_str:
-        return None
+    if not user_id_str: return None
     user = db.session.get(User, int(user_id_str))
     return user
-
 def user_has_access_to_obra(user, obra_id):
-    if user.role == 'administrador':
-        return True
+    if user.role == 'administrador': return True
     obra_ids_permitidas = [obra.id for obra in user.obras_permitidas]
     return obra_id in obra_ids_permitidas
-
 def check_permission(roles):
     def decorator(fn):
         @wraps(fn)
@@ -219,13 +221,11 @@ def register():
     print("--- [LOG] Rota /register (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    
     try:
         dados = request.json
         username = dados.get('username')
         password = dados.get('password')
         role = dados.get('role', 'comum') 
-
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
         if User.query.filter_by(username=username).first():
@@ -234,7 +234,6 @@ def register():
         novo_usuario.set_password(password)
         db.session.add(novo_usuario)
         db.session.commit()
-        
         print(f"--- [LOG] Usuário '{username}' criado com role '{role}' ---")
         return jsonify(novo_usuario.to_dict()), 201
     except Exception as e:
@@ -249,7 +248,6 @@ def login():
     print("--- [LOG] Rota /login (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-
     try:
         dados = request.json
         username = dados.get('username')
@@ -325,64 +323,112 @@ def get_obra_detalhes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # --- CÁLCULOS DE SUMÁRIOS (Atualizados para Servicos) ---
+        # --- CÁLCULOS DE SUMÁRIOS (Atualizados) ---
+        
+        # 1. Lançamentos Gerais (não vinculados a um serviço)
         sumarios_lancamentos = db.session.query(
             func.sum(Lancamento.valor).label('total_geral'),
             func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
             func.sum(case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
-        ).filter(Lancamento.obra_id == obra_id).first()
+        ).filter(Lancamento.obra_id == obra_id, Lancamento.servico_id == None).first() # <-- SÓ OS NÃO VINCULADOS
+
+        # 2. Pagamentos de Serviços (MO e Material)
         sumarios_servicos_pagos = db.session.query(
-            func.sum(PagamentoServico.valor).label('total_servicos_pago')
-        ).join(Servico).filter(
-            Servico.obra_id == obra_id,
-            PagamentoServico.status == 'Pago'
-        ).first()
+            func.sum(case((PagamentoServico.status == 'Pago', PagamentoServico.valor), else_=0)).label('total_servicos_pago')
+        ).join(Servico).filter(Servico.obra_id == obra_id).first()
+
+        # 3. Lançamentos Vinculados (Gastos extras de MO/Material em serviços)
+        sumarios_lancamentos_vinculados_pagos = db.session.query(
+            func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_vinculado_pago')
+        ).filter(Lancamento.obra_id == obra_id, Lancamento.servico_id != None).first() # <-- SÓ OS VINCULADOS
+        
+        # 4. Valores Globais (Orçados) - Apenas Mão de Obra
         sumarios_servicos_global = db.session.query(
-            func.sum(Servico.valor_global_mao_de_obra).label('total_global_mo'),
-            func.sum(Servico.valor_global_material).label('total_global_mat')
+            func.sum(Servico.valor_global_mao_de_obra).label('total_global_mo')
         ).filter(Servico.obra_id == obra_id).first()
-        total_lancamentos = sumarios_lancamentos.total_geral or 0.0
-        total_pago_lancamentos = sumarios_lancamentos.total_pago or 0.0
+
+        # Totais
+        total_lancamentos_gerais = sumarios_lancamentos.total_geral or 0.0
+        total_pago_lancamentos_gerais = sumarios_lancamentos.total_pago or 0.0
+        
         total_pago_servicos = sumarios_servicos_pagos.total_servicos_pago or 0.0
-        total_global_mo = sumarios_servicos_global.total_global_mo or 0.0
-        total_global_mat = sumarios_servicos_global.total_global_mat or 0.0
-        total_global_servicos = total_global_mo + total_global_mat
-        total_geral = total_lancamentos + total_global_servicos
-        total_pago = total_pago_lancamentos + total_pago_servicos
-        total_a_pagar = total_geral - total_pago
+        total_pago_lancamentos_vinculados = sumarios_lancamentos_vinculados_pagos.total_vinculado_pago or 0.0
+
+        total_global_servicos_mo = sumarios_servicos_global.total_global_mo or 0.0
+        
+        # Custo total = Lançamentos Gerais + Orçado de MO + (Pagamentos de Material + Lançamentos Vinculados)
+        # Esta parte fica complexa. Vamos simplificar o KPI "Total Geral"
+        
+        total_geral_orcado = total_lancamentos_gerais + total_global_servicos_mo
+        total_pago = total_pago_lancamentos_gerais + total_pago_servicos + total_pago_lancamentos_vinculados
+        
+        # O "Total Geral" real agora é dinâmico. Vamos focar no Total Pago.
+        
         total_por_segmento = db.session.query(
             Lancamento.tipo,
             func.sum(Lancamento.valor)
-        ).filter(Lancamento.obra_id == obra_id).group_by(Lancamento.tipo).all()
+        ).filter(Lancamento.obra_id == obra_id, Lancamento.servico_id == None).group_by(Lancamento.tipo).all() # Só não vinculados
+        
         sumarios_dict = {
-            "total_geral": total_geral, "total_pago": total_pago, "total_a_pagar": total_a_pagar,
-            "total_por_segmento": {tipo: valor for tipo, valor in total_por_segmento},
+            # "total_geral": total_geral, # Este KPI fica complexo, vamos focar no PAGO
+            "total_pago": total_pago,
+            # "total_a_pagar": total_a_pagar, # Este KPI fica complexo
+            "total_por_segmento_geral": {tipo: valor for tipo, valor in total_por_segmento},
         }
         
-        # --- HISTÓRICO UNIFICADO (Atualizado para Servicos) ---
+        # --- HISTÓRICO UNIFICADO (Atualizado) ---
         historico_unificado = []
-        for lanc in obra.lancamentos:
+        
+        # 1. Adiciona Lançamentos (agora com nome do serviço)
+        # Carrega todos os lançamentos de uma vez
+        todos_lancamentos = Lancamento.query.filter_by(obra_id=obra_id).options(db.joinedload(Lancamento.servico)).all()
+        
+        for lanc in todos_lancamentos:
+            descricao = lanc.descricao
+            if lanc.servico:
+                descricao = f"{lanc.descricao} (Serviço: {lanc.servico.nome})"
+            
             historico_unificado.append({
-                "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data.isoformat(),
-                "descricao": lanc.descricao, "tipo": lanc.tipo, "valor": lanc.valor,
+                "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, # Data como objeto
+                "descricao": descricao, "tipo": lanc.tipo, "valor": lanc.valor,
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id
             })
-        for serv in obra.servicos: # <-- Usa o novo modelo
+        
+        # 2. Adiciona Pagamentos de Serviços
+        for serv in obra.servicos:
             for pag in serv.pagamentos:
                 desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
                 historico_unificado.append({
-                    "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data.isoformat(),
+                    "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data, # Data como objeto
                     "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", "valor": pag.valor,
                     "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
                     "pagamento_id": pag.id,
                 })
+        
         historico_unificado.sort(key=lambda x: x['data'], reverse=True)
+        # Converte data para string DEPOIS de ordenar
+        for item in historico_unificado:
+            item['data'] = item['data'].isoformat()
+            
+        # --- NOVO: Cálculo dos totais de serviço ---
+        # (Isso é feito aqui para incluir os Lançamentos Vinculados)
+        servicos_com_totais = []
+        for s in obra.servicos:
+            serv_dict = s.to_dict()
+            # Calcula totais de gastos vinculados
+            gastos_vinculados_mo = sum(l.valor for l in todos_lancamentos if l.servico_id == s.id and l.tipo == 'Mão de Obra' and l.status == 'Pago')
+            gastos_vinculados_mat = sum(l.valor for l in todos_lancamentos if l.servico_id == s.id and l.tipo == 'Material' and l.status == 'Pago')
+            serv_dict['total_gastos_vinculados_mo'] = gastos_vinculados_mo
+            serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
+            servicos_com_totais.append(serv_dict)
+
         
         return jsonify({
             "obra": obra.to_dict(),
-            "lancamentos": sorted([l.to_dict() for l in obra.lancamentos], key=lambda x: x['data'], reverse=True),
-            "servicos": [s.to_dict() for s in obra.servicos], # <-- Usa o novo modelo
-            "historico_unificado": historico_unificado, "sumarios": sumarios_dict
+            "lancamentos": [l.to_dict() for l in todos_lancamentos], # Envia todos
+            "servicos": servicos_com_totais, # Envia serviços com os novos totais
+            "historico_unificado": historico_unificado, 
+            "sumarios": sumarios_dict
         })
     except Exception as e:
         error_details = traceback.format_exc()
@@ -414,10 +460,17 @@ def add_lancamento(obra_id):
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         dados = request.json
+        
+        # --- MUDANÇA: Aceita data e servico_id ---
         novo_lancamento = Lancamento(
-            obra_id=obra_id, tipo=dados['tipo'], descricao=dados['descricao'],
-            valor=float(dados['valor']), data=datetime.date.fromisoformat(dados['data']),
-            status=dados['status'], pix=dados['pix']
+            obra_id=obra_id, 
+            tipo=dados['tipo'], 
+            descricao=dados['descricao'],
+            valor=float(dados['valor']), 
+            data=datetime.date.fromisoformat(dados['data']), # <-- Data personalizada
+            status=dados['status'], 
+            pix=dados.get('pix'),
+            servico_id=dados.get('servico_id') # <-- Vinculação opcional
         )
         db.session.add(novo_lancamento)
         db.session.commit()
@@ -466,7 +519,8 @@ def editar_lancamento(lancamento_id):
         lancamento.valor = float(dados['valor'])
         lancamento.tipo = dados['tipo']
         lancamento.status = dados['status']
-        lancamento.pix = dados['pix']
+        lancamento.pix = dados.get('pix')
+        lancamento.servico_id = dados.get('servico_id') # <-- Edição do vínculo
         db.session.commit()
         return jsonify(lancamento.to_dict())
     except Exception as e:
@@ -491,7 +545,7 @@ def deletar_lancamento(lancamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-# --- ROTAS DE SERVIÇO (Antigas Empreitadas) ---
+# --- ROTAS DE SERVIÇO (Atualizadas) ---
 
 @app.route('/obras/<int:obra_id>/servicos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -507,8 +561,8 @@ def add_servico(obra_id):
             obra_id=obra_id,
             nome=dados['nome'],
             responsavel=dados['responsavel'],
+            # --- MUDANÇA: Apenas Mão de Obra é salva no global ---
             valor_global_mao_de_obra=float(dados.get('valor_global_mao_de_obra', 0.0)),
-            valor_global_material=float(dados.get('valor_global_material', 0.0)),
             pix=dados.get('pix')
         )
         db.session.add(novo_servico)
@@ -535,7 +589,7 @@ def editar_servico(servico_id):
         servico.nome = dados.get('nome', servico.nome)
         servico.responsavel = dados.get('responsavel', servico.responsavel)
         servico.valor_global_mao_de_obra = float(dados.get('valor_global_mao_de_obra', servico.valor_global_mao_de_obra))
-        servico.valor_global_material = float(dados.get('valor_global_material', servico.valor_global_material))
+        # 'valor_global_material' não existe mais
         servico.pix = dados.get('pix', servico.pix)
         db.session.commit()
         return jsonify(servico.to_dict())
@@ -579,7 +633,7 @@ def add_pagamento_servico(servico_id):
             
         novo_pagamento = PagamentoServico(
             servico_id=servico_id,
-            data=datetime.date.fromisoformat(dados['data']),
+            data=datetime.date.fromisoformat(dados['data']), # <-- Data personalizada
             valor=float(dados['valor']),
             status=dados.get('status', 'Pago'),
             tipo_pagamento=tipo_pagamento
@@ -645,6 +699,7 @@ def toggle_pagamento_servico_status(pagamento_id):
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_csv(obra_id):
+    # ... (código inalterado) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
@@ -675,6 +730,7 @@ def export_csv(obra_id):
 @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes(obra_id):
+    # ... (código inalterado) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
     try:
@@ -754,6 +810,7 @@ def export_pdf_pendentes(obra_id):
 @app.route('/admin/users', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_all_users():
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /admin/users (GET) acessada ---")
     try:
         current_user = get_current_user()
@@ -767,25 +824,23 @@ def get_all_users():
 @app.route('/admin/users', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def create_user():
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /admin/users (POST) acessada ---")
     try:
         dados = request.json
         username = dados.get('username')
         password = dados.get('password')
         role = dados.get('role', 'comum')
-
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
         if role not in ['master', 'comum']:
              return jsonify({"erro": "Role deve ser 'master' ou 'comum'"}), 400
         if User.query.filter_by(username=username).first():
             return jsonify({"erro": "Nome de usuário já existe"}), 409
-
         novo_usuario = User(username=username, role=role)
         novo_usuario.set_password(password)
         db.session.add(novo_usuario)
         db.session.commit()
-        
         print(f"--- [LOG] Admin criou usuário '{username}' com role '{role}' ---")
         return jsonify(novo_usuario.to_dict()), 201
     except Exception as e:
@@ -797,6 +852,7 @@ def create_user():
 @app.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_user_permissions(user_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
@@ -810,6 +866,7 @@ def get_user_permissions(user_id):
 @app.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def set_user_permissions(user_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
@@ -818,7 +875,6 @@ def set_user_permissions(user_id):
         obras_permitidas = Obra.query.filter(Obra.id.in_(obra_ids_para_permitir)).all()
         user.obras_permitidas = obras_permitidas
         db.session.commit()
-        
         print(f"--- [LOG] Permissões atualizadas para user_id={user_id}. Obras permitidas: {obra_ids_para_permitir} ---")
         return jsonify({"sucesso": f"Permissões atualizadas para {user.username}"}), 200
     except Exception as e:
