@@ -102,10 +102,10 @@ class Obra(db.Model):
     cliente = db.Column(db.String(150))
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
+    
+    # Relação com Orçamentos
     orcamentos = db.relationship('Orcamento', backref='obra', lazy=True, cascade="all, delete-orphan")
-
-    def to_dict(self):
-        return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
+    
     def to_dict(self):
         return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
 
@@ -119,7 +119,8 @@ class Lancamento(db.Model):
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
     pix = db.Column(db.String(100))
     
-    prioridade = db.Column(db.Integer, nullable=False, default=0) # <--- MUDANÇA
+    # Coluna de Prioridade
+    prioridade = db.Column(db.Integer, nullable=False, default=0) 
     
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
@@ -129,9 +130,10 @@ class Lancamento(db.Model):
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
             "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
             "status": self.status, "pix": self.pix,
-            "prioridade": self.prioridade, # <--- MUDANÇA
+            "prioridade": self.prioridade, 
             "servico_id": self.servico_id, 
-            "servico_nome": self.servico.nome if self.servico else None
+            "servico_nome": self.servico.nome if self.servico else None,
+            "lancamento_id": self.id # Adicionado para consistência com o frontend
         }
 
 class Servico(db.Model):
@@ -162,14 +164,46 @@ class PagamentoServico(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False) # 'mao_de_obra' ou 'material'
     
-    prioridade = db.Column(db.Integer, nullable=False, default=0) # <--- MUDANÇA
-    
+    # Coluna de Prioridade
+    prioridade = db.Column(db.Integer, nullable=False, default=0)
+
     def to_dict(self):
         return {
             "id": self.id, "data": self.data.isoformat(),
             "valor": self.valor, "status": self.status,
             "tipo_pagamento": self.tipo_pagamento,
-            "prioridade": self.prioridade # <--- MUDANÇA
+            "prioridade": self.prioridade,
+            "pagamento_id": self.id # Adicionado para consistência com o frontend
+        }
+
+# NOVO MODELO: Orçamento
+class Orcamento(db.Model):
+    __tablename__ = 'orcamento'
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    
+    descricao = db.Column(db.String(255), nullable=False)
+    fornecedor = db.Column(db.String(150), nullable=True)
+    valor = db.Column(db.Float, nullable=False)
+    dados_pagamento = db.Column(db.String(150), nullable=True)
+    tipo = db.Column(db.String(50), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Pendente') # Pendente, Aprovado, Rejeitado
+    
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
+    servico = db.relationship('Servico', backref='orcamentos_vinculados', lazy=True)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "descricao": self.descricao,
+            "fornecedor": self.fornecedor,
+            "valor": self.valor,
+            "dados_pagamento": self.dados_pagamento,
+            "tipo": self.tipo,
+            "status": self.status,
+            "servico_id": self.servico_id,
+            "servico_nome": self.servico.nome if self.servico else None
         }
 # ----------------------------------------------------
 
@@ -369,37 +403,7 @@ def get_obras():
         print(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA ROTA ---
-# [app.py] - Adicione este novo modelo
 
-class Orcamento(db.Model):
-    __tablename__ = 'orcamento'
-    id = db.Column(db.Integer, primary_key=True)
-    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
-
-    descricao = db.Column(db.String(255), nullable=False)
-    fornecedor = db.Column(db.String(150), nullable=True)
-    valor = db.Column(db.Float, nullable=False)
-    dados_pagamento = db.Column(db.String(150), nullable=True)
-    tipo = db.Column(db.String(50), nullable=False)
-    status = db.Column(db.String(20), nullable=False, default='Pendente') # Pendente, Aprovado, Rejeitado
-
-    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
-    servico = db.relationship('Servico', backref='orcamentos_vinculados', lazy=True)
-
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "obra_id": self.obra_id,
-            "descricao": self.descricao,
-            "fornecedor": self.fornecedor,
-            "valor": self.valor,
-            "dados_pagamento": self.dados_pagamento,
-            "tipo": self.tipo,
-            "status": self.status,
-            "servico_id": self.servico_id,
-            "servico_nome": self.servico.nome if self.servico else None
-        }
-# ----------------------------------------------------
 
 @app.route('/obras', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
@@ -510,7 +514,7 @@ def get_obra_detalhes(obra_id):
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
                 "descricao": descricao, "tipo": lanc.tipo, "valor": float(lanc.valor or 0.0),
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
-                "prioridade": lanc.prioridade # <--- MUDANÇA
+                "prioridade": lanc.prioridade 
             })
         
         for serv in obra.servicos:
@@ -521,7 +525,7 @@ def get_obra_detalhes(obra_id):
                     "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", "valor": float(pag.valor or 0.0),
                     "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
                     "pagamento_id": pag.id,
-                    "prioridade": pag.prioridade # <--- MUDANÇA
+                    "prioridade": pag.prioridade 
                 })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
@@ -545,14 +549,23 @@ def get_obra_detalhes(obra_id):
             serv_dict['total_gastos_vinculados_mo'] = gastos_vinculados_mo
             serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
             servicos_com_totais.append(serv_dict)
+            
+        # Busca orçamentos pendentes
+        orcamentos_pendentes = Orcamento.query.filter_by(
+            obra_id=obra_id, 
+            status='Pendente'
+        ).order_by(Orcamento.id.desc()).all()
+        
         
         return jsonify({
             "obra": obra.to_dict(),
             "lancamentos": [l.to_dict() for l in todos_lancamentos],
             "servicos": servicos_com_totais,
             "historico_unificado": historico_unificado, 
-            "sumarios": sumarios_dict
+            "sumarios": sumarios_dict,
+            "orcamentos": [o.to_dict() for o in orcamentos_pendentes] 
         })
+        
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"--- [ERRO GERAL] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
@@ -592,7 +605,7 @@ def add_lancamento(obra_id):
             data=datetime.date.fromisoformat(dados['data']),
             status=dados['status'], 
             pix=dados.get('pix'),
-            prioridade=int(dados.get('prioridade', 0)), # <--- MUDANÇA
+            prioridade=int(dados.get('prioridade', 0)), 
             servico_id=dados.get('servico_id')
         )
         db.session.add(novo_lancamento)
@@ -643,7 +656,7 @@ def editar_lancamento(lancamento_id):
         lancamento.tipo = dados['tipo']
         lancamento.status = dados['status']
         lancamento.pix = dados.get('pix')
-        lancamento.prioridade = int(dados.get('prioridade', lancamento.prioridade)) # <--- MUDANÇA
+        lancamento.prioridade = int(dados.get('prioridade', lancamento.prioridade)) 
         lancamento.servico_id = dados.get('servico_id')
         db.session.commit()
         return jsonify(lancamento.to_dict())
@@ -759,7 +772,7 @@ def add_pagamento_servico(servico_id):
             valor=float(dados['valor']),
             status=dados.get('status', 'Pago'),
             tipo_pagamento=tipo_pagamento,
-            prioridade=int(dados.get('prioridade', 0)) # <--- MUDANÇA
+            prioridade=int(dados.get('prioridade', 0)) 
         )
         db.session.add(novo_pagamento)
         db.session.commit()
@@ -770,7 +783,52 @@ def add_pagamento_servico(servico_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /servicos/{servico_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
-# [app.py] - Adicione este bloco de novas rotas
+
+@app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
+@check_permission(roles=['administrador']) 
+def deletar_pagamento_servico(servico_id, pagamento_id):
+    print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
+    try:
+        pagamento = PagamentoServico.query.filter_by(
+            id=pagamento_id, 
+            servico_id=servico_id
+        ).first_or_404()
+        
+        db.session.delete(pagamento)
+        db.session.commit()
+        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def toggle_pagamento_servico_status(pagamento_id):
+    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/status (PATCH) acessada ---")
+    try:
+        user = get_current_user()
+        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+        servico = Servico.query.get(pagamento.servico_id)
+        
+        if not user_has_access_to_obra(user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        if pagamento.status == 'Pago':
+            pagamento.status = 'A Pagar'
+        else:
+            pagamento.status = 'Pago'
+            
+        db.session.commit()
+        return jsonify(pagamento.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# ---------------------------------------------------
 
 # --- ROTAS DE ORÇAMENTO (NOVO) ---
 
@@ -878,51 +936,6 @@ def rejeitar_orcamento(orcamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # ---------------------------------------------------
-@app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
-@check_permission(roles=['administrador']) 
-def deletar_pagamento_servico(servico_id, pagamento_id):
-    print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
-    try:
-        pagamento = PagamentoServico.query.filter_by(
-            id=pagamento_id, 
-            servico_id=servico_id
-        ).first_or_404()
-        
-        db.session.delete(pagamento)
-        db.session.commit()
-        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
-
-@app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master'])
-def toggle_pagamento_servico_status(pagamento_id):
-    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/status (PATCH) acessada ---")
-    try:
-        user = get_current_user()
-        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
-        servico = Servico.query.get(pagamento.servico_id)
-        
-        if not user_has_access_to_obra(user, servico.obra_id):
-            return jsonify({"erro": "Acesso negado a esta obra."}), 403
-        
-        if pagamento.status == 'Pago':
-            pagamento.status = 'A Pagar'
-        else:
-            pagamento.status = 'Pago'
-            
-        db.session.commit()
-        return jsonify(pagamento.to_dict()), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
-# ---------------------------------------------------
 
 
 # --- ROTAS DE EXPORTAÇÃO (PROTEGIDAS) ---
@@ -986,7 +999,7 @@ def export_pdf_pendentes(obra_id):
             items.append({
                 "data": lanc.data, "tipo": lanc.tipo, "descricao": desc,
                 "valor": lanc.valor, "pix": lanc.pix,
-                "prioridade": lanc.prioridade # <--- MUDANÇA
+                "prioridade": lanc.prioridade 
             })
             
         for pag in pagamentos_servico_apagar:
@@ -995,10 +1008,10 @@ def export_pdf_pendentes(obra_id):
                 "data": pag.data, "tipo": "Serviço", 
                 "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
                 "valor": pag.valor, "pix": pag.servico.pix,
-                "prioridade": pag.prioridade # <--- MUDANÇA
+                "prioridade": pag.prioridade 
             })
             
-        # <--- MUDANÇA: Ordenação atualizada por prioridade (maior primeiro), depois data (mais antiga primeiro)
+        # Ordenação atualizada por prioridade (maior primeiro), depois data (mais antiga primeiro)
         items.sort(key=lambda x: (-x.get('prioridade', 0), x['data'] if x['data'] else datetime.date(1900, 1, 1)))
 
         buffer = io.BytesIO()
@@ -1014,21 +1027,21 @@ def export_pdf_pendentes(obra_id):
         if not items:
             elements.append(Paragraph("Nenhum pagamento pendente nesta obra.", styles['Normal']))
         else:
-            # <--- MUDANÇA: Cabeçalho da tabela atualizado
+            # Cabeçalho da tabela atualizado
             data = [['Prior.', 'Data', 'Tipo', 'Descricao', 'Valor', 'PIX']]
             total_pendente = 0
             for item in items:
                 data.append([
-                    item.get('prioridade', 0), # <--- MUDANÇA
+                    item.get('prioridade', 0), 
                     item['data'].strftime('%d/%m/%Y'), item['tipo'][:15] if item['tipo'] else 'N/A',
                     item['descricao'][:35] if item['descricao'] else 'N/A', formatar_real(item['valor']),
                     (item['pix'] or 'Nao informado')[:20]
                 ])
                 total_pendente += item['valor']
-            # <--- MUDANÇA: Linha de total ajustada para 6 colunas
-            data.append(['', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
+            # Linha de total ajustada para 6 colunas
+            data.append(['', '', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
             
-            # <--- MUDANÇA: ColWidths atualizado para 6 colunas
+            # ColWidths atualizado para 6 colunas
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
@@ -1036,14 +1049,14 @@ def export_pdf_pendentes(obra_id):
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 11),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12), ('TOPPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white), ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                ('ALIGN', (0, 1), (-1, -1), 'LEFT'), ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'), ('ALIGN', (4, 1), (4, -1), 'RIGHT'), # Alinhado Valor
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
                 ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#dc3545')), # <-- Mudado para Vermelho
                 ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, -1), (-1, -1), 11),
-                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # <--- MUDANÇA: Alinhamento da linha de total
+                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # Alinhamento da linha de total
             ]))
             elements.append(table)
         
@@ -1072,7 +1085,7 @@ def export_pdf_pendentes(obra_id):
         return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
         
 
-# 🆕 NOVA ROTA: Export PDF de TODAS as obras com pendências
+# ROTA ATUALIZADA: Export PDF de TODAS as obras com pendências e filtro
 @app.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes_todas_obras():
@@ -1086,6 +1099,16 @@ def export_pdf_pendentes_todas_obras():
         user = get_current_user()
         if not user:
             return jsonify({"erro": "Usuário não encontrado"}), 404
+        
+        # Captura o filtro da URL
+        prioridade_filtro = request.args.get('prioridade')
+        print(f"--- [LOG] Filtro de prioridade recebido: {prioridade_filtro} ---")
+        
+        # Define o título do PDF
+        titulo_relatorio = "<b>Relatório de Pagamentos Pendentes - Todas as Obras</b>"
+        if prioridade_filtro and prioridade_filtro != 'todas':
+            titulo_relatorio = f"<b>Relatório de Pendências (Prioridade {prioridade_filtro}) - Todas as Obras</b>"
+        
         
         # 1. Buscar obras que o usuário tem acesso
         if user.role == 'administrador':
@@ -1101,17 +1124,33 @@ def export_pdf_pendentes_todas_obras():
         total_geral_pendente = 0.0
         
         for obra in obras:
-            # Lançamentos a pagar
-            lancamentos_apagar = Lancamento.query.filter_by(
+            # Queries agora são dinâmicas
+            
+            # Query base de Lançamentos
+            lancamentos_query = Lancamento.query.filter_by(
                 obra_id=obra.id, 
                 status='A Pagar'
-            ).all()
+            )
             
-            # Pagamentos de Serviços a pagar
-            pagamentos_servico_apagar = PagamentoServico.query.join(Servico).filter(
+            # Query base de Pagamentos de Serviço
+            pagamentos_query = PagamentoServico.query.join(Servico).filter(
                 Servico.obra_id == obra.id,
                 PagamentoServico.status == 'A Pagar'
-            ).all()
+            )
+
+            # Aplica o filtro de prioridade se ele existir e não for "todas"
+            if prioridade_filtro and prioridade_filtro != 'todas':
+                try:
+                    p_int = int(prioridade_filtro)
+                    lancamentos_query = lancamentos_query.filter_by(prioridade=p_int)
+                    pagamentos_query = pagamentos_query.filter_by(prioridade=p_int)
+                except ValueError:
+                    # Ignora o filtro se não for um número válido
+                    pass 
+            
+            # Executa as queries
+            lancamentos_apagar = lancamentos_query.all()
+            pagamentos_servico_apagar = pagamentos_query.all()
             
             items = []
             
@@ -1126,7 +1165,7 @@ def export_pdf_pendentes_todas_obras():
                     "descricao": desc,
                     "valor": lanc.valor, 
                     "pix": lanc.pix,
-                    "prioridade": lanc.prioridade # <--- MUDANÇA
+                    "prioridade": lanc.prioridade 
                 })
             
             # Adicionar pagamentos de serviço
@@ -1138,12 +1177,12 @@ def export_pdf_pendentes_todas_obras():
                     "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
                     "valor": pag.valor, 
                     "pix": pag.servico.pix,
-                    "prioridade": pag.prioridade # <--- MUDANÇA
+                    "prioridade": pag.prioridade
                 })
             
             # Se tem pendências, adicionar na lista
             if items:
-                # <--- MUDANÇA: Ordenação atualizada
+                # Ordenação atualizada
                 items.sort(key=lambda x: (-x.get('prioridade', 0), x['data'] if x['data'] else datetime.date(1900, 1, 1)))
                 total_obra = sum(item['valor'] for item in items)
                 total_geral_pendente += total_obra
@@ -1156,7 +1195,7 @@ def export_pdf_pendentes_todas_obras():
         
         # 3. Gerar PDF
         if not obras_com_pendencias:
-            return jsonify({"mensagem": "Nenhuma pendência encontrada em todas as obras"}), 200
+            return jsonify({"mensagem": "Nenhuma pendência encontrada para este filtro"}), 200
         
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
@@ -1166,12 +1205,12 @@ def export_pdf_pendentes_todas_obras():
             bottomMargin=2*cm, 
             leftMargin=2*cm, 
             rightMargin=2*cm
-        ) 
+        )
         elements = []
         styles = getSampleStyleSheet()
         
-        # Título principal
-        title_text = f"<b>Relatório de Pagamentos Pendentes - Todas as Obras</b><br/><br/>Total de Obras com Pendências: {len(obras_com_pendencias)}"
+        # Título principal usa a variável
+        title_text = f"{titulo_relatorio}<br/><br/>Total de Obras com Pendências: {len(obras_com_pendencias)}"
         title = Paragraph(title_text, styles['Title'])
         elements.append(title)
         elements.append(Spacer(1, 0.8*cm))
@@ -1192,12 +1231,12 @@ def export_pdf_pendentes_todas_obras():
             elements.append(Spacer(1, 0.3*cm))
             
             # Tabela de pendências da obra
-            # <--- MUDANÇA: Cabeçalho da tabela atualizado
+            # Cabeçalho da tabela atualizado
             data = [['Prior.', 'Data', 'Tipo', 'Descrição', 'Valor', 'PIX']]
             
             for item in items:
                 data.append([
-                    item.get('prioridade', 0), # <--- MUDANÇA
+                    item.get('prioridade', 0), 
                     item['data'].strftime('%d/%m/%Y') if item['data'] else 'N/A',
                     item['tipo'][:15] if item['tipo'] else 'N/A',
                     item['descricao'][:30] if item['descricao'] else 'N/A',
@@ -1205,10 +1244,10 @@ def export_pdf_pendentes_todas_obras():
                     (item['pix'] or 'Não informado')[:15]
                 ])
             
-            # <--- MUDANÇA: Linha de total da obra ajustada
-            data.append(['', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
+            # Linha de total da obra ajustada
+            data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
             
-            # <--- MUDANÇA: ColWidths atualizado
+            # ColWidths atualizado
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
             table.setStyle(TableStyle([
                 # Cabeçalho
@@ -1224,7 +1263,7 @@ def export_pdf_pendentes_todas_obras():
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white),
                 ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
                 ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+                ('ALIGN', (4, 1), (4, -1), 'RIGHT'), # Alinhado Valor
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
@@ -1235,7 +1274,7 @@ def export_pdf_pendentes_todas_obras():
                 ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, -1), (-1, -1), 10),
-                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # <--- MUDANÇA: Alinhamento da linha de total
+                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # Alinhamento da linha de total
             ]))
             elements.append(table)
             
