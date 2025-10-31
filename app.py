@@ -770,7 +770,114 @@ def add_pagamento_servico(servico_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /servicos/{servico_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+# [app.py] - Adicione este bloco de novas rotas
 
+# --- ROTAS DE ORÇAMENTO (NOVO) ---
+
+@app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master']) 
+def add_orcamento(obra_id):
+    """Cria um novo orçamento para uma obra"""
+    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        dados = request.json
+        novo_orcamento = Orcamento(
+            obra_id=obra_id,
+            descricao=dados['descricao'],
+            fornecedor=dados.get('fornecedor'),
+            valor=float(dados['valor']),
+            dados_pagamento=dados.get('dados_pagamento'),
+            tipo=dados['tipo'],
+            status='Pendente',
+            servico_id=dados.get('servico_id')
+        )
+        db.session.add(novo_orcamento)
+        db.session.commit()
+        return jsonify(novo_orcamento.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def aprovar_orcamento(orcamento_id):
+    """Aprova um orçamento e o converte em um Lançamento 'A Pagar'"""
+    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/aprovar (POST) acessada ---")
+    try:
+        user = get_current_user()
+        orcamento = Orcamento.query.get_or_404(orcamento_id)
+        
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        if orcamento.status != 'Pendente':
+            return jsonify({"erro": "Este orçamento já foi processado."}), 400
+
+        # 1. Mudar status do orçamento
+        orcamento.status = 'Aprovado'
+        
+        # 2. Criar o novo Lançamento (Pendência)
+        desc_lancamento = f"{orcamento.descricao}"
+        if orcamento.fornecedor:
+            desc_lancamento = f"{orcamento.descricao} (Forn: {orcamento.fornecedor})"
+        
+        novo_lancamento = Lancamento(
+            obra_id=orcamento.obra_id,
+            tipo=orcamento.tipo,
+            descricao=desc_lancamento,
+            valor=orcamento.valor,
+            data=datetime.date.today(), # Data da aprovação
+            status='A Pagar',
+            pix=orcamento.dados_pagamento,
+            prioridade=0, # Padrão 0, pode ser editado depois
+            servico_id=orcamento.servico_id
+        )
+        
+        db.session.add(novo_lancamento)
+        db.session.commit()
+        
+        return jsonify({"sucesso": "Orçamento aprovado e movido para pendências", "lancamento": novo_lancamento.to_dict()}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def rejeitar_orcamento(orcamento_id):
+    """Rejeita (deleta) um orçamento pendente"""
+    print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (DELETE) acessada ---")
+    try:
+        user = get_current_user()
+        orcamento = Orcamento.query.get_or_404(orcamento_id)
+        
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
+        # Você pode mudar o status para 'Rejeitado' se quiser manter o histórico
+        # orcamento.status = 'Rejeitado'
+        # db.session.commit()
+        
+        # Ou simplesmente deletar
+        db.session.delete(orcamento)
+        db.session.commit()
+        
+        return jsonify({"sucesso": "Orçamento rejeitado/deletado com sucesso"}), 200
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /orcamentos/{orcamento_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# ---------------------------------------------------
 @app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_pagamento_servico(servico_id, pagamento_id):
