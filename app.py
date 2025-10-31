@@ -273,48 +273,57 @@ def home():
     print("--- [LOG] Rota / (home) acessada ---")
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
-# --- INÍCIO DA ROTA CORRIGIDA ---
+# --- INÍCIO DA ROTA MODIFICADA (NOVA LÓGICA DE CÁLCULO) ---
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print("--- [LOG] Rota /obras (GET) acessada (com KPIs) ---")
+    print("--- [LOG] Rota /obras (GET) acessada (com KPIs de Orçamento Restante) ---")
     try:
         user = get_current_user() 
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
 
-        # 1. Subquery para totais de Lançamentos (Correta)
+        # 1. Lançamentos (Custo total e Custo pago)
         lancamentos_sum = db.session.query(
             Lancamento.obra_id,
-            func.sum(Lancamento.valor).label('total_geral'),
-            func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago')
+            func.sum(Lancamento.valor).label('total_geral_lanc'),
+            func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago_lanc')
         ).group_by(Lancamento.obra_id).subquery()
 
-        # 2. Subquery para totais de Pagamentos de Serviços (INDENTAÇÃO CORRIGIDA)
+        # 2. Orçamento de Mão de Obra (Custo total)
+        servico_budget_sum = db.session.query(
+            Servico.obra_id,
+            func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo')
+        ).group_by(Servico.obra_id).subquery()
+
+        # 3. Pagamentos de Serviço (Custo pago e Custo de material)
         pagamentos_sum = db.session.query(
             Servico.obra_id,
-            func.sum(PagamentoServico.valor).label('total_geral'),
-            func.sum(case((PagamentoServico.status == 'Pago', PagamentoServico.valor), else_=0)).label('total_pago')
+            func.sum(case((PagamentoServico.status == 'Pago', PagamentoServico.valor), else_=0)).label('total_pago_pag'),
+            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor), else_=0)).label('total_geral_material_pag')
         ).select_from(PagamentoServico) \
          .join(Servico, PagamentoServico.servico_id == Servico.id) \
          .group_by(Servico.obra_id) \
          .subquery()
 
-        # 3. Query Principal (Inalterada)
+        # 4. Query Principal
         obras_query = db.session.query(
             Obra,
-            func.coalesce(lancamentos_sum.c.total_geral, 0).label('lanc_geral'),
-            func.coalesce(lancamentos_sum.c.total_pago, 0).label('lanc_pago'),
-            func.coalesce(pagamentos_sum.c.total_geral, 0).label('pag_geral'),
-            func.coalesce(pagamentos_sum.c.total_pago, 0).label('pag_pago')
+            func.coalesce(lancamentos_sum.c.total_geral_lanc, 0).label('lanc_geral'),
+            func.coalesce(lancamentos_sum.c.total_pago_lanc, 0).label('lanc_pago'),
+            func.coalesce(servico_budget_sum.c.total_budget_mo, 0).label('serv_budget_mo'),
+            func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago'),
+            func.coalesce(pagamentos_sum.c.total_geral_material_pag, 0).label('pag_material_geral')
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
+        ).outerjoin(
+            servico_budget_sum, Obra.id == servico_budget_sum.c.obra_id
         ).outerjoin(
             pagamentos_sum, Obra.id == pagamentos_sum.c.obra_id
         )
 
-        # 4. Filtra permissões (Inalterado)
+        # 5. Filtra permissões
         if user.role == 'administrador':
             obras_com_totais = obras_query.order_by(Obra.nome).all()
         else:
@@ -324,19 +333,24 @@ def get_obras():
                 user_obra_association.c.user_id == user.id
             ).order_by(Obra.nome).all()
 
-        # 5. Formata a saída (*** MODIFICADO PARA INCLUIR total_pago ***)
+        # 6. Formata a Saída (NOVA LÓGICA DE CÁLCULO)
         resultados = []
-        for obra, lanc_geral, lanc_pago, pag_geral, pag_pago in obras_com_totais:
-            total_geral = float(lanc_geral) + float(pag_geral)
-            total_pago = float(lanc_pago) + float(pag_pago) # <-- Valor calculado
-            total_a_pagar = total_geral - total_pago
+        for obra, lanc_geral, lanc_pago, serv_budget_mo, pag_pago, pag_material_geral in obras_com_totais:
+            
+            # Total_Projeto = (Todos Lançamentos) + (Orçamento Mão de Obra) + (Materiais de Pagamento Rápido)
+            total_projeto_previsto = float(lanc_geral) + float(serv_budget_mo) + float(pag_material_geral)
+            
+            # Total_Pago = (Lançamentos Pagos) + (Pagamentos de Serviço Pagos)
+            total_pago = float(lanc_pago) + float(pag_pago)
+            
+            # Total em Aberto = Total_Projeto_Previsto - Total_Pago
+            total_a_pagar = total_projeto_previsto - total_pago
             
             resultados.append({
                 "id": obra.id,
                 "nome": obra.nome,
                 "cliente": obra.cliente,
-                "total_geral": total_geral, 
-                "total_pago": total_pago, # <-- NOVO DADO ENVIADO
+                "total_pago": total_pago, 
                 "total_a_pagar": total_a_pagar 
             })
         
@@ -365,12 +379,13 @@ def add_obra():
         print(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# --- INÍCIO DA ROTA MODIFICADA (get_obra_detalhes) ---
 @app.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada ---")
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Nova Lógica KPIs) ---")
     try:
         user = get_current_user()
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -378,34 +393,53 @@ def get_obra_detalhes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # --- Lógica de KPIs (CORRETA) ---
+        # --- Lógica de KPIs (MODIFICADA) ---
         
-        # 1. Todos os Lançamentos (Gerais + Vinculados)
+        # 1. Lançamentos (Total, Pago, A Pagar)
         sumarios_lancamentos = db.session.query(
             func.sum(Lancamento.valor).label('total_geral'),
             func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
             func.sum(case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
         ).filter(Lancamento.obra_id == obra_id).first()
+        total_lancamentos_geral = float(sumarios_lancamentos.total_geral or 0.0)
+        total_lancamentos_pago = float(sumarios_lancamentos.total_pago or 0.0)
+        total_lancamentos_apagar = float(sumarios_lancamentos.total_a_pagar or 0.0)
 
-        # 2. Todos os Pagamentos de Serviços (MO + Material)
+        # 2. Pagamentos de Serviço (Pago, A Pagar, e Total de Material)
         sumarios_servicos = db.session.query(
-            func.sum(PagamentoServico.valor).label('total_geral'),
             func.sum(case((PagamentoServico.status == 'Pago', PagamentoServico.valor), else_=0)).label('total_pago'),
-            func.sum(case((PagamentoServico.status == 'A Pagar', PagamentoServico.valor), else_=0)).label('total_a_pagar')
+            func.sum(case((PagamentoServico.status == 'A Pagar', PagamentoServico.valor), else_=0)).label('total_a_pagar'),
+            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor), else_=0)).label('total_material_geral')
         ).join(Servico).filter(Servico.obra_id == obra_id).first()
+        total_servicos_pago = float(sumarios_servicos.total_pago or 0.0)
+        total_servicos_apagar = float(sumarios_servicos.total_a_pagar or 0.0)
+        total_servicos_material_geral = float(sumarios_servicos.total_material_geral or 0.0)
 
-        # 3. Totais
-        total_pago_lancamentos = float(sumarios_lancamentos.total_pago or 0.0)
-        total_a_pagar_lancamentos = float(sumarios_lancamentos.total_a_pagar or 0.0)
-        
-        total_pago_servicos = float(sumarios_servicos.total_pago or 0.0)
-        total_a_pagar_servicos = float(sumarios_servicos.total_a_pagar or 0.0)
+        # 3. Orçamento de Mão de Obra (Total)
+        servico_budget_sum = db.session.query(
+            func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo')
+        ).filter(Servico.obra_id == obra_id).first()
+        total_budget_mo = float(servico_budget_sum.total_budget_mo or 0.0)
 
-        # KPIs Finais (Esta é a lógica que você confirmou)
-        total_pago = total_pago_lancamentos + total_pago_servicos
-        total_a_pagar = total_a_pagar_lancamentos + total_a_pagar_servicos
-        total_geral = total_pago + total_a_pagar
+        # 4. Cálculo dos KPIs Finais
         
+        # KPI VERDE: Total Pago
+        kpi_total_pago = total_lancamentos_pago + total_servicos_pago
+        
+        # NOVO KPI (LARANJA): Liberado para Pagamento (A Pagar)
+        kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
+        
+        # KPI AZUL: Total Comprometido (Pago + A Pagar)
+        kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
+        
+        # Custo Total Previsto (Orçamento)
+        # = (Todos Lançamentos) + (Orçamento MO) + (Pagamentos Rápidos de Material)
+        kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_servicos_material_geral
+        
+        # KPI VERMELHO: Restante do Orçamento (Total em Aberto)
+        # = (Custo Total Previsto) - (Total Pago)
+        kpi_total_em_aberto_orcamento = kpi_total_previsto - kpi_total_pago
+
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
             Lancamento.tipo,
@@ -416,9 +450,10 @@ def get_obra_detalhes(obra_id):
         ).group_by(Lancamento.tipo).all()
         
         sumarios_dict = {
-            "total_geral": total_geral,
-            "total_pago": total_pago,
-            "total_a_pagar": total_a_pagar,
+            "total_geral": kpi_total_geral_comprometido,       # AZUL
+            "total_pago": kpi_total_pago,                    # VERDE
+            "total_liberado_pagamento": kpi_liberado_pagamento, # NOVO (LARANJA)
+            "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento, # VERMELHO
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
         }
         
@@ -483,6 +518,7 @@ def get_obra_detalhes(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO GERAL] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DA ROTA MODIFICADA ---
 
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
@@ -840,7 +876,7 @@ def export_pdf_pendentes(obra_id):
             table = Table(data, colWidths=[3*cm, 3*cm, 6*cm, 3*cm, 4*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 11),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12), ('TOPPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white), ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
