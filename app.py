@@ -123,16 +123,14 @@ class Lancamento(db.Model):
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
     def to_dict(self):
         return {
-            "id": self.id,
-            "obra_id": self.obra_id,
-            "descricao": self.descricao,
-            "fornecedor": self.fornecedor,
-            "valor": self.valor,
-            "tipo": self.tipo,
-            "status": self.status,
-            "servico_id": self.servico_id,
+            "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
+            "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
+            "status": self.status, "pix": self.pix,
+            "prioridade": self.prioridade, 
+            "fornecedor": self.fornecedor, 
+            "servico_id": self.servico_id, 
             "servico_nome": self.servico.nome if self.servico else None,
-            "anexos_count": len(self.anexos) # <-- MUDANÇA AQUI
+            "lancamento_id": self.id 
         }
 
 class Servico(db.Model):
