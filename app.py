@@ -15,13 +15,14 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
+from sqlalchemy.orm import joinedload # <--- ADICIONADO PARA CORREÇÃO DE CACHE
 
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO FINAL com KPIs Corrigidos) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO FINAL com Anexos) ---")
 
 app = Flask(__name__)
 
@@ -121,6 +122,8 @@ class Lancamento(db.Model):
     
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
+    
+    # <--- MUDANÇA: Esta é a versão CORRETA do to_dict (sem 'observacoes', 'dados_pagamento' ou 'anexos_count')
     def to_dict(self):
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
@@ -195,6 +198,7 @@ class Orcamento(db.Model):
     # <--- MUDANÇA: Adicionada relação com Anexos
     anexos = db.relationship('AnexoOrcamento', backref='orcamento', lazy=True, cascade="all, delete-orphan")
     
+    # <--- MUDANÇA: Adicionado "anexos_count"
     def to_dict(self):
         return {
             "id": self.id,
@@ -207,7 +211,8 @@ class Orcamento(db.Model):
             "status": self.status,
             "observacoes": self.observacoes, 
             "servico_id": self.servico_id,
-            "servico_nome": self.servico.nome if self.servico else None
+            "servico_nome": self.servico.nome if self.servico else None,
+            "anexos_count": len(self.anexos) # <-- MUDANÇA AQUI
         }
 
 # <--- MUDANÇA: Novo Modelo AnexoOrcamento ---
@@ -450,7 +455,10 @@ def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Lógica Supressão KPI Laranja) ---")
+    
+    # <--- MUDANÇA: Corrigido o erro de sintaxe do "try:"
     try:
+        from sqlalchemy.orm import joinedload
         user = get_current_user()
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
         if not user_has_access_to_obra(user, obra_id):
@@ -574,10 +582,13 @@ def get_obra_detalhes(obra_id):
             serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
             servicos_com_totais.append(serv_dict)
             
+        # <--- MUDANÇA: Corrigida a query de orçamentos para forçar o load dos anexos
         # Busca orçamentos pendentes
         orcamentos_pendentes = Orcamento.query.filter_by(
             obra_id=obra_id, 
             status='Pendente'
+        ).options(
+            joinedload(Orcamento.anexos) # Força o carregamento dos anexos
         ).order_by(Orcamento.id.desc()).all()
         
         
@@ -1200,8 +1211,6 @@ def get_anexo_data(anexo_id):
         
         if not user_has_access_to_obra(user, orcamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
-            
-        # ... (resto do código)
             
         return send_file(
             io.BytesIO(anexo.data),
