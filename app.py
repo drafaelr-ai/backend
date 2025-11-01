@@ -130,7 +130,6 @@ class Lancamento(db.Model):
             "valor": self.valor,
             "tipo": self.tipo,
             "status": self.status,
-            "observacoes": self.observacoes, 
             "servico_id": self.servico_id,
             "servico_nome": self.servico.nome if self.servico else None,
             "anexos_count": len(self.anexos) # <-- MUDANÇA AQUI
