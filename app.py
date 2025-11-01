@@ -102,8 +102,6 @@ class Obra(db.Model):
     cliente = db.Column(db.String(150))
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
-    
-    # Relação com Orçamentos
     orcamentos = db.relationship('Orcamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
@@ -142,11 +140,8 @@ class Servico(db.Model):
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     nome = db.Column(db.String(150), nullable=False)
     responsavel = db.Column(db.String(150))
-    valor_global_mao_de_obra = db.Column(db.Float, nullable=False, default=0.0) # Orçado
-    
-    # <--- MUDANÇA: Adicionada coluna Valor Orçado Material
+    valor_global_mao_de_obra = db.Column(db.Float, nullable=False, default=0.0)
     valor_global_material = db.Column(db.Float, nullable=False, default=0.0) 
-    
     pix = db.Column(db.String(100))
     pagamentos = db.relationship('PagamentoServico', backref='servico', lazy=True, cascade="all, delete-orphan")
     
@@ -155,7 +150,7 @@ class Servico(db.Model):
             "id": self.id, "obra_id": self.obra_id, "nome": self.nome,
             "responsavel": self.responsavel,
             "valor_global_mao_de_obra": self.valor_global_mao_de_obra,
-            "valor_global_material": self.valor_global_material, # <--- MUDANÇA
+            "valor_global_material": self.valor_global_material,
             "pix": self.pix,
             "pagamentos": [p.to_dict() for p in self.pagamentos]
         }
@@ -167,7 +162,7 @@ class PagamentoServico(db.Model):
     data = db.Column(db.Date, nullable=False)
     valor = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pago')
-    tipo_pagamento = db.Column(db.String(20), nullable=False) # 'mao_de_obra' ou 'material'
+    tipo_pagamento = db.Column(db.String(20), nullable=False)
     prioridade = db.Column(db.Integer, nullable=False, default=0)
     fornecedor = db.Column(db.String(150), nullable=True)
 
@@ -181,7 +176,6 @@ class PagamentoServico(db.Model):
             "pagamento_id": self.id 
         }
 
-# NOVO MODELO: Orçamento
 class Orcamento(db.Model):
     __tablename__ = 'orcamento'
     id = db.Column(db.Integer, primary_key=True)
@@ -193,6 +187,9 @@ class Orcamento(db.Model):
     dados_pagamento = db.Column(db.String(150), nullable=True)
     tipo = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pendente') # Pendente, Aprovado, Rejeitado
+    
+    # <--- MUDANÇA: Adicionada coluna Observações
+    observacoes = db.Column(db.Text, nullable=True)
     
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='orcamentos_vinculados', lazy=True)
@@ -207,6 +204,7 @@ class Orcamento(db.Model):
             "dados_pagamento": self.dados_pagamento,
             "tipo": self.tipo,
             "status": self.status,
+            "observacoes": self.observacoes, # <--- MUDANÇA
             "servico_id": self.servico_id,
             "servico_nome": self.servico.nome if self.servico else None
         }
@@ -708,7 +706,7 @@ def add_servico(obra_id):
             nome=dados['nome'],
             responsavel=dados['responsavel'],
             valor_global_mao_de_obra=float(dados.get('valor_global_mao_de_obra', 0.0)),
-            valor_global_material=float(dados.get('valor_global_material', 0.0)), # <--- MUDANÇA
+            valor_global_material=float(dados.get('valor_global_material', 0.0)),
             pix=dados.get('pix')
         )
         db.session.add(novo_servico)
@@ -735,7 +733,7 @@ def editar_servico(servico_id):
         servico.nome = dados.get('nome', servico.nome)
         servico.responsavel = dados.get('responsavel', servico.responsavel)
         servico.valor_global_mao_de_obra = float(dados.get('valor_global_mao_de_obra', servico.valor_global_mao_de_obra))
-        servico.valor_global_material = float(dados.get('valor_global_material', servico.valor_global_material)) # <--- MUDANÇA
+        servico.valor_global_material = float(dados.get('valor_global_material', servico.valor_global_material))
         servico.pix = dados.get('pix', servico.pix)
         db.session.commit()
         return jsonify(servico.to_dict())
@@ -897,6 +895,7 @@ def add_orcamento(obra_id):
             dados_pagamento=dados.get('dados_pagamento'),
             tipo=dados['tipo'],
             status='Pendente',
+            observacoes=dados.get('observacoes'), # <--- MUDANÇA
             servico_id=dados.get('servico_id')
         )
         db.session.add(novo_orcamento)
@@ -907,6 +906,43 @@ def add_orcamento(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+
+# <--- MUDANÇA: NOVA ROTA DE EDIÇÃO DE ORÇAMENTO
+@app.route('/orcamentos/<int:orcamento_id>', methods=['PUT', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def editar_orcamento(orcamento_id):
+    """Atualiza um orçamento existente."""
+    print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (PUT) acessada ---")
+    try:
+        user = get_current_user()
+        orcamento = Orcamento.query.get_or_404(orcamento_id)
+        
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        if orcamento.status != 'Pendente':
+            return jsonify({"erro": "Não é possível editar um orçamento que já foi processado."}), 400
+
+        dados = request.json
+        
+        orcamento.descricao = dados.get('descricao', orcamento.descricao)
+        orcamento.fornecedor = dados.get('fornecedor', orcamento.fornecedor)
+        orcamento.valor = float(dados.get('valor', orcamento.valor))
+        orcamento.dados_pagamento = dados.get('dados_pagamento', orcamento.dados_pagamento)
+        orcamento.tipo = dados.get('tipo', orcamento.tipo)
+        orcamento.observacoes = dados.get('observacoes', orcamento.observacoes)
+        orcamento.servico_id = dados.get('servico_id', orcamento.servico_id)
+        
+        db.session.commit()
+        return jsonify(orcamento.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /orcamentos/{orcamento_id} (PUT): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DA NOVA ROTA ---
+
 
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -983,15 +1019,13 @@ def converter_orcamento_para_servico(orcamento_id):
             nome=orcamento.descricao,
             responsavel=orcamento.fornecedor,
             pix=orcamento.dados_pagamento,
-            valor_global_mao_de_obra=0.0, # Valor padrão
-            valor_global_material=0.0 # <--- MUDANÇA (valor padrão)
+            valor_global_mao_de_obra=0.0,
+            valor_global_material=0.0
         )
         
         # 3. Lógica B1 vs B2
         if destino_valor == 'orcamento_mo':
-            # Opção B1: Valor vira Orçamento de Mão de Obra
-            
-            # <--- MUDANÇA: Verifica o tipo do orçamento para destinar o valor
+            # Opção B1: Valor vira Orçamento de Mão de Obra ou Material
             if orcamento.tipo == 'Mão de Obra':
                 novo_servico.valor_global_mao_de_obra = orcamento.valor
             else:
@@ -1356,7 +1390,6 @@ def export_pdf_pendentes_todas_obras():
                     (item['pix'] or 'Não informado')[:15]
                 ])
             
-            # <--- CORREÇÃO AQUI (6 colunas, não 7)
             data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
             
             # ColWidths atualizado
