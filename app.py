@@ -2,7 +2,7 @@
 import os
 import traceback  # Importado para log de erros detalhado
 import re  # Importado para o CORS com regex
-from flask import Flask, jsonify, request, make_response
+from flask import Flask, jsonify, request, make_response, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from urllib.parse import quote_plus
@@ -188,11 +188,13 @@ class Orcamento(db.Model):
     tipo = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pendente') # Pendente, Aprovado, Rejeitado
     
-    # <--- MUDANÇA: Adicionada coluna Observações
     observacoes = db.Column(db.Text, nullable=True)
     
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='orcamentos_vinculados', lazy=True)
+    
+    # <--- MUDANÇA: Adicionada relação com Anexos
+    anexos = db.relationship('AnexoOrcamento', backref='orcamento', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
         return {
@@ -204,9 +206,27 @@ class Orcamento(db.Model):
             "dados_pagamento": self.dados_pagamento,
             "tipo": self.tipo,
             "status": self.status,
-            "observacoes": self.observacoes, # <--- MUDANÇA
+            "observacoes": self.observacoes, 
             "servico_id": self.servico_id,
             "servico_nome": self.servico.nome if self.servico else None
+        }
+
+# <--- MUDANÇA: Novo Modelo AnexoOrcamento ---
+class AnexoOrcamento(db.Model):
+    __tablename__ = 'anexo_orcamento'
+    id = db.Column(db.Integer, primary_key=True)
+    orcamento_id = db.Column(db.Integer, db.ForeignKey('orcamento.id'), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    mimetype = db.Column(db.String(100), nullable=False)
+    data = db.Column(db.LargeBinary, nullable=False) # Armazena o arquivo
+
+    def to_dict(self):
+        # Retorna apenas os metadados
+        return {
+            "id": self.id,
+            "orcamento_id": self.orcamento_id,
+            "filename": self.filename,
+            "mimetype": self.mimetype
         }
 # ----------------------------------------------------
 
@@ -247,7 +267,7 @@ def create_tables():
     try:
         with app.app_context():
             db.create_all()
-        print("--- [LOG] db.create_all() executado com sucesso. ---")
+        print("--- [LOG] db.create_all() executado com sucesso. (Incluindo AnexoOrcamento) ---")
         return jsonify({"sucesso": "Tabelas criadas no banco de dados."}), 200
     except Exception as e:
         error_details = traceback.format_exc()
@@ -874,44 +894,63 @@ def editar_pagamento_servico_prioridade(pagamento_id):
 # ---------------------------------------------------
 
 
-# --- ROTAS DE ORÇAMENTO (NOVO) ---
+# --- ROTAS DE ORÇAMENTO (MODIFICADAS PARA ANEXOS) ---
 
+# <--- MUDANÇA: Rota modificada para aceitar multipart/form-data
 @app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_orcamento(obra_id):
-    """Cria um novo orçamento para uma obra"""
-    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada ---")
+    """Cria um novo orçamento para uma obra, agora com anexos"""
+    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada (com anexos) ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
-        dados = request.json
+        # Dados do formulário
+        dados = request.form
+        
         novo_orcamento = Orcamento(
             obra_id=obra_id,
             descricao=dados['descricao'],
-            fornecedor=dados.get('fornecedor'),
-            valor=float(dados['valor']),
-            dados_pagamento=dados.get('dados_pagamento'),
+            fornecedor=dados.get('fornecedor') or None,
+            valor=float(dados.get('valor', 0)),
+            dados_pagamento=dados.get('dados_pagamento') or None,
             tipo=dados['tipo'],
             status='Pendente',
-            observacoes=dados.get('observacoes'), # <--- MUDANÇA
-            servico_id=dados.get('servico_id')
+            observacoes=dados.get('observacoes') or None, 
+            servico_id=int(dados['servico_id']) if dados.get('servico_id') else None
         )
         db.session.add(novo_orcamento)
-        db.session.commit()
+        db.session.commit() # Commit para obter o ID do novo_orcamento
+
+        # Processar anexos
+        files = request.files.getlist('anexos')
+        for file in files:
+            if file and file.filename:
+                novo_anexo = AnexoOrcamento(
+                    orcamento_id=novo_orcamento.id,
+                    filename=file.filename,
+                    mimetype=file.mimetype,
+                    data=file.read()
+                )
+                db.session.add(novo_anexo)
+        
+        db.session.commit() # Commit final com os anexos
+        
         return jsonify(novo_orcamento.to_dict()), 201
+        
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: NOVA ROTA DE EDIÇÃO DE ORÇAMENTO
+# <--- MUDANÇA: Rota modificada para aceitar multipart/form-data
 @app.route('/orcamentos/<int:orcamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def editar_orcamento(orcamento_id):
-    """Atualiza um orçamento existente."""
+    """Atualiza um orçamento existente. (Não lida com anexos, veja /orcamentos/<id>/anexos)"""
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
@@ -923,15 +962,16 @@ def editar_orcamento(orcamento_id):
         if orcamento.status != 'Pendente':
             return jsonify({"erro": "Não é possível editar um orçamento que já foi processado."}), 400
 
-        dados = request.json
+        # Dados do formulário
+        dados = request.form
         
         orcamento.descricao = dados.get('descricao', orcamento.descricao)
-        orcamento.fornecedor = dados.get('fornecedor', orcamento.fornecedor)
+        orcamento.fornecedor = dados.get('fornecedor') or None
         orcamento.valor = float(dados.get('valor', orcamento.valor))
-        orcamento.dados_pagamento = dados.get('dados_pagamento', orcamento.dados_pagamento)
+        orcamento.dados_pagamento = dados.get('dados_pagamento') or None
         orcamento.tipo = dados.get('tipo', orcamento.tipo)
-        orcamento.observacoes = dados.get('observacoes', orcamento.observacoes)
-        orcamento.servico_id = dados.get('servico_id') # Permite remover o vínculo (enviando null)
+        orcamento.observacoes = dados.get('observacoes') or None
+        orcamento.servico_id = int(dados['servico_id']) if dados.get('servico_id') else None
         
         db.session.commit()
         return jsonify(orcamento.to_dict()), 200
@@ -941,7 +981,7 @@ def editar_orcamento(orcamento_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /orcamentos/{orcamento_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
-# --- FIM DA NOVA ROTA ---
+# --- FIM DA ROTA ---
 
 
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
@@ -980,6 +1020,9 @@ def aprovar_orcamento(orcamento_id):
         
         db.session.add(novo_lancamento)
         db.session.commit()
+        
+        # NOTA: Anexos NÃO são movidos para o lançamento automaticamente.
+        # Eles permanecem no orçamento "Aprovado" para histórico.
         
         return jsonify({"sucesso": "Orçamento aprovado e movido para pendências", "lancamento": novo_lancamento.to_dict()}), 200
         
@@ -1074,7 +1117,7 @@ def rejeitar_orcamento(orcamento_id):
         if not user_has_access_to_obra(user, orcamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
-        db.session.delete(orcamento)
+        db.session.delete(orcamento) # A cascata deletará os AnexoOrcamento
         db.session.commit()
         
         return jsonify({"sucesso": "Orçamento rejeitado/deletado com sucesso"}), 200
@@ -1083,7 +1126,110 @@ def rejeitar_orcamento(orcamento_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /orcamentos/{orcamento_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+# ---------------------------------------------------
 
+# <--- MUDANÇA: Novas Rotas para Anexos ---
+@app.route('/orcamentos/<int:orcamento_id>/anexos', methods=['GET', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master', 'comum'])
+def get_orcamento_anexos(orcamento_id):
+    """Lista os metadados dos anexos de um orçamento"""
+    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (GET) acessada ---")
+    try:
+        user = get_current_user()
+        orcamento = Orcamento.query.get_or_404(orcamento_id)
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        anexos = AnexoOrcamento.query.filter_by(orcamento_id=orcamento_id).all()
+        return jsonify([anexo.to_dict() for anexo in anexos]), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/orcamentos/<int:orcamento_id>/anexos', methods=['POST', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def add_anexos_orcamento(orcamento_id):
+    """Adiciona novos anexos a um orçamento existente (usado na edição)"""
+    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (POST) acessada ---")
+    try:
+        user = get_current_user()
+        orcamento = Orcamento.query.get_or_404(orcamento_id)
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
+        files = request.files.getlist('anexos')
+        novos_anexos = []
+        for file in files:
+            if file and file.filename:
+                novo_anexo = AnexoOrcamento(
+                    orcamento_id=orcamento.id,
+                    filename=file.filename,
+                    mimetype=file.mimetype,
+                    data=file.read()
+                )
+                db.session.add(novo_anexo)
+                novos_anexos.append(novo_anexo)
+        
+        db.session.commit()
+        
+        return jsonify([anexo.to_dict() for anexo in novos_anexos]), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/anexos/<int:anexo_id>', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def get_anexo_data(anexo_id):
+    """Serve o arquivo de anexo (para abrir no navegador)"""
+    print(f"--- [LOG] Rota /anexos/{anexo_id} (GET) acessada ---")
+    try:
+        user = get_current_user()
+        anexo = AnexoOrcamento.query.get_or_404(anexo_id)
+        orcamento = Orcamento.query.get(anexo.orcamento_id)
+        
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        return send_file(
+            io.BytesIO(anexo.data),
+            mimetype=anexo.mimetype,
+            as_attachment=False, # Abre 'inline' no navegador
+            download_name=anexo.filename 
+        )
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /anexos/{anexo_id} (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/anexos/<int:anexo_id>', methods=['DELETE', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def delete_anexo(anexo_id):
+    """Deleta um anexo específico"""
+    print(f"--- [LOG] Rota /anexos/{anexo_id} (DELETE) acessada ---")
+    try:
+        user = get_current_user()
+        anexo = AnexoOrcamento.query.get_or_404(anexo_id)
+        orcamento = Orcamento.query.get(anexo.orcamento_id)
+        
+        if not user_has_access_to_obra(user, orcamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        db.session.delete(anexo)
+        db.session.commit()
+        return jsonify({"sucesso": "Anexo deletado"}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /anexos/{anexo_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 # ---------------------------------------------------
 
 
