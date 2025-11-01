@@ -124,14 +124,18 @@ class Lancamento(db.Model):
     
     def to_dict(self):
         return {
-            "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
-            "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
-            "status": self.status, "pix": self.pix,
-            "prioridade": self.prioridade, 
-            "fornecedor": self.fornecedor, 
-            "servico_id": self.servico_id, 
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "descricao": self.descricao,
+            "fornecedor": self.fornecedor,
+            "valor": self.valor,
+            "dados_pagamento": self.dados_pagamento,
+            "tipo": self.tipo,
+            "status": self.status,
+            "observacoes": self.observacoes, 
+            "servico_id": self.servico_id,
             "servico_nome": self.servico.nome if self.servico else None,
-            "lancamento_id": self.id 
+            "anexos_count": len(self.anexos) # <-- MUDANÇA AQUI
         }
 
 class Servico(db.Model):
