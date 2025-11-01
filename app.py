@@ -931,7 +931,7 @@ def editar_orcamento(orcamento_id):
         orcamento.dados_pagamento = dados.get('dados_pagamento', orcamento.dados_pagamento)
         orcamento.tipo = dados.get('tipo', orcamento.tipo)
         orcamento.observacoes = dados.get('observacoes', orcamento.observacoes)
-        orcamento.servico_id = dados.get('servico_id', orcamento.servico_id)
+        orcamento.servico_id = dados.get('servico_id') # Permite remover o vínculo (enviando null)
         
         db.session.commit()
         return jsonify(orcamento.to_dict()), 200
@@ -1186,7 +1186,7 @@ def export_pdf_pendentes(obra_id):
                 ])
                 total_pendente += item['valor']
             
-            data.append(['', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente), ''])
+            data.append(['', '', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente)])
             
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
             table.setStyle(TableStyle([
@@ -1390,7 +1390,7 @@ def export_pdf_pendentes_todas_obras():
                     (item['pix'] or 'Não informado')[:15]
                 ])
             
-            data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra), ''])
+            data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra)])
             
             # ColWidths atualizado
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
