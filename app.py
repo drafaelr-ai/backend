@@ -121,7 +121,6 @@ class Lancamento(db.Model):
     
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
-    
     def to_dict(self):
         return {
             "id": self.id,
@@ -129,7 +128,6 @@ class Lancamento(db.Model):
             "descricao": self.descricao,
             "fornecedor": self.fornecedor,
             "valor": self.valor,
-            "dados_pagamento": self.dados_pagamento,
             "tipo": self.tipo,
             "status": self.status,
             "observacoes": self.observacoes, 
