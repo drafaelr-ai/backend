@@ -118,11 +118,7 @@ class Lancamento(db.Model):
     data = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
     pix = db.Column(db.String(100))
-    
-    # Coluna de Prioridade
     prioridade = db.Column(db.Integer, nullable=False, default=0) 
-    
-    # <--- MUDANÇA: Adicionada coluna Fornecedor
     fornecedor = db.Column(db.String(150), nullable=True)
     
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
@@ -134,7 +130,7 @@ class Lancamento(db.Model):
             "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
             "status": self.status, "pix": self.pix,
             "prioridade": self.prioridade, 
-            "fornecedor": self.fornecedor, # <--- MUDANÇA: Adicionado ao dict
+            "fornecedor": self.fornecedor, 
             "servico_id": self.servico_id, 
             "servico_nome": self.servico.nome if self.servico else None,
             "lancamento_id": self.id 
@@ -147,6 +143,10 @@ class Servico(db.Model):
     nome = db.Column(db.String(150), nullable=False)
     responsavel = db.Column(db.String(150))
     valor_global_mao_de_obra = db.Column(db.Float, nullable=False, default=0.0) # Orçado
+    
+    # <--- MUDANÇA: Adicionada coluna Valor Orçado Material
+    valor_global_material = db.Column(db.Float, nullable=False, default=0.0) 
+    
     pix = db.Column(db.String(100))
     pagamentos = db.relationship('PagamentoServico', backref='servico', lazy=True, cascade="all, delete-orphan")
     
@@ -155,6 +155,7 @@ class Servico(db.Model):
             "id": self.id, "obra_id": self.obra_id, "nome": self.nome,
             "responsavel": self.responsavel,
             "valor_global_mao_de_obra": self.valor_global_mao_de_obra,
+            "valor_global_material": self.valor_global_material, # <--- MUDANÇA
             "pix": self.pix,
             "pagamentos": [p.to_dict() for p in self.pagamentos]
         }
@@ -167,11 +168,7 @@ class PagamentoServico(db.Model):
     valor = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False) # 'mao_de_obra' ou 'material'
-    
-    # Coluna de Prioridade
     prioridade = db.Column(db.Integer, nullable=False, default=0)
-    
-    # <--- MUDANÇA: Adicionada coluna Fornecedor
     fornecedor = db.Column(db.String(150), nullable=True)
 
     def to_dict(self):
@@ -180,7 +177,7 @@ class PagamentoServico(db.Model):
             "valor": self.valor, "status": self.status,
             "tipo_pagamento": self.tipo_pagamento,
             "prioridade": self.prioridade,
-            "fornecedor": self.fornecedor, # <--- MUDANÇA: Adicionado ao dict
+            "fornecedor": self.fornecedor, 
             "pagamento_id": self.id 
         }
 
@@ -523,7 +520,7 @@ def get_obra_detalhes(obra_id):
                 "descricao": descricao, "tipo": lanc.tipo, "valor": float(lanc.valor or 0.0),
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
                 "prioridade": lanc.prioridade,
-                "fornecedor": lanc.fornecedor # <--- MUDANÇA
+                "fornecedor": lanc.fornecedor 
             })
         
         for serv in obra.servicos:
@@ -535,7 +532,7 @@ def get_obra_detalhes(obra_id):
                     "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
                     "pagamento_id": pag.id,
                     "prioridade": pag.prioridade,
-                    "fornecedor": pag.fornecedor # <--- MUDANÇA
+                    "fornecedor": pag.fornecedor 
                 })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
@@ -616,7 +613,7 @@ def add_lancamento(obra_id):
             status=dados['status'], 
             pix=dados.get('pix'),
             prioridade=int(dados.get('prioridade', 0)),
-            fornecedor=dados.get('fornecedor'), # <--- MUDANÇA
+            fornecedor=dados.get('fornecedor'), 
             servico_id=dados.get('servico_id')
         )
         db.session.add(novo_lancamento)
@@ -668,7 +665,7 @@ def editar_lancamento(lancamento_id):
         lancamento.status = dados['status']
         lancamento.pix = dados.get('pix')
         lancamento.prioridade = int(dados.get('prioridade', lancamento.prioridade))
-        lancamento.fornecedor = dados.get('fornecedor', lancamento.fornecedor) # <--- MUDANÇA
+        lancamento.fornecedor = dados.get('fornecedor', lancamento.fornecedor) 
         lancamento.servico_id = dados.get('servico_id')
         db.session.commit()
         return jsonify(lancamento.to_dict())
@@ -711,6 +708,7 @@ def add_servico(obra_id):
             nome=dados['nome'],
             responsavel=dados['responsavel'],
             valor_global_mao_de_obra=float(dados.get('valor_global_mao_de_obra', 0.0)),
+            valor_global_material=float(dados.get('valor_global_material', 0.0)), # <--- MUDANÇA
             pix=dados.get('pix')
         )
         db.session.add(novo_servico)
@@ -737,6 +735,7 @@ def editar_servico(servico_id):
         servico.nome = dados.get('nome', servico.nome)
         servico.responsavel = dados.get('responsavel', servico.responsavel)
         servico.valor_global_mao_de_obra = float(dados.get('valor_global_mao_de_obra', servico.valor_global_mao_de_obra))
+        servico.valor_global_material = float(dados.get('valor_global_material', servico.valor_global_material)) # <--- MUDANÇA
         servico.pix = dados.get('pix', servico.pix)
         db.session.commit()
         return jsonify(servico.to_dict())
@@ -785,7 +784,7 @@ def add_pagamento_servico(servico_id):
             status=dados.get('status', 'Pago'),
             tipo_pagamento=tipo_pagamento,
             prioridade=int(dados.get('prioridade', 0)),
-            fornecedor=dados.get('fornecedor') # <--- MUDANÇA
+            fornecedor=dados.get('fornecedor') 
         )
         db.session.add(novo_pagamento)
         db.session.commit()
@@ -929,9 +928,6 @@ def aprovar_orcamento(orcamento_id):
         
         # 2. Criar o novo Lançamento (Pendência)
         desc_lancamento = f"{orcamento.descricao}"
-        # <--- MUDANÇA: Não adicionar Fornecedor na descrição, ele agora tem campo próprio
-        # if orcamento.fornecedor:
-        #     desc_lancamento = f"{orcamento.descricao} (Forn: {orcamento.fornecedor})"
         
         novo_lancamento = Lancamento(
             obra_id=orcamento.obra_id,
@@ -942,7 +938,7 @@ def aprovar_orcamento(orcamento_id):
             status='A Pagar',
             pix=orcamento.dados_pagamento,
             prioridade=0, # Padrão 0, pode ser editado depois
-            fornecedor=orcamento.fornecedor, # <--- MUDANÇA
+            fornecedor=orcamento.fornecedor, 
             servico_id=orcamento.servico_id # Mantém o vínculo se já existia
         )
         
@@ -987,13 +983,20 @@ def converter_orcamento_para_servico(orcamento_id):
             nome=orcamento.descricao,
             responsavel=orcamento.fornecedor,
             pix=orcamento.dados_pagamento,
-            valor_global_mao_de_obra=0.0 # Valor padrão
+            valor_global_mao_de_obra=0.0, # Valor padrão
+            valor_global_material=0.0 # <--- MUDANÇA (valor padrão)
         )
         
         # 3. Lógica B1 vs B2
         if destino_valor == 'orcamento_mo':
             # Opção B1: Valor vira Orçamento de Mão de Obra
-            novo_servico.valor_global_mao_de_obra = orcamento.valor
+            
+            # <--- MUDANÇA: Verifica o tipo do orçamento para destinar o valor
+            if orcamento.tipo == 'Mão de Obra':
+                novo_servico.valor_global_mao_de_obra = orcamento.valor
+            else:
+                novo_servico.valor_global_material = orcamento.valor
+
             db.session.add(novo_servico)
             db.session.commit()
             return jsonify({"sucesso": "Orçamento aprovado e novo serviço criado", "servico": novo_servico.to_dict()}), 200
@@ -1006,13 +1009,13 @@ def converter_orcamento_para_servico(orcamento_id):
             novo_lancamento = Lancamento(
                 obra_id=orcamento.obra_id,
                 tipo=orcamento.tipo,
-                descricao=orcamento.descricao, # <--- MUDANÇA (não precisa mais do Forn: na desc)
+                descricao=orcamento.descricao,
                 valor=orcamento.valor,
                 data=datetime.date.today(),
                 status='A Pagar',
                 pix=orcamento.dados_pagamento,
                 prioridade=0,
-                fornecedor=orcamento.fornecedor, # <--- MUDANÇA
+                fornecedor=orcamento.fornecedor, 
                 servico_id=novo_servico.id # Vínculo com o serviço recém-criado
             )
             db.session.add(novo_lancamento)
@@ -1066,7 +1069,6 @@ def export_csv(obra_id):
         items = obra.lancamentos
         si = io.StringIO()
         cw = csv.writer(si)
-        # <--- MUDANÇA: Adicionado Fornecedor ao CSV
         cw.writerow(['Data', 'Descricao', 'Tipo', 'Valor', 'Status', 'PIX', 'ServicoID', 'Fornecedor'])
         for item in items:
             cw.writerow([
