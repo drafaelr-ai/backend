@@ -1187,6 +1187,12 @@ def add_anexos_orcamento(orcamento_id):
 @jwt_required()
 def get_anexo_data(anexo_id):
     """Serve o arquivo de anexo (para abrir no navegador)"""
+    
+    # <--- MUDANÇA: Adicionado para lidar com o preflight (CORS) -->
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    # <--- FIM DA MUDANÇA -->
+
     print(f"--- [LOG] Rota /anexos/{anexo_id} (GET) acessada ---")
     try:
         user = get_current_user()
@@ -1195,6 +1201,8 @@ def get_anexo_data(anexo_id):
         
         if not user_has_access_to_obra(user, orcamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        # ... (resto do código)
             
         return send_file(
             io.BytesIO(anexo.data),
