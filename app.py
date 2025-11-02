@@ -965,7 +965,66 @@ def editar_pagamento_servico_prioridade(pagamento_id):
         print(f"--- [ERRO] /servicos/pagamentos/.../prioridade (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # ---------------------------------------------------
+# --- NOVA ROTA PARA PAGAMENTO PARCIAL ---
+@app.route('/pagamentos/<string:item_type>/<int:item_id>/pagar', methods=['PATCH', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def pagar_item_parcial(item_type, item_id):
+    """
+    Registra um pagamento (parcial ou total) para um item de despesa.
+    item_type pode ser 'lancamento' ou 'pagamento_servico'.
+    """
+    if request.method == 'OPTIONS': 
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        user = get_current_user()
+        dados = request.json
+        valor_a_pagar = float(dados.get('valor_a_pagar', 0))
 
+        if valor_a_pagar <= 0:
+            return jsonify({"erro": "O valor a pagar deve ser positivo."}), 400
+
+        item = None
+        
+        # 1. Encontrar o item e verificar permissões
+        if item_type == 'lancamento':
+            item = Lancamento.query.get_or_404(item_id)
+            if not user_has_access_to_obra(user, item.obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        elif item_type == 'pagamento_servico':
+            item = PagamentoServico.query.get_or_404(item_id)
+            servico = Servico.query.get(item.servico_id)
+            if not user_has_access_to_obra(user, servico.obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        else:
+            return jsonify({"erro": "Tipo de item inválido."}), 400
+
+        # 2. Validar o pagamento
+        valor_restante = item.valor_total - item.valor_pago
+        if valor_a_pagar > (valor_restante + 0.01): # 0.01 de margem para floats
+            return jsonify({"erro": f"O valor a pagar (R$ {valor_a_pagar:.2f}) é maior que o valor restante (R$ {valor_restante:.2f})."}), 400
+
+        # 3. Atualizar o item
+        item.valor_pago += valor_a_pagar
+        
+        # 4. Atualizar o status
+        if (item.valor_total - item.valor_pago) < 0.01: # Se estiver totalmente pago
+            item.status = 'Pago'
+            item.valor_pago = item.valor_total # Garante valor exato
+        else:
+            item.status = 'A Pagar' # Ou 'Parcial', mas 'A Pagar' funciona
+
+        db.session.commit()
+        return jsonify(item.to_dict()), 200
+
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /pagamentos/.../pagar (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DA NOVA ROTA ---
 
 # --- ROTAS DE ORÇAMENTO (MODIFICADAS PARA ANEXOS) ---
 
