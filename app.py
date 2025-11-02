@@ -15,14 +15,14 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-from sqlalchemy.orm import joinedload # <--- Import para correção de cache
+from sqlalchemy.orm import joinedload 
 
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO FINAL com KPI Corrigido) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO FINAL com KPI da Home Corrigido) ---")
 
 app = Flask(__name__)
 
@@ -187,7 +187,7 @@ class Orcamento(db.Model):
     valor = db.Column(db.Float, nullable=False)
     dados_pagamento = db.Column(db.String(150), nullable=True)
     tipo = db.Column(db.String(50), nullable=False)
-    status = db.Column(db.String(20), nullable=False, default='Pendente') # Pendente, Aprovado, Rejeitado
+    status = db.Column(db.String(20), nullable=False, default='Pendente') 
     
     observacoes = db.Column(db.Text, nullable=True)
     
@@ -218,7 +218,7 @@ class AnexoOrcamento(db.Model):
     orcamento_id = db.Column(db.Integer, db.ForeignKey('orcamento.id'), nullable=False)
     filename = db.Column(db.String(255), nullable=False)
     mimetype = db.Column(db.String(100), nullable=False)
-    data = db.Column(db.LargeBinary, nullable=False) # Armazena o arquivo
+    data = db.Column(db.LargeBinary, nullable=False) 
 
     def to_dict(self):
         return {
@@ -338,12 +338,13 @@ def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
+# <--- MUDANÇAS APLICADAS AQUI PARA CORRIGIR O KPI DA TELA INICIAL ---
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print("--- [LOG] Rota /obras (GET) acessada (com KPIs de Orçamento Restante) ---")
+    print("--- [LOG] Rota /obras (GET) acessada (com KPIs de Orçamento Restante CORRIGIDO) ---")
     try:
         user = get_current_user() 
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -355,10 +356,12 @@ def get_obras():
             func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago_lanc')
         ).group_by(Lancamento.obra_id).subquery()
 
-        # 2. Orçamento de Mão de Obra (Custo total)
+        # 2. Orçamento de Mão de Obra E Material (Custo total)
+        # <--- MUDANÇA 1: Query corrigida para incluir material -->
         servico_budget_sum = db.session.query(
             Servico.obra_id,
-            func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo')
+            func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo'),
+            func.sum(Servico.valor_global_material).label('total_budget_mat')
         ).group_by(Servico.obra_id).subquery()
 
         # 3. Pagamentos de Serviço (Custo pago e Custo de material)
@@ -372,11 +375,13 @@ def get_obras():
          .subquery()
 
         # 4. Query Principal
+        # <--- MUDANÇA 2: Adicionado 'serv_budget_mat' -->
         obras_query = db.session.query(
             Obra,
             func.coalesce(lancamentos_sum.c.total_geral_lanc, 0).label('lanc_geral'),
             func.coalesce(lancamentos_sum.c.total_pago_lanc, 0).label('lanc_pago'),
             func.coalesce(servico_budget_sum.c.total_budget_mo, 0).label('serv_budget_mo'),
+            func.coalesce(servico_budget_sum.c.total_budget_mat, 0).label('serv_budget_mat'),
             func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago'),
             func.coalesce(pagamentos_sum.c.total_geral_material_pag, 0).label('pag_material_geral')
         ).outerjoin(
@@ -398,11 +403,12 @@ def get_obras():
             ).order_by(Obra.nome).all()
 
         # 6. Formata a Saída (Lógica de Orçamento Restante)
+        # <--- MUDANÇA 3: Cálculo do KPI Corrigido -->
         resultados = []
-        for obra, lanc_geral, lanc_pago, serv_budget_mo, pag_pago, pag_material_geral in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, serv_budget_mo, serv_budget_mat, pag_pago, pag_material_geral in obras_com_totais:
             
-            # Total_Projeto = (Todos Lançamentos) + (Orçamento Mão de Obra) + (Materiais de Pagamento Rápido)
-            total_projeto_previsto = float(lanc_geral) + float(serv_budget_mo) + float(pag_material_geral)
+            # Custo Total Previsto (Orçamento)
+            total_projeto_previsto = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + float(pag_material_geral)
             
             # Total_Pago = (Lançamentos Pagos) + (Pagamentos de Serviço Pagos)
             total_pago = float(lanc_pago) + float(pag_pago)
@@ -482,29 +488,21 @@ def get_obra_detalhes(obra_id):
         total_servicos_material_geral = float(sumarios_servicos.total_material_geral or 0.0)
 
         # 3. Orçamento de Mão de Obra E Material (Total)
-        # <--- MUDANÇA 1: Query corrigida para incluir material -->
         servico_budget_sum = db.session.query(
             func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo'),
             func.sum(Servico.valor_global_material).label('total_budget_mat')
         ).filter(Servico.obra_id == obra_id).first()
         
-        # <--- MUDANÇA 2: Novas variáveis -->
         total_budget_mo = float(servico_budget_sum.total_budget_mo or 0.0)
         total_budget_mat = float(servico_budget_sum.total_budget_mat or 0.0)
 
         # 4. Cálculo dos KPIs Finais
         
-        # KPI VERDE: Total Pago
         kpi_total_pago = total_lancamentos_pago + total_servicos_pago
-        
-        # (Valor "A Pagar" real)
         kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
-        
-        # KPI AZUL: Total Comprometido (Pago + A Pagar)
         kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
         
         # Custo Total Previsto (Orçamento)
-        # <--- MUDANÇA 3: Cálculo do KPI Corrigido -->
         kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_budget_mat + total_servicos_material_geral
         
         # KPI VERMELHO: Restante do Orçamento (Total em Aberto)
@@ -516,13 +514,13 @@ def get_obra_detalhes(obra_id):
             func.sum(Lancamento.valor)
         ).filter(
             Lancamento.obra_id == obra_id, 
-            Lancamento.servico_id.is_(None) # Apenas não vinculados
+            Lancamento.servico_id.is_(None)
         ).group_by(Lancamento.tipo).all()
         
         sumarios_dict = {
-            "total_geral": kpi_total_geral_comprometido,       # AZUL
-            "total_pago": kpi_total_pago,                    # VERDE
-            "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento, # VERMELHO
+            "total_geral": kpi_total_geral_comprometido,
+            "total_pago": kpi_total_pago,
+            "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento,
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
         }
         
@@ -567,7 +565,6 @@ def get_obra_detalhes(obra_id):
         servicos_com_totais = []
         for s in obra.servicos:
             serv_dict = s.to_dict()
-            # Calcula totais de gastos vinculados (Pago + A Pagar)
             gastos_vinculados_mo = sum(
                 float(l.valor or 0.0) for l in todos_lancamentos 
                 if l.servico_id == s.id and l.tipo == 'Mão de Obra'
