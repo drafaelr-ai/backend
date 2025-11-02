@@ -22,7 +22,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO com KPI Total Corrigido) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO com KPI Total Corrigido v2) ---")
 
 app = Flask(__name__)
 
@@ -373,6 +373,7 @@ def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
+# <--- MUDANÇA: Lógica de KPI CORRIGIDA para 'Restante (Orçamento)' -->
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
@@ -397,12 +398,10 @@ def get_obras():
             func.sum(Servico.valor_global_material).label('total_budget_mat')
         ).group_by(Servico.obra_id).subquery()
 
-        # 3. Pagamentos de Serviço (Custo pago e Custo de material)
+        # 3. Pagamentos de Serviço (Custo pago)
         pagamentos_sum = db.session.query(
             Servico.obra_id,
-            func.sum(PagamentoServico.valor_pago).label('total_pago_pag'),
-            # <--- CORREÇÃO: Não precisamos mais somar 'pag_material_geral' ao ORÇAMENTO
-            # func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_geral_material_pag')
+            func.sum(PagamentoServico.valor_pago).label('total_pago_pag')
         ).select_from(PagamentoServico) \
          .join(Servico, PagamentoServico.servico_id == Servico.id) \
          .group_by(Servico.obra_id) \
@@ -416,7 +415,6 @@ def get_obras():
             func.coalesce(servico_budget_sum.c.total_budget_mo, 0).label('serv_budget_mo'),
             func.coalesce(servico_budget_sum.c.total_budget_mat, 0).label('serv_budget_mat'),
             func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago')
-            # <--- CORREÇÃO: Removido 'pag_material_geral' da query
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
@@ -440,21 +438,20 @@ def get_obras():
         for obra, lanc_geral, lanc_pago, serv_budget_mo, serv_budget_mat, pag_pago in obras_com_totais:
             
             # Custo Total Previsto (Orçamento)
-            # <--- CORREÇÃO: Fórmula do Orçamento Total (sem pag_material_geral)
             total_projeto_previsto = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
             
             # Total_Pago = (Lançamentos Pagos) + (Pagamentos de Serviço Pagos)
             total_pago = float(lanc_pago) + float(pag_pago)
             
-            # Total em Aberto = Total_Projeto_Previsto - Total_Pago
-            total_a_pagar = total_projeto_previsto - total_pago
+            # <--- CORREÇÃO: "total_a_pagar" (Red Box) agora é o Orçamento Total
+            # O frontend vai exibir total_pago (Verde) e total_a_pagar (Vermelho)
             
             resultados.append({
                 "id": obra.id,
                 "nome": obra.nome,
                 "cliente": obra.cliente,
                 "total_pago": total_pago, 
-                "total_a_pagar": total_a_pagar 
+                "total_a_pagar": total_projeto_previsto # <-- MUDANÇA AQUI
             })
         
         return jsonify(resultados)
@@ -512,15 +509,12 @@ def get_obra_detalhes(obra_id):
         total_lancamentos_apagar = float(sumarios_lancamentos.total_a_pagar or 0.0)
 
         # 2. Pagamentos de Serviço (Pago, A Pagar)
-        # <--- CORREÇÃO: Removido 'total_material_geral' da query -->
         sumarios_servicos = db.session.query(
             func.sum(PagamentoServico.valor_pago).label('total_pago'),
-            func.sum(PagamentoServico.valor_total - PagamentoServico.valor_pago).label('total_a_pagar'),
-            # func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_material_geral')
+            func.sum(PagamentoServico.valor_total - PagamentoServico.valor_pago).label('total_a_pagar')
         ).join(Servico).filter(Servico.obra_id == obra_id).first()
         total_servicos_pago = float(sumarios_servicos.total_pago or 0.0)
         total_servicos_apagar = float(sumarios_servicos.total_a_pagar or 0.0)
-        # total_servicos_material_geral = float(sumarios_servicos.total_material_geral or 0.0) # <-- CORREÇÃO: Linha removida
 
         # 3. Orçamento de Mão de Obra E Material (Total)
         servico_budget_sum = db.session.query(
@@ -533,16 +527,22 @@ def get_obra_detalhes(obra_id):
 
         # 4. Cálculo dos KPIs Finais
         
+        # Green Box (Total Pago)
         kpi_total_pago = total_lancamentos_pago + total_servicos_pago
+        
+        # Total "A Pagar" (Apenas de itens Lançados)
         kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
+        
+        # Blue Box (Total Comprometido = Lançado)
         kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
         
-        # Custo Total Previsto (Orçamento)
-        # <--- CORREÇÃO: Fórmula do Orçamento Total (sem total_servicos_material_geral)
+        # Orçamento Total (Ground Truth)
         kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_budget_mat
         
-        # KPI VERMELHO: Restante do Orçamento (Total em Aberto)
-        kpi_total_em_aberto_orcamento = kpi_total_previsto - kpi_total_pago
+        # Red Box (Orçamento Total)
+        # <--- CORREÇÃO: O KPI "Restante" (Vermelho) agora é o ORÇAMENTO TOTAL
+        kpi_total_em_aberto_orcamento = kpi_total_previsto
+        
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
@@ -554,9 +554,9 @@ def get_obra_detalhes(obra_id):
         ).group_by(Lancamento.tipo).all()
         
         sumarios_dict = {
-            "total_geral": kpi_total_geral_comprometido,
-            "total_pago": kpi_total_pago,
-            "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento,
+            "total_geral": kpi_total_geral_comprometido,       # AZUL (Total Lançado)
+            "total_pago": kpi_total_pago,                    # VERDE (Total Pago)
+            "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento, # VERMELHO (Orçamento Total)
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
         }
         
@@ -1014,7 +1014,7 @@ def pagar_item_parcial(item_type, item_id):
             item.status = 'Pago'
             item.valor_pago = item.valor_total # Garante valor exato
         else:
-            item.status = 'A Pagar' # Mantém 'A Pagar' (frontend vai tratar como 'Parcial')
+            item.status = 'A Pagar' 
 
         db.session.commit()
         return jsonify(item.to_dict()), 200
@@ -1414,7 +1414,7 @@ def export_pdf_pendentes(obra_id):
         for lanc in lancamentos_apagar:
             desc = lanc.descricao
             if lanc.servico:
-                desc = f"{lanc.descricao} (Serviço: {lanc.servico.nome})"
+                desc = f"{desc} (Serviço: {lanc.servico.nome})"
             items.append({
                 "data": lanc.data, "tipo": lanc.tipo, "descricao": desc,
                 "valor": lanc.valor_total - lanc.valor_pago,
@@ -1565,7 +1565,7 @@ def export_pdf_pendentes_todas_obras():
             for lanc in lancamentos_apagar:
                 desc = lanc.descricao
                 if lanc.servico:
-                    desc = f"{lanc.descricao} (Serviço: {lanc.servico.nome})"
+                    desc = f"{desc} (Serviço: {lanc.servico.nome})"
                 items.append({
                     "data": lanc.data, 
                     "tipo": lanc.tipo, 
