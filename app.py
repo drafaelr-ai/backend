@@ -15,14 +15,14 @@ from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
-from sqlalchemy.orm import joinedload # <--- ADICIONADO PARA CORREÇÃO DE CACHE
+from sqlalchemy.orm import joinedload # <--- Import para correção de cache
 
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO FINAL com Anexos) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO FINAL com KPI Corrigido) ---")
 
 app = Flask(__name__)
 
@@ -123,7 +123,6 @@ class Lancamento(db.Model):
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
     
-    # <--- MUDANÇA: Esta é a versão CORRETA do to_dict (sem 'observacoes', 'dados_pagamento' ou 'anexos_count')
     def to_dict(self):
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
@@ -195,10 +194,8 @@ class Orcamento(db.Model):
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='orcamentos_vinculados', lazy=True)
     
-    # <--- MUDANÇA: Adicionada relação com Anexos
     anexos = db.relationship('AnexoOrcamento', backref='orcamento', lazy=True, cascade="all, delete-orphan")
     
-    # <--- MUDANÇA: Adicionado "anexos_count"
     def to_dict(self):
         return {
             "id": self.id,
@@ -212,10 +209,9 @@ class Orcamento(db.Model):
             "observacoes": self.observacoes, 
             "servico_id": self.servico_id,
             "servico_nome": self.servico.nome if self.servico else None,
-            "anexos_count": len(self.anexos) # <-- MUDANÇA AQUI
+            "anexos_count": len(self.anexos)
         }
 
-# <--- MUDANÇA: Novo Modelo AnexoOrcamento ---
 class AnexoOrcamento(db.Model):
     __tablename__ = 'anexo_orcamento'
     id = db.Column(db.Integer, primary_key=True)
@@ -225,7 +221,6 @@ class AnexoOrcamento(db.Model):
     data = db.Column(db.LargeBinary, nullable=False) # Armazena o arquivo
 
     def to_dict(self):
-        # Retorna apenas os metadados
         return {
             "id": self.id,
             "orcamento_id": self.orcamento_id,
@@ -454,9 +449,8 @@ def add_obra():
 def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Lógica Supressão KPI Laranja) ---")
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (KPI CORRIGIDO) ---")
     
-    # <--- MUDANÇA: Corrigido o erro de sintaxe do "try:"
     try:
         from sqlalchemy.orm import joinedload
         user = get_current_user()
@@ -465,7 +459,7 @@ def get_obra_detalhes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # --- Lógica de KPIs (MODIFICADA) ---
+        # --- Lógica de KPIs (CORRIGIDA) ---
         
         # 1. Lançamentos (Total, Pago, A Pagar)
         sumarios_lancamentos = db.session.query(
@@ -487,25 +481,31 @@ def get_obra_detalhes(obra_id):
         total_servicos_apagar = float(sumarios_servicos.total_a_pagar or 0.0)
         total_servicos_material_geral = float(sumarios_servicos.total_material_geral or 0.0)
 
-        # 3. Orçamento de Mão de Obra (Total)
+        # 3. Orçamento de Mão de Obra E Material (Total)
+        # <--- MUDANÇA 1: Query corrigida para incluir material -->
         servico_budget_sum = db.session.query(
-            func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo')
+            func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo'),
+            func.sum(Servico.valor_global_material).label('total_budget_mat')
         ).filter(Servico.obra_id == obra_id).first()
+        
+        # <--- MUDANÇA 2: Novas variáveis -->
         total_budget_mo = float(servico_budget_sum.total_budget_mo or 0.0)
+        total_budget_mat = float(servico_budget_sum.total_budget_mat or 0.0)
 
         # 4. Cálculo dos KPIs Finais
         
         # KPI VERDE: Total Pago
         kpi_total_pago = total_lancamentos_pago + total_servicos_pago
         
-        # (Valor "A Pagar" real, que seria do KPI Laranja)
+        # (Valor "A Pagar" real)
         kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
         
         # KPI AZUL: Total Comprometido (Pago + A Pagar)
         kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
         
         # Custo Total Previsto (Orçamento)
-        kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_servicos_material_geral
+        # <--- MUDANÇA 3: Cálculo do KPI Corrigido -->
+        kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_budget_mat + total_servicos_material_geral
         
         # KPI VERMELHO: Restante do Orçamento (Total em Aberto)
         kpi_total_em_aberto_orcamento = kpi_total_previsto - kpi_total_pago
@@ -519,16 +519,14 @@ def get_obra_detalhes(obra_id):
             Lancamento.servico_id.is_(None) # Apenas não vinculados
         ).group_by(Lancamento.tipo).all()
         
-        # *** DICIONÁRIO DE SUMÁRIOS (REVERTIDO PARA 3 CARDS) ***
         sumarios_dict = {
             "total_geral": kpi_total_geral_comprometido,       # AZUL
             "total_pago": kpi_total_pago,                    # VERDE
-            # "total_liberado_pagamento": kpi_liberado_pagamento, # SUPRIMIDO
             "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento, # VERMELHO
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
         }
         
-        # --- HISTÓRICO UNIFICADO (Inalterado) ---
+        # --- HISTÓRICO UNIFICADO ---
         historico_unificado = []
         
         todos_lancamentos = Lancamento.query.filter_by(obra_id=obra_id).options(
@@ -582,7 +580,6 @@ def get_obra_detalhes(obra_id):
             serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
             servicos_com_totais.append(serv_dict)
             
-        # <--- MUDANÇA: Corrigida a query de orçamentos para forçar o load dos anexos
         # Busca orçamentos pendentes
         orcamentos_pendentes = Orcamento.query.filter_by(
             obra_id=obra_id, 
@@ -906,7 +903,6 @@ def editar_pagamento_servico_prioridade(pagamento_id):
 
 # --- ROTAS DE ORÇAMENTO (MODIFICADAS PARA ANEXOS) ---
 
-# <--- MUDANÇA: Rota modificada para aceitar multipart/form-data
 @app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_orcamento(obra_id):
@@ -917,7 +913,6 @@ def add_orcamento(obra_id):
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
-        # Dados do formulário
         dados = request.form
         
         novo_orcamento = Orcamento(
@@ -932,9 +927,8 @@ def add_orcamento(obra_id):
             servico_id=int(dados['servico_id']) if dados.get('servico_id') else None
         )
         db.session.add(novo_orcamento)
-        db.session.commit() # Commit para obter o ID do novo_orcamento
+        db.session.commit() 
 
-        # Processar anexos
         files = request.files.getlist('anexos')
         for file in files:
             if file and file.filename:
@@ -946,7 +940,7 @@ def add_orcamento(obra_id):
                 )
                 db.session.add(novo_anexo)
         
-        db.session.commit() # Commit final com os anexos
+        db.session.commit() 
         
         return jsonify(novo_orcamento.to_dict()), 201
         
@@ -956,7 +950,6 @@ def add_orcamento(obra_id):
         print(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: Rota modificada para aceitar multipart/form-data
 @app.route('/orcamentos/<int:orcamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def editar_orcamento(orcamento_id):
@@ -972,7 +965,6 @@ def editar_orcamento(orcamento_id):
         if orcamento.status != 'Pendente':
             return jsonify({"erro": "Não é possível editar um orçamento que já foi processado."}), 400
 
-        # Dados do formulário
         dados = request.form
         
         orcamento.descricao = dados.get('descricao', orcamento.descricao)
@@ -1009,10 +1001,8 @@ def aprovar_orcamento(orcamento_id):
         if orcamento.status != 'Pendente':
             return jsonify({"erro": "Este orçamento já foi processado."}), 400
 
-        # 1. Mudar status do orçamento
         orcamento.status = 'Aprovado'
         
-        # 2. Criar o novo Lançamento (Pendência)
         desc_lancamento = f"{orcamento.descricao}"
         
         novo_lancamento = Lancamento(
@@ -1020,19 +1010,16 @@ def aprovar_orcamento(orcamento_id):
             tipo=orcamento.tipo,
             descricao=desc_lancamento,
             valor=orcamento.valor,
-            data=datetime.date.today(), # Data da aprovação
+            data=datetime.date.today(), 
             status='A Pagar',
             pix=orcamento.dados_pagamento,
-            prioridade=0, # Padrão 0, pode ser editado depois
+            prioridade=0,
             fornecedor=orcamento.fornecedor, 
-            servico_id=orcamento.servico_id # Mantém o vínculo se já existia
+            servico_id=orcamento.servico_id
         )
         
         db.session.add(novo_lancamento)
         db.session.commit()
-        
-        # NOTA: Anexos NÃO são movidos para o lançamento automaticamente.
-        # Eles permanecem no orçamento "Aprovado" para histórico.
         
         return jsonify({"sucesso": "Orçamento aprovado e movido para pendências", "lancamento": novo_lancamento.to_dict()}), 200
         
@@ -1058,15 +1045,13 @@ def converter_orcamento_para_servico(orcamento_id):
             return jsonify({"erro": "Este orçamento já foi processado."}), 400
             
         dados = request.json
-        destino_valor = dados.get('destino_valor') # 'orcamento_mo' (B1) ou 'pagamento_vinculado' (B2)
+        destino_valor = dados.get('destino_valor') 
         
         if destino_valor not in ['orcamento_mo', 'pagamento_vinculado']:
             return jsonify({"erro": "Destino do valor inválido."}), 400
 
-        # 1. Mudar status do orçamento
         orcamento.status = 'Aprovado'
         
-        # 2. Criar o NOVO Serviço
         novo_servico = Servico(
             obra_id=orcamento.obra_id,
             nome=orcamento.descricao,
@@ -1076,9 +1061,7 @@ def converter_orcamento_para_servico(orcamento_id):
             valor_global_material=0.0
         )
         
-        # 3. Lógica B1 vs B2
         if destino_valor == 'orcamento_mo':
-            # Opção B1: Valor vira Orçamento de Mão de Obra ou Material
             if orcamento.tipo == 'Mão de Obra':
                 novo_servico.valor_global_mao_de_obra = orcamento.valor
             else:
@@ -1088,10 +1071,9 @@ def converter_orcamento_para_servico(orcamento_id):
             db.session.commit()
             return jsonify({"sucesso": "Orçamento aprovado e novo serviço criado", "servico": novo_servico.to_dict()}), 200
 
-        else: # destino_valor == 'pagamento_vinculado'
-            # Opção B2: Valor vira uma Pendência vinculada ao novo serviço
+        else: 
             db.session.add(novo_servico)
-            db.session.commit() # Commit para obter o novo_servico.id
+            db.session.commit() 
 
             novo_lancamento = Lancamento(
                 obra_id=orcamento.obra_id,
@@ -1103,7 +1085,7 @@ def converter_orcamento_para_servico(orcamento_id):
                 pix=orcamento.dados_pagamento,
                 prioridade=0,
                 fornecedor=orcamento.fornecedor, 
-                servico_id=novo_servico.id # Vínculo com o serviço recém-criado
+                servico_id=novo_servico.id
             )
             db.session.add(novo_lancamento)
             db.session.commit()
@@ -1127,7 +1109,7 @@ def rejeitar_orcamento(orcamento_id):
         if not user_has_access_to_obra(user, orcamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
-        db.session.delete(orcamento) # A cascata deletará os AnexoOrcamento
+        db.session.delete(orcamento) 
         db.session.commit()
         
         return jsonify({"sucesso": "Orçamento rejeitado/deletado com sucesso"}), 200
@@ -1198,10 +1180,8 @@ def add_anexos_orcamento(orcamento_id):
 def get_anexo_data(anexo_id):
     """Serve o arquivo de anexo (para abrir no navegador)"""
     
-    # <--- MUDANÇA: Adicionado para lidar com o preflight (CORS) -->
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    # <--- FIM DA MUDANÇA -->
 
     print(f"--- [LOG] Rota /anexos/{anexo_id} (GET) acessada ---")
     try:
@@ -1215,7 +1195,7 @@ def get_anexo_data(anexo_id):
         return send_file(
             io.BytesIO(anexo.data),
             mimetype=anexo.mimetype,
-            as_attachment=False, # Abre 'inline' no navegador
+            as_attachment=False, 
             download_name=anexo.filename 
         )
         
@@ -1292,10 +1272,8 @@ def export_pdf_pendentes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # 1. Lançamentos a pagar
         lancamentos_apagar = Lancamento.query.filter_by(obra_id=obra.id, status='A Pagar').all()
         
-        # 2. Pagamentos de Serviços a pagar
         pagamentos_servico_apagar = PagamentoServico.query.join(Servico).filter(
             Servico.obra_id == obra.id,
             PagamentoServico.status == 'A Pagar'
@@ -1321,7 +1299,6 @@ def export_pdf_pendentes(obra_id):
                 "prioridade": pag.prioridade 
             })
             
-        # Ordenação atualizada por prioridade (maior primeiro), depois data (mais antiga primeiro)
         items.sort(key=lambda x: (-x.get('prioridade', 0), x['data'] if x['data'] else datetime.date(1900, 1, 1)))
 
         buffer = io.BytesIO()
@@ -1357,14 +1334,14 @@ def export_pdf_pendentes(obra_id):
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'), ('FONTSIZE', (0, 0), (-1, 0), 11),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12), ('TOPPADDING', (0, 0), (-1, 0), 12),
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white), ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                ('ALIGN', (0, 1), (-1, -1), 'LEFT'), ('ALIGN', (4, 1), (4, -1), 'RIGHT'), # Alinhado Valor
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'), ('ALIGN', (4, 1), (4, -1), 'RIGHT'),
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'), ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
                 ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#dc3545')),
                 ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'), ('FONTSIZE', (0, -1), (-1, -1), 11),
-                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # Alinhamento da linha de total
+                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), 
             ]))
             elements.append(table)
         
@@ -1408,17 +1385,14 @@ def export_pdf_pendentes_todas_obras():
         if not user:
             return jsonify({"erro": "Usuário não encontrado"}), 404
         
-        # Captura o filtro da URL
         prioridade_filtro = request.args.get('prioridade')
         print(f"--- [LOG] Filtro de prioridade recebido: {prioridade_filtro} ---")
         
-        # Define o título do PDF
         titulo_relatorio = "<b>Relatório de Pagamentos Pendentes - Todas as Obras</b>"
         if prioridade_filtro and prioridade_filtro != 'todas':
             titulo_relatorio = f"<b>Relatório de Pendências (Prioridade {prioridade_filtro}) - Todas as Obras</b>"
         
         
-        # 1. Buscar obras que o usuário tem acesso
         if user.role == 'administrador':
             obras = Obra.query.order_by(Obra.nome).all()
         else:
@@ -1427,42 +1401,33 @@ def export_pdf_pendentes_todas_obras():
         if not obras:
             return jsonify({"erro": "Nenhuma obra encontrada"}), 404
         
-        # 2. Para cada obra, buscar pendências
         obras_com_pendencias = []
         total_geral_pendente = 0.0
         
         for obra in obras:
-            # Queries agora são dinâmicas
-            
-            # Query base de Lançamentos
             lancamentos_query = Lancamento.query.filter_by(
                 obra_id=obra.id, 
                 status='A Pagar'
             )
             
-            # Query base de Pagamentos de Serviço
             pagamentos_query = PagamentoServico.query.join(Servico).filter(
                 Servico.obra_id == obra.id,
                 PagamentoServico.status == 'A Pagar'
             )
 
-            # Aplica o filtro de prioridade se ele existir e não for "todas"
             if prioridade_filtro and prioridade_filtro != 'todas':
                 try:
                     p_int = int(prioridade_filtro)
                     lancamentos_query = lancamentos_query.filter_by(prioridade=p_int)
                     pagamentos_query = pagamentos_query.filter_by(prioridade=p_int)
                 except ValueError:
-                    # Ignora o filtro se não for um número válido
                     pass 
             
-            # Executa as queries
             lancamentos_apagar = lancamentos_query.all()
             pagamentos_servico_apagar = pagamentos_query.all()
             
             items = []
             
-            # Adicionar lançamentos
             for lanc in lancamentos_apagar:
                 desc = lanc.descricao
                 if lanc.servico:
@@ -1476,7 +1441,6 @@ def export_pdf_pendentes_todas_obras():
                     "prioridade": lanc.prioridade 
                 })
             
-            # Adicionar pagamentos de serviço
             for pag in pagamentos_servico_apagar:
                 desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
                 items.append({
@@ -1488,9 +1452,7 @@ def export_pdf_pendentes_todas_obras():
                     "prioridade": pag.prioridade
                 })
             
-            # Se tem pendências, adicionar na lista
             if items:
-                # Ordenação atualizada
                 items.sort(key=lambda x: (-x.get('prioridade', 0), x['data'] if x['data'] else datetime.date(1900, 1, 1)))
                 total_obra = sum(item['valor'] for item in items)
                 total_geral_pendente += total_obra
@@ -1501,7 +1463,6 @@ def export_pdf_pendentes_todas_obras():
                     "total": total_obra
                 })
         
-        # 3. Gerar PDF
         if not obras_com_pendencias:
             return jsonify({"mensagem": "Nenhuma pendência encontrada para este filtro"}), 200
         
@@ -1517,19 +1478,16 @@ def export_pdf_pendentes_todas_obras():
         elements = []
         styles = getSampleStyleSheet()
         
-        # Título principal usa a variável
         title_text = f"{titulo_relatorio}<br/><br/>Total de Obras com Pendências: {len(obras_com_pendencias)}"
         title = Paragraph(title_text, styles['Title'])
         elements.append(title)
         elements.append(Spacer(1, 0.8*cm))
         
-        # Para cada obra com pendências
         for idx, obra_data in enumerate(obras_com_pendencias):
             obra = obra_data['obra']
             items = obra_data['items']
             total_obra = obra_data['total']
             
-            # Cabeçalho da obra
             obra_header = f"<b>Obra: {obra.nome}</b>"
             if obra.cliente:
                 obra_header += f" | Cliente: {obra.cliente}"
@@ -1538,8 +1496,6 @@ def export_pdf_pendentes_todas_obras():
             elements.append(Paragraph(obra_header, styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
-            # Tabela de pendências da obra
-            # Cabeçalho da tabela atualizado
             data = [['Prior.', 'Data', 'Tipo', 'Descrição', 'Valor', 'PIX']]
             
             for item in items:
@@ -1554,10 +1510,8 @@ def export_pdf_pendentes_todas_obras():
             
             data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra)])
             
-            # ColWidths atualizado
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
             table.setStyle(TableStyle([
-                # Cabeçalho
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
@@ -1565,42 +1519,34 @@ def export_pdf_pendentes_todas_obras():
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
                 ('TOPPADDING', (0, 0), (-1, 0), 10),
-                
-                # Corpo
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white),
                 ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
                 ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-                ('ALIGN', (4, 1), (4, -1), 'RIGHT'), # Alinhado Valor
+                ('ALIGN', (4, 1), (4, -1), 'RIGHT'), 
                 ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
-                
-                # Linha de subtotal
                 ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#10b981')),
                 ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, -1), (-1, -1), 10),
-                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), # Alinhamento da linha de total
+                ('ALIGN', (3, -1), (4, -1), 'RIGHT'), 
             ]))
             elements.append(table)
             
-            # Separador entre obras (não adicionar após a última)
             if idx < len(obras_com_pendencias) - 1:
                 elements.append(Spacer(1, 0.8*cm))
         
-        # Total geral
         elements.append(Spacer(1, 1*cm))
         total_geral_text = f"<b>TOTAL GERAL A PAGAR: {formatar_real(total_geral_pendente)}</b>"
         total_geral_para = Paragraph(total_geral_text, styles['Heading1'])
         elements.append(total_geral_para)
         
-        # Data de geração
         elements.append(Spacer(1, 0.5*cm))
         data_geracao = f"Gerado em: {datetime.datetime.now().strftime('%d/%m/%Y às %H:%M')}"
         elements.append(Paragraph(data_geracao, styles['Normal']))
         
-        # Gerar PDF
         doc.build(elements)
         buffer.seek(0)
         pdf_data = buffer.read()
