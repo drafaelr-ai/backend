@@ -1781,6 +1781,40 @@ def set_user_permissions(user_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+    # --- NOVA ROTA PARA DELETAR USUÁRIO ---
+@app.route('/admin/users/<int:user_id>', methods=['DELETE', 'OPTIONS'])
+@check_permission(roles=['administrador'])
+def delete_user(user_id):
+    if request.method == 'OPTIONS': 
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+
+    print(f"--- [LOG] Rota /admin/users/{user_id} (DELETE) acessada ---")
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        # Check de segurança 1: Não se pode deletar a si mesmo
+        if user_id == current_user_id:
+            return jsonify({"erro": "Você não pode excluir a si mesmo."}), 403
+
+        user = User.query.get_or_404(user_id)
+        
+        # Check de segurança 2: Não se pode deletar outro administrador
+        if user.role == 'administrador':
+            return jsonify({"erro": "Não é possível excluir outro administrador."}), 403
+
+        # Se passou nos checks, deleta o usuário
+        db.session.delete(user)
+        db.session.commit()
+        
+        print(f"--- [LOG] Usuário '{user.username}' (ID: {user_id}) foi deletado ---")
+        return jsonify({"sucesso": f"Usuário {user.username} deletado com sucesso."}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /admin/users/{user_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DA NOVA ROTA ---
 # ---------------------------------------------------
 
 if __name__ == '__main__':
