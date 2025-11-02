@@ -22,7 +22,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO com KPI Total Corrigido v2) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO com Novos KPIs v3) ---")
 
 app = Flask(__name__)
 
@@ -373,13 +373,13 @@ def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
-# <--- MUDANÇA: Lógica de KPI CORRIGIDA para 'Restante (Orçamento)' -->
+# <--- MUDANÇA: Lógica de KPI CORRIGIDA para 'Residual' -->
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print("--- [LOG] Rota /obras (GET) acessada (KPI Total Corrigido) ---")
+    print("--- [LOG] Rota /obras (GET) acessada (KPI Residual Corrigido) ---")
     try:
         user = get_current_user() 
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -443,15 +443,15 @@ def get_obras():
             # Total_Pago = (Lançamentos Pagos) + (Pagamentos de Serviço Pagos)
             total_pago = float(lanc_pago) + float(pag_pago)
             
-            # <--- CORREÇÃO: "total_a_pagar" (Red Box) agora é o Orçamento Total
-            # O frontend vai exibir total_pago (Verde) e total_a_pagar (Vermelho)
+            # <--- CORREÇÃO: "total_a_pagar" (Red Box) agora é o Residual
+            total_residual = total_projeto_previsto - total_pago
             
             resultados.append({
                 "id": obra.id,
                 "nome": obra.nome,
                 "cliente": obra.cliente,
                 "total_pago": total_pago, 
-                "total_a_pagar": total_projeto_previsto # <-- MUDANÇA AQUI
+                "total_a_pagar": total_residual # <-- MUDANÇA AQUI (Envia 'Residual' no lugar)
             })
         
         return jsonify(resultados)
@@ -486,7 +486,7 @@ def add_obra():
 def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (KPI Total Corrigido) ---")
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Novos KPIs v3) ---")
     
     try:
         from sqlalchemy.orm import joinedload
@@ -525,23 +525,22 @@ def get_obra_detalhes(obra_id):
         total_budget_mo = float(servico_budget_sum.total_budget_mo or 0.0)
         total_budget_mat = float(servico_budget_sum.total_budget_mat or 0.0)
 
-        # 4. Cálculo dos KPIs Finais
-        
-        # Green Box (Total Pago)
-        kpi_total_pago = total_lancamentos_pago + total_servicos_pago
-        
-        # Total "A Pagar" (Apenas de itens Lançados)
-        kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
-        
-        # Blue Box (Total Comprometido = Lançado)
-        kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
+        # 4. Cálculo dos KPIs Finais (De acordo com a nova solicitação)
         
         # Orçamento Total (Ground Truth)
-        kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_budget_mat
+        kpi_orcamento_total = total_lancamentos_geral + total_budget_mo + total_budget_mat
         
-        # Red Box (Orçamento Total)
-        # <--- CORREÇÃO: O KPI "Restante" (Vermelho) agora é o ORÇAMENTO TOTAL
-        kpi_total_em_aberto_orcamento = kpi_total_previsto
+        # Card 1: "Valor Total de Obra" (Total Comprometido)
+        kpi_total_comprometido = total_lancamentos_pago + total_lancamentos_apagar + total_servicos_pago + total_servicos_apagar
+        
+        # Card 2: "Valores Pagos"
+        kpi_total_pago = total_lancamentos_pago + total_servicos_pago
+        
+        # Card 3: "Residual" (Orçamento Total - Total Pago)
+        kpi_residual = kpi_orcamento_total - kpi_total_pago
+        
+        # Card 4: "Valor Liberado para Pagamento" (Resto a Pagar)
+        kpi_liberado_pagamento = kpi_total_comprometido - kpi_total_pago
         
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
@@ -553,10 +552,14 @@ def get_obra_detalhes(obra_id):
             Lancamento.servico_id.is_(None)
         ).group_by(Lancamento.tipo).all()
         
+        # <--- MUDANÇA: Enviando os 4 KPIs corretos -->
         sumarios_dict = {
-            "total_geral": kpi_total_geral_comprometido,       # AZUL (Total Lançado)
-            "total_pago": kpi_total_pago,                    # VERDE (Total Pago)
-            "total_em_aberto_orcamento": kpi_total_em_aberto_orcamento, # VERMELHO (Orçamento Total)
+            "valor_total_obra": kpi_total_comprometido,     # Card 1 (Azul)
+            "valores_pagos": kpi_total_pago,               # Card 2 (Verde)
+            "residual": kpi_residual,                      # Card 3 (Novo Card - Amarelo/Laranja)
+            "liberado_pagamento": kpi_liberado_pagamento,  # Card 4 (Azul Claro)
+            
+            # Mantendo este para o Gráfico (que está correto)
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
         }
         
@@ -1781,7 +1784,8 @@ def set_user_permissions(user_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
-    # --- NOVA ROTA PARA DELETAR USUÁRIO ---
+
+# --- NOVA ROTA PARA DELETAR USUÁRIO ---
 @app.route('/admin/users/<int:user_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def delete_user(user_id):
@@ -1792,17 +1796,14 @@ def delete_user(user_id):
     try:
         current_user_id = int(get_jwt_identity())
         
-        # Check de segurança 1: Não se pode deletar a si mesmo
         if user_id == current_user_id:
             return jsonify({"erro": "Você não pode excluir a si mesmo."}), 403
 
         user = User.query.get_or_404(user_id)
         
-        # Check de segurança 2: Não se pode deletar outro administrador
         if user.role == 'administrador':
             return jsonify({"erro": "Não é possível excluir outro administrador."}), 403
 
-        # Se passou nos checks, deleta o usuário
         db.session.delete(user)
         db.session.commit()
         
