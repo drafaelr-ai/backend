@@ -496,27 +496,37 @@ def get_obra_detalhes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # --- Lógica de KPIs (CORRIGIDA) ---
+        # --- Lógica de KPIs (VERSÃO NOVA - 04/11/2024) ---
+        # Baseada em STATUS (Pago vs A Pagar)
         
-        # 1. Lançamentos (Total, Pago, A Pagar)
-        sumarios_lancamentos = db.session.query(
-            func.sum(Lancamento.valor_total).label('total_geral'),
-            func.sum(Lancamento.valor_pago).label('total_pago'),
-            func.sum(Lancamento.valor_total - Lancamento.valor_pago).label('total_a_pagar')
+        # KPI 1: TOTAL DA OBRA (Todos os lançamentos cadastrados)
+        # Soma TODOS os lançamentos, independente de status
+        # NÃO inclui orçamentos de serviços
+        total_obra_query = db.session.query(
+            func.sum(Lancamento.valor_total).label('total_obra')
         ).filter(Lancamento.obra_id == obra_id).first()
-        total_lancamentos_geral = float(sumarios_lancamentos.total_geral or 0.0)
-        total_lancamentos_pago = float(sumarios_lancamentos.total_pago or 0.0)
-        total_lancamentos_apagar = float(sumarios_lancamentos.total_a_pagar or 0.0)
-
-        # 2. Pagamentos de Serviço (Pago, A Pagar)
-        sumarios_servicos = db.session.query(
-            func.sum(PagamentoServico.valor_pago).label('total_pago'),
-            func.sum(PagamentoServico.valor_total - PagamentoServico.valor_pago).label('total_a_pagar')
-        ).join(Servico).filter(Servico.obra_id == obra_id).first()
-        total_servicos_pago = float(sumarios_servicos.total_pago or 0.0)
-        total_servicos_apagar = float(sumarios_servicos.total_a_pagar or 0.0)
-
-        # 3. Orçamento de Mão de Obra E Material (Total)
+        kpi_total_obra = float(total_obra_query.total_obra or 0.0)
+        
+        # KPI 2: VALORES PAGOS
+        # Lançamentos com status='Pago' + Pagamentos de Serviço com status='Pago'
+        lancamentos_pagos = db.session.query(
+            func.sum(Lancamento.valor_total).label('total_pago')
+        ).filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.status == 'Pago'
+        ).first()
+        
+        pagamentos_servico_pagos = db.session.query(
+            func.sum(PagamentoServico.valor_total).label('total_pago')
+        ).join(Servico).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.status == 'Pago'
+        ).first()
+        
+        kpi_valores_pagos = float(lancamentos_pagos.total_pago or 0.0) + float(pagamentos_servico_pagos.total_pago or 0.0)
+        
+        # Para cálculo do RESIDUAL, precisamos do orçamento total
+        # Orçamento = Total Lançamentos + Orçamento MO + Orçamento Material
         servico_budget_sum = db.session.query(
             func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo'),
             func.sum(Servico.valor_global_material).label('total_budget_mat')
@@ -524,23 +534,30 @@ def get_obra_detalhes(obra_id):
         
         total_budget_mo = float(servico_budget_sum.total_budget_mo or 0.0)
         total_budget_mat = float(servico_budget_sum.total_budget_mat or 0.0)
-
-        # 4. Cálculo dos KPIs Finais (De acordo com a nova solicitação)
         
-        # Orçamento Total (Ground Truth)
-        kpi_orcamento_total = total_lancamentos_geral + total_budget_mo + total_budget_mat
+        # KPI 3: RESIDUAL (Orçamento - Pago)
+        kpi_orcamento_total = kpi_total_obra + total_budget_mo + total_budget_mat
+        kpi_residual = kpi_orcamento_total - kpi_valores_pagos
         
-        # Card 1: "Valor Total de Obra" (Total Comprometido)
-        kpi_total_comprometido = total_lancamentos_pago + total_lancamentos_apagar + total_servicos_pago + total_servicos_apagar
+        # KPI 4: LIBERADO PARA PAGAMENTO (Fila de Pagamento)
+        # Lançamentos com status='A Pagar' que NÃO estão vinculados a serviço
+        lancamentos_a_pagar = db.session.query(
+            func.sum(Lancamento.valor_total).label('total_a_pagar')
+        ).filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.status == 'A Pagar',
+            Lancamento.servico_id.is_(None)  # Não vinculados a serviço
+        ).first()
         
-        # Card 2: "Valores Pagos"
-        kpi_total_pago = total_lancamentos_pago + total_servicos_pago
+        # Pagamentos de Serviço com status='A Pagar'
+        pagamentos_servico_a_pagar = db.session.query(
+            func.sum(PagamentoServico.valor_total).label('total_a_pagar')
+        ).join(Servico).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.status == 'A Pagar'
+        ).first()
         
-        # Card 3: "Residual" (Orçamento Total - Total Pago)
-        kpi_residual = kpi_orcamento_total - kpi_total_pago
-        
-        # Card 4: "Valor Liberado para Pagamento" (Resto a Pagar)
-        kpi_liberado_pagamento = kpi_total_comprometido - kpi_total_pago
+        kpi_liberado_pagamento = float(lancamentos_a_pagar.total_a_pagar or 0.0) + float(pagamentos_servico_a_pagar.total_a_pagar or 0.0)
         
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
@@ -552,14 +569,14 @@ def get_obra_detalhes(obra_id):
             Lancamento.servico_id.is_(None)
         ).group_by(Lancamento.tipo).all()
         
-        # <--- MUDANÇA: Enviando os 4 KPIs corretos -->
+        # <--- Enviando os 4 KPIs corretos (ATUALIZADO) -->
         sumarios_dict = {
-            "valor_total_obra": kpi_total_comprometido,     # Card 1 (Azul)
-            "valores_pagos": kpi_total_pago,               # Card 2 (Verde)
-            "residual": kpi_residual,                      # Card 3 (Novo Card - Amarelo/Laranja)
-            "liberado_pagamento": kpi_liberado_pagamento,  # Card 4 (Azul Claro)
+            "valor_total_obra": kpi_total_obra,            # Card 1 - Total Lançado (Vermelho)
+            "valores_pagos": kpi_valores_pagos,            # Card 2 - Valores Pagos (Verde)
+            "residual": kpi_residual,                      # Card 3 - Residual (Laranja)
+            "liberado_pagamento": kpi_liberado_pagamento,  # Card 4 - Fila de Pagamento (Azul)
             
-            # Mantendo este para o Gráfico (que está correto)
+            # Mantendo este para o Gráfico
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
         }
         
