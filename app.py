@@ -22,7 +22,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO com Pagamentos Parciais) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO com KPI Total Corrigido) ---")
 
 app = Flask(__name__)
 
@@ -115,10 +115,8 @@ class Lancamento(db.Model):
     tipo = db.Column(db.String(50), nullable=False)
     descricao = db.Column(db.String(255), nullable=False)
     
-    # <--- MUDANÇA: Pagamento Parcial
     valor_total = db.Column(db.Float, nullable=False)
     valor_pago = db.Column(db.Float, nullable=False, default=0.0)
-    # <--- FIM MUDANÇA
     
     data = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
@@ -133,8 +131,8 @@ class Lancamento(db.Model):
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
             "descricao": self.descricao, 
-            "valor_total": self.valor_total, # <--- MUDANÇA
-            "valor_pago": self.valor_pago, # <--- MUDANÇA
+            "valor_total": self.valor_total, 
+            "valor_pago": self.valor_pago, 
             "data": self.data.isoformat(),
             "status": self.status, "pix": self.pix,
             "prioridade": self.prioridade, 
@@ -171,10 +169,8 @@ class PagamentoServico(db.Model):
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
     
-    # <--- MUDANÇA: Pagamento Parcial
     valor_total = db.Column(db.Float, nullable=False)
     valor_pago = db.Column(db.Float, nullable=False, default=0.0)
-    # <--- FIM MUDANÇA
     
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False)
@@ -184,8 +180,8 @@ class PagamentoServico(db.Model):
     def to_dict(self):
         return {
             "id": self.id, "data": self.data.isoformat(),
-            "valor_total": self.valor_total, # <--- MUDANÇA
-            "valor_pago": self.valor_pago, # <--- MUDANÇA
+            "valor_total": self.valor_total, 
+            "valor_pago": self.valor_pago, 
             "status": self.status,
             "tipo_pagamento": self.tipo_pagamento,
             "prioridade": self.prioridade,
@@ -200,7 +196,7 @@ class Orcamento(db.Model):
     
     descricao = db.Column(db.String(255), nullable=False)
     fornecedor = db.Column(db.String(150), nullable=True)
-    valor = db.Column(db.Float, nullable=False) # Valor do orçamento permanece 'valor'
+    valor = db.Column(db.Float, nullable=False)
     dados_pagamento = db.Column(db.String(150), nullable=True)
     tipo = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pendente') 
@@ -244,7 +240,6 @@ class AnexoOrcamento(db.Model):
             "mimetype": self.mimetype
         }
 
-# Modelo para Notas Fiscais (próximo passo)
 class NotaFiscal(db.Model):
     __tablename__ = 'nota_fiscal'
     id = db.Column(db.Integer, primary_key=True)
@@ -378,13 +373,12 @@ def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
-# <--- MUDANÇA: Lógica de KPI atualizada para Pagamento Parcial -->
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print("--- [LOG] Rota /obras (GET) acessada (KPIs com Pag. Parcial) ---")
+    print("--- [LOG] Rota /obras (GET) acessada (KPI Total Corrigido) ---")
     try:
         user = get_current_user() 
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -392,8 +386,8 @@ def get_obras():
         # 1. Lançamentos (Custo total e Custo pago)
         lancamentos_sum = db.session.query(
             Lancamento.obra_id,
-            func.sum(Lancamento.valor_total).label('total_geral_lanc'), # <-- MUDANÇA
-            func.sum(Lancamento.valor_pago).label('total_pago_lanc') # <-- MUDANÇA
+            func.sum(Lancamento.valor_total).label('total_geral_lanc'),
+            func.sum(Lancamento.valor_pago).label('total_pago_lanc')
         ).group_by(Lancamento.obra_id).subquery()
 
         # 2. Orçamento de Mão de Obra E Material (Custo total)
@@ -406,8 +400,9 @@ def get_obras():
         # 3. Pagamentos de Serviço (Custo pago e Custo de material)
         pagamentos_sum = db.session.query(
             Servico.obra_id,
-            func.sum(PagamentoServico.valor_pago).label('total_pago_pag'), # <-- MUDANÇA
-            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_geral_material_pag') # <-- MUDANÇA
+            func.sum(PagamentoServico.valor_pago).label('total_pago_pag'),
+            # <--- CORREÇÃO: Não precisamos mais somar 'pag_material_geral' ao ORÇAMENTO
+            # func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_geral_material_pag')
         ).select_from(PagamentoServico) \
          .join(Servico, PagamentoServico.servico_id == Servico.id) \
          .group_by(Servico.obra_id) \
@@ -420,8 +415,8 @@ def get_obras():
             func.coalesce(lancamentos_sum.c.total_pago_lanc, 0).label('lanc_pago'),
             func.coalesce(servico_budget_sum.c.total_budget_mo, 0).label('serv_budget_mo'),
             func.coalesce(servico_budget_sum.c.total_budget_mat, 0).label('serv_budget_mat'),
-            func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago'),
-            func.coalesce(pagamentos_sum.c.total_geral_material_pag, 0).label('pag_material_geral')
+            func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago')
+            # <--- CORREÇÃO: Removido 'pag_material_geral' da query
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
@@ -442,10 +437,11 @@ def get_obras():
 
         # 6. Formata a Saída (Lógica de Orçamento Restante)
         resultados = []
-        for obra, lanc_geral, lanc_pago, serv_budget_mo, serv_budget_mat, pag_pago, pag_material_geral in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, serv_budget_mo, serv_budget_mat, pag_pago in obras_com_totais:
             
             # Custo Total Previsto (Orçamento)
-            total_projeto_previsto = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + float(pag_material_geral)
+            # <--- CORREÇÃO: Fórmula do Orçamento Total (sem pag_material_geral)
+            total_projeto_previsto = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
             
             # Total_Pago = (Lançamentos Pagos) + (Pagamentos de Serviço Pagos)
             total_pago = float(lanc_pago) + float(pag_pago)
@@ -488,13 +484,12 @@ def add_obra():
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- ROTA /obras/<id> (Dashboard Interno) ---
-# <--- MUDANÇA: Lógica de KPI atualizada para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (KPI com Pag. Parcial) ---")
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (KPI Total Corrigido) ---")
     
     try:
         from sqlalchemy.orm import joinedload
@@ -508,23 +503,24 @@ def get_obra_detalhes(obra_id):
         
         # 1. Lançamentos (Total, Pago, A Pagar)
         sumarios_lancamentos = db.session.query(
-            func.sum(Lancamento.valor_total).label('total_geral'), # <-- MUDANÇA
-            func.sum(Lancamento.valor_pago).label('total_pago'), # <-- MUDANÇA
-            func.sum(Lancamento.valor_total - Lancamento.valor_pago).label('total_a_pagar') # <-- MUDANÇA
+            func.sum(Lancamento.valor_total).label('total_geral'),
+            func.sum(Lancamento.valor_pago).label('total_pago'),
+            func.sum(Lancamento.valor_total - Lancamento.valor_pago).label('total_a_pagar')
         ).filter(Lancamento.obra_id == obra_id).first()
         total_lancamentos_geral = float(sumarios_lancamentos.total_geral or 0.0)
         total_lancamentos_pago = float(sumarios_lancamentos.total_pago or 0.0)
         total_lancamentos_apagar = float(sumarios_lancamentos.total_a_pagar or 0.0)
 
-        # 2. Pagamentos de Serviço (Pago, A Pagar, e Total de Material)
+        # 2. Pagamentos de Serviço (Pago, A Pagar)
+        # <--- CORREÇÃO: Removido 'total_material_geral' da query -->
         sumarios_servicos = db.session.query(
-            func.sum(PagamentoServico.valor_pago).label('total_pago'), # <-- MUDANÇA
-            func.sum(PagamentoServico.valor_total - PagamentoServico.valor_pago).label('total_a_pagar'), # <-- MUDANÇA
-            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_material_geral') # <-- MUDANÇA
+            func.sum(PagamentoServico.valor_pago).label('total_pago'),
+            func.sum(PagamentoServico.valor_total - PagamentoServico.valor_pago).label('total_a_pagar'),
+            # func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_material_geral')
         ).join(Servico).filter(Servico.obra_id == obra_id).first()
         total_servicos_pago = float(sumarios_servicos.total_pago or 0.0)
         total_servicos_apagar = float(sumarios_servicos.total_a_pagar or 0.0)
-        total_servicos_material_geral = float(sumarios_servicos.total_material_geral or 0.0)
+        # total_servicos_material_geral = float(sumarios_servicos.total_material_geral or 0.0) # <-- CORREÇÃO: Linha removida
 
         # 3. Orçamento de Mão de Obra E Material (Total)
         servico_budget_sum = db.session.query(
@@ -536,12 +532,14 @@ def get_obra_detalhes(obra_id):
         total_budget_mat = float(servico_budget_sum.total_budget_mat or 0.0)
 
         # 4. Cálculo dos KPIs Finais
+        
         kpi_total_pago = total_lancamentos_pago + total_servicos_pago
         kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
         kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
         
         # Custo Total Previsto (Orçamento)
-        kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_budget_mat + total_servicos_material_geral
+        # <--- CORREÇÃO: Fórmula do Orçamento Total (sem total_servicos_material_geral)
+        kpi_total_previsto = total_lancamentos_geral + total_budget_mo + total_budget_mat
         
         # KPI VERMELHO: Restante do Orçamento (Total em Aberto)
         kpi_total_em_aberto_orcamento = kpi_total_previsto - kpi_total_pago
@@ -549,7 +547,7 @@ def get_obra_detalhes(obra_id):
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
             Lancamento.tipo,
-            func.sum(Lancamento.valor_total) # <-- MUDANÇA
+            func.sum(Lancamento.valor_total)
         ).filter(
             Lancamento.obra_id == obra_id, 
             Lancamento.servico_id.is_(None)
@@ -577,8 +575,8 @@ def get_obra_detalhes(obra_id):
             historico_unificado.append({
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
                 "descricao": descricao, "tipo": lanc.tipo, 
-                "valor_total": float(lanc.valor_total or 0.0), # <-- MUDANÇA
-                "valor_pago": float(lanc.valor_pago or 0.0), # <-- MUDANÇA
+                "valor_total": float(lanc.valor_total or 0.0), 
+                "valor_pago": float(lanc.valor_pago or 0.0), 
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
                 "prioridade": lanc.prioridade,
                 "fornecedor": lanc.fornecedor 
@@ -590,8 +588,8 @@ def get_obra_detalhes(obra_id):
                 historico_unificado.append({
                     "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data,
                     "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", 
-                    "valor_total": float(pag.valor_total or 0.0), # <-- MUDANÇA
-                    "valor_pago": float(pag.valor_pago or 0.0), # <-- MUDANÇA
+                    "valor_total": float(pag.valor_total or 0.0), 
+                    "valor_pago": float(pag.valor_pago or 0.0), 
                     "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
                     "pagamento_id": pag.id,
                     "prioridade": pag.prioridade,
@@ -608,11 +606,11 @@ def get_obra_detalhes(obra_id):
         for s in obra.servicos:
             serv_dict = s.to_dict()
             gastos_vinculados_mo = sum(
-                float(l.valor_total or 0.0) for l in todos_lancamentos # <-- MUDANÇA
+                float(l.valor_total or 0.0) for l in todos_lancamentos
                 if l.servico_id == s.id and l.tipo == 'Mão de Obra'
             )
             gastos_vinculados_mat = sum(
-                float(l.valor_total or 0.0) for l in todos_lancamentos # <-- MUDANÇA
+                float(l.valor_total or 0.0) for l in todos_lancamentos 
                 if l.servico_id == s.id and l.tipo == 'Material'
             )
             serv_dict['total_gastos_vinculados_mo'] = gastos_vinculados_mo
@@ -660,10 +658,10 @@ def deletar_obra(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- Rotas de Lançamento (Geral) ---
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>/lancamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_lancamento(obra_id):
+    # ... (código atualizado para valor_total/valor_pago) ...
     print("--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
     try:
         user = get_current_user()
@@ -679,8 +677,8 @@ def add_lancamento(obra_id):
             obra_id=obra_id, 
             tipo=dados['tipo'], 
             descricao=dados['descricao'],
-            valor_total=valor_total, # <--- MUDANÇA
-            valor_pago=valor_pago, # <--- MUDANÇA
+            valor_total=valor_total,
+            valor_pago=valor_pago,
             data=datetime.date.fromisoformat(dados['data']),
             status=status, 
             pix=dados.get('pix'),
@@ -697,10 +695,10 @@ def add_lancamento(obra_id):
         print(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: Rota adaptada para Pagamento Parcial (paga 100% ou 0%) -->
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def marcar_como_pago(lancamento_id):
+    # ... (código atualizado para valor_total/valor_pago) ...
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
     try:
         user = get_current_user()
@@ -723,10 +721,10 @@ def marcar_como_pago(lancamento_id):
         print(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_lancamento(lancamento_id):
+    # ... (código atualizado para valor_total/valor_pago) ...
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
@@ -736,8 +734,8 @@ def editar_lancamento(lancamento_id):
         dados = request.json
         lancamento.data = datetime.date.fromisoformat(dados['data'])
         lancamento.descricao = dados['descricao']
-        lancamento.valor_total = float(dados['valor_total']) # <--- MUDANÇA
-        lancamento.valor_pago = float(dados.get('valor_pago', lancamento.valor_pago)) # <--- MUDANÇA
+        lancamento.valor_total = float(dados['valor_total']) 
+        lancamento.valor_pago = float(dados.get('valor_pago', lancamento.valor_pago)) 
         lancamento.tipo = dados['tipo']
         lancamento.status = dados['status']
         lancamento.pix = dados.get('pix')
@@ -841,10 +839,10 @@ def deletar_servico(servico_id):
         print(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/servicos/<int:servico_id>/pagamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_pagamento_servico(servico_id):
+    # ... (código atualizado para valor_total/valor_pago) ...
     print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos (POST) acessada ---")
     try:
         user = get_current_user()
@@ -866,8 +864,8 @@ def add_pagamento_servico(servico_id):
         novo_pagamento = PagamentoServico(
             servico_id=servico_id,
             data=datetime.date.fromisoformat(dados['data']),
-            valor_total=valor_total, # <--- MUDANÇA
-            valor_pago=valor_pago, # <--- MUDANÇA
+            valor_total=valor_total, 
+            valor_pago=valor_pago, 
             status=status,
             tipo_pagamento=tipo_pagamento,
             prioridade=int(dados.get('prioridade', 0)),
@@ -903,10 +901,10 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
         print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: Rota adaptada para Pagamento Parcial (paga 100% ou 0%) -->
 @app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def toggle_pagamento_servico_status(pagamento_id):
+    # ... (código atualizado para valor_total/valor_pago) ...
     print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/status (PATCH) acessada ---")
     try:
         user = get_current_user()
@@ -965,6 +963,8 @@ def editar_pagamento_servico_prioridade(pagamento_id):
         print(f"--- [ERRO] /servicos/pagamentos/.../prioridade (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # ---------------------------------------------------
+
+
 # --- NOVA ROTA PARA PAGAMENTO PARCIAL ---
 @app.route('/pagamentos/<string:item_type>/<int:item_id>/pagar', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -1014,7 +1014,7 @@ def pagar_item_parcial(item_type, item_id):
             item.status = 'Pago'
             item.valor_pago = item.valor_total # Garante valor exato
         else:
-            item.status = 'A Pagar' # Ou 'Parcial', mas 'A Pagar' funciona
+            item.status = 'A Pagar' # Mantém 'A Pagar' (frontend vai tratar como 'Parcial')
 
         db.session.commit()
         return jsonify(item.to_dict()), 200
@@ -1025,6 +1025,7 @@ def pagar_item_parcial(item_type, item_id):
         print(f"--- [ERRO] /pagamentos/.../pagar (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA NOVA ROTA ---
+
 
 # --- ROTAS DE ORÇAMENTO (MODIFICADAS PARA ANEXOS) ---
 
@@ -1110,11 +1111,10 @@ def editar_orcamento(orcamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA ROTA ---
 
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def aprovar_orcamento(orcamento_id):
-    """Aprova um orçamento e o converte em um Lançamento 'A Pagar' (OPÇÃO A)"""
+    # ... (código atualizado para valor_total/valor_pago) ...
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/aprovar (POST) acessada ---")
     try:
         user = get_current_user()
@@ -1134,8 +1134,8 @@ def aprovar_orcamento(orcamento_id):
             obra_id=orcamento.obra_id,
             tipo=orcamento.tipo,
             descricao=desc_lancamento,
-            valor_total=orcamento.valor, # <--- MUDANÇA
-            valor_pago=0.0, # <--- MUDANÇA
+            valor_total=orcamento.valor,
+            valor_pago=0.0,
             data=datetime.date.today(), 
             status='A Pagar',
             pix=orcamento.dados_pagamento,
@@ -1155,11 +1155,10 @@ def aprovar_orcamento(orcamento_id):
         print(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/orcamentos/<int:orcamento_id>/converter_para_servico', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def converter_orcamento_para_servico(orcamento_id):
-    """Aprova um orçamento e o converte em um NOVO Serviço (OPÇÃO B1 ou B2)"""
+    # ... (código atualizado para valor_total/valor_pago) ...
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/converter_para_servico (POST) acessada ---")
     try:
         user = get_current_user()
@@ -1206,8 +1205,8 @@ def converter_orcamento_para_servico(orcamento_id):
                 obra_id=orcamento.obra_id,
                 tipo=orcamento.tipo,
                 descricao=orcamento.descricao,
-                valor_total=orcamento.valor, # <--- MUDANÇA
-                valor_pago=0.0, # <--- MUDANÇA
+                valor_total=orcamento.valor,
+                valor_pago=0.0,
                 data=datetime.date.today(),
                 status='A Pagar',
                 pix=orcamento.dados_pagamento,
@@ -1357,10 +1356,10 @@ def delete_anexo(anexo_id):
 
 
 # --- ROTAS DE EXPORTAÇÃO (PROTEGIDAS) ---
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_csv(obra_id):
+    # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
@@ -1389,10 +1388,10 @@ def export_csv(obra_id):
         print(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes(obra_id):
+    # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
     try:
@@ -1401,13 +1400,11 @@ def export_pdf_pendentes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        # 1. Lançamentos a pagar (total > pago)
         lancamentos_apagar = Lancamento.query.filter(
             Lancamento.obra_id == obra.id, 
             Lancamento.valor_pago < Lancamento.valor_total
         ).all()
         
-        # 2. Pagamentos de Serviços a pagar (total > pago)
         pagamentos_servico_apagar = PagamentoServico.query.join(Servico).filter(
             Servico.obra_id == obra.id,
             PagamentoServico.valor_pago < PagamentoServico.valor_total
@@ -1420,7 +1417,7 @@ def export_pdf_pendentes(obra_id):
                 desc = f"{lanc.descricao} (Serviço: {lanc.servico.nome})"
             items.append({
                 "data": lanc.data, "tipo": lanc.tipo, "descricao": desc,
-                "valor": lanc.valor_total - lanc.valor_pago, # Valor restante
+                "valor": lanc.valor_total - lanc.valor_pago,
                 "pix": lanc.pix,
                 "prioridade": lanc.prioridade 
             })
@@ -1430,7 +1427,7 @@ def export_pdf_pendentes(obra_id):
             items.append({
                 "data": pag.data, "tipo": "Serviço", 
                 "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
-                "valor": pag.valor_total - pag.valor_pago, # Valor restante
+                "valor": pag.valor_total - pag.valor_pago,
                 "pix": pag.servico.pix,
                 "prioridade": pag.prioridade 
             })
@@ -1450,14 +1447,14 @@ def export_pdf_pendentes(obra_id):
         if not items:
             elements.append(Paragraph("Nenhum pagamento pendente nesta obra.", styles['Normal']))
         else:
-            data = [['Prior.', 'Data', 'Tipo', 'Descricao', 'Valor Restante', 'PIX']] # <-- MUDANÇA
+            data = [['Prior.', 'Data', 'Tipo', 'Descricao', 'Valor Restante', 'PIX']]
             total_pendente = 0
             for item in items:
                 data.append([
                     item.get('prioridade', 0), 
                     item['data'].strftime('%d/%m/%Y'), item['tipo'][:15] if item['tipo'] else 'N/A',
                     item['descricao'][:35] if item['descricao'] else 'N/A', 
-                    formatar_real(item['valor']), # 'valor' agora é o valor restante
+                    formatar_real(item['valor']),
                     (item['pix'] or 'Nao informado')[:20]
                 ])
                 total_pendente += item['valor']
@@ -1465,7 +1462,6 @@ def export_pdf_pendentes(obra_id):
             data.append(['', '', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente)])
             
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
-            # ... (estilos da tabela inalterados) ...
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
@@ -1508,11 +1504,10 @@ def export_pdf_pendentes(obra_id):
         return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
         
 
-# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes_todas_obras():
-    """Exporta PDF com pendências de TODAS as obras que o usuário tem acesso"""
+    # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': 
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
@@ -1544,13 +1539,11 @@ def export_pdf_pendentes_todas_obras():
         
         for obra in obras:
             
-            # Query base de Lançamentos
             lancamentos_query = Lancamento.query.filter(
                 Lancamento.obra_id == obra.id, 
                 Lancamento.valor_pago < Lancamento.valor_total
             )
             
-            # Query base de Pagamentos de Serviço
             pagamentos_query = PagamentoServico.query.join(Servico).filter(
                 Servico.obra_id == obra.id,
                 PagamentoServico.valor_pago < PagamentoServico.valor_total
@@ -1577,7 +1570,7 @@ def export_pdf_pendentes_todas_obras():
                     "data": lanc.data, 
                     "tipo": lanc.tipo, 
                     "descricao": desc,
-                    "valor": lanc.valor_total - lanc.valor_pago, # Valor restante
+                    "valor": lanc.valor_total - lanc.valor_pago,
                     "pix": lanc.pix,
                     "prioridade": lanc.prioridade 
                 })
@@ -1588,7 +1581,7 @@ def export_pdf_pendentes_todas_obras():
                     "data": pag.data, 
                     "tipo": "Serviço", 
                     "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
-                    "valor": pag.valor_total - pag.valor_pago, # Valor restante
+                    "valor": pag.valor_total - pag.valor_pago,
                     "pix": pag.servico.pix,
                     "prioridade": pag.prioridade
                 })
@@ -1637,7 +1630,7 @@ def export_pdf_pendentes_todas_obras():
             elements.append(Paragraph(obra_header, styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
-            data = [['Prior.', 'Data', 'Tipo', 'Descrição', 'Valor Restante', 'PIX']] # <-- MUDANÇA
+            data = [['Prior.', 'Data', 'Tipo', 'Descrição', 'Valor Restante', 'PIX']]
             
             for item in items:
                 data.append([
@@ -1652,7 +1645,6 @@ def export_pdf_pendentes_todas_obras():
             data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra)])
             
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
-            # ... (estilos da tabela inalterados) ...
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
