@@ -373,13 +373,12 @@ def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
-# <--- MUDANÇA: Lógica de KPI CORRIGIDA para 'Residual' -->
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print("--- [LOG] Rota /obras (GET) acessada (KPI Residual Corrigido) ---")
+    print("--- [LOG] Rota /obras (GET) acessada (4 KPIs Completos) ---")
     try:
         user = get_current_user() 
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -388,7 +387,14 @@ def get_obras():
         lancamentos_sum = db.session.query(
             Lancamento.obra_id,
             func.sum(Lancamento.valor_total).label('total_geral_lanc'),
-            func.sum(Lancamento.valor_pago).label('total_pago_lanc')
+            func.sum(Lancamento.valor_pago).label('total_pago_lanc'),
+            func.sum(
+                case(
+                    (Lancamento.valor_total > Lancamento.valor_pago, 
+                     Lancamento.valor_total - Lancamento.valor_pago),
+                    else_=0
+                )
+            ).label('total_pendente_lanc')
         ).group_by(Lancamento.obra_id).subquery()
 
         # 2. Orçamento de Mão de Obra E Material (Custo total)
@@ -398,10 +404,17 @@ def get_obras():
             func.sum(Servico.valor_global_material).label('total_budget_mat')
         ).group_by(Servico.obra_id).subquery()
 
-        # 3. Pagamentos de Serviço (Custo pago)
+        # 3. Pagamentos de Serviço (Custo pago e pendente)
         pagamentos_sum = db.session.query(
             Servico.obra_id,
-            func.sum(PagamentoServico.valor_pago).label('total_pago_pag')
+            func.sum(PagamentoServico.valor_pago).label('total_pago_pag'),
+            func.sum(
+                case(
+                    (PagamentoServico.valor_total > PagamentoServico.valor_pago,
+                     PagamentoServico.valor_total - PagamentoServico.valor_pago),
+                    else_=0
+                )
+            ).label('total_pendente_pag')
         ).select_from(PagamentoServico) \
          .join(Servico, PagamentoServico.servico_id == Servico.id) \
          .group_by(Servico.obra_id) \
@@ -412,9 +425,11 @@ def get_obras():
             Obra,
             func.coalesce(lancamentos_sum.c.total_geral_lanc, 0).label('lanc_geral'),
             func.coalesce(lancamentos_sum.c.total_pago_lanc, 0).label('lanc_pago'),
+            func.coalesce(lancamentos_sum.c.total_pendente_lanc, 0).label('lanc_pendente'),
             func.coalesce(servico_budget_sum.c.total_budget_mo, 0).label('serv_budget_mo'),
             func.coalesce(servico_budget_sum.c.total_budget_mat, 0).label('serv_budget_mat'),
-            func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago')
+            func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago'),
+            func.coalesce(pagamentos_sum.c.total_pendente_pag, 0).label('pag_pendente')
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
@@ -433,25 +448,30 @@ def get_obras():
                 user_obra_association.c.user_id == user.id
             ).order_by(Obra.nome).all()
 
-        # 6. Formata a Saída (Lógica de Orçamento Restante)
+        # 6. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, serv_budget_mo, serv_budget_mat, pag_pago in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente in obras_com_totais:
             
-            # Custo Total Previsto (Orçamento)
-            total_projeto_previsto = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
+            # KPI 1: Orçamento Total
+            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
             
-            # Total_Pago = (Lançamentos Pagos) + (Pagamentos de Serviço Pagos)
+            # KPI 2: Total Pago (Valores Efetivados)
             total_pago = float(lanc_pago) + float(pag_pago)
             
-            # <--- CORREÇÃO: "total_a_pagar" (Red Box) agora é o Residual
-            total_residual = total_projeto_previsto - total_pago
+            # KPI 3: Liberado para Pagamento (Fila)
+            liberado_pagamento = float(lanc_pendente) + float(pag_pendente)
+            
+            # KPI 4: Residual (Orçamento - Pago)
+            residual = orcamento_total - total_pago
             
             resultados.append({
                 "id": obra.id,
                 "nome": obra.nome,
                 "cliente": obra.cliente,
-                "total_pago": total_pago, 
-                "total_a_pagar": total_residual # <-- MUDANÇA AQUI (Envia 'Residual' no lugar)
+                "orcamento_total": orcamento_total,
+                "total_pago": total_pago,
+                "liberado_pagamento": liberado_pagamento,
+                "residual": residual
             })
         
         return jsonify(resultados)
