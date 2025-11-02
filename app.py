@@ -22,7 +22,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
 
-print("--- [LOG] Iniciando app.py (VERSÃO FINAL com KPI da Home Corrigido) ---")
+print("--- [LOG] Iniciando app.py (VERSÃO com Pagamentos Parciais) ---")
 
 app = Flask(__name__)
 
@@ -104,6 +104,7 @@ class Obra(db.Model):
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
     orcamentos = db.relationship('Orcamento', backref='obra', lazy=True, cascade="all, delete-orphan")
+    notas_fiscais = db.relationship('NotaFiscal', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
         return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
@@ -113,7 +114,12 @@ class Lancamento(db.Model):
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     tipo = db.Column(db.String(50), nullable=False)
     descricao = db.Column(db.String(255), nullable=False)
-    valor = db.Column(db.Float, nullable=False)
+    
+    # <--- MUDANÇA: Pagamento Parcial
+    valor_total = db.Column(db.Float, nullable=False)
+    valor_pago = db.Column(db.Float, nullable=False, default=0.0)
+    # <--- FIM MUDANÇA
+    
     data = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
     pix = db.Column(db.String(100))
@@ -126,7 +132,10 @@ class Lancamento(db.Model):
     def to_dict(self):
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
-            "descricao": self.descricao, "valor": self.valor, "data": self.data.isoformat(),
+            "descricao": self.descricao, 
+            "valor_total": self.valor_total, # <--- MUDANÇA
+            "valor_pago": self.valor_pago, # <--- MUDANÇA
+            "data": self.data.isoformat(),
             "status": self.status, "pix": self.pix,
             "prioridade": self.prioridade, 
             "fornecedor": self.fornecedor, 
@@ -161,7 +170,12 @@ class PagamentoServico(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
-    valor = db.Column(db.Float, nullable=False)
+    
+    # <--- MUDANÇA: Pagamento Parcial
+    valor_total = db.Column(db.Float, nullable=False)
+    valor_pago = db.Column(db.Float, nullable=False, default=0.0)
+    # <--- FIM MUDANÇA
+    
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False)
     prioridade = db.Column(db.Integer, nullable=False, default=0)
@@ -170,7 +184,9 @@ class PagamentoServico(db.Model):
     def to_dict(self):
         return {
             "id": self.id, "data": self.data.isoformat(),
-            "valor": self.valor, "status": self.status,
+            "valor_total": self.valor_total, # <--- MUDANÇA
+            "valor_pago": self.valor_pago, # <--- MUDANÇA
+            "status": self.status,
             "tipo_pagamento": self.tipo_pagamento,
             "prioridade": self.prioridade,
             "fornecedor": self.fornecedor, 
@@ -184,7 +200,7 @@ class Orcamento(db.Model):
     
     descricao = db.Column(db.String(255), nullable=False)
     fornecedor = db.Column(db.String(150), nullable=True)
-    valor = db.Column(db.Float, nullable=False)
+    valor = db.Column(db.Float, nullable=False) # Valor do orçamento permanece 'valor'
     dados_pagamento = db.Column(db.String(150), nullable=True)
     tipo = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pendente') 
@@ -227,6 +243,29 @@ class AnexoOrcamento(db.Model):
             "filename": self.filename,
             "mimetype": self.mimetype
         }
+
+# Modelo para Notas Fiscais (próximo passo)
+class NotaFiscal(db.Model):
+    __tablename__ = 'nota_fiscal'
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    
+    filename = db.Column(db.String(255), nullable=False)
+    mimetype = db.Column(db.String(100), nullable=False)
+    data = db.Column(db.LargeBinary, nullable=False)
+    
+    item_id = db.Column(db.Integer, nullable=False)
+    item_type = db.Column(db.String(50), nullable=False)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "filename": self.filename,
+            "mimetype": self.mimetype,
+            "item_id": self.item_id,
+            "item_type": self.item_type
+        }
 # ----------------------------------------------------
 
 # (Funções auxiliares e de permissão permanecem as mesmas)
@@ -266,8 +305,8 @@ def create_tables():
     try:
         with app.app_context():
             db.create_all()
-        print("--- [LOG] db.create_all() executado com sucesso. (Incluindo AnexoOrcamento) ---")
-        return jsonify({"sucesso": "Tabelas criadas no banco de dados."}), 200
+        print("--- [LOG] db.create_all() executado com sucesso. (Incluindo NotaFiscal e colunas de pag. parcial) ---")
+        return jsonify({"sucesso": "Tabelas/colunas atualizadas no banco de dados."}), 200
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /admin/create_tables: {str(e)}\n{error_details} ---")
@@ -278,6 +317,7 @@ def create_tables():
 # --- ROTAS DE AUTENTICAÇÃO (Públicas) ---
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register():
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /register (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
@@ -304,7 +344,7 @@ def register():
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
-    """Rota para autenticar um usuário e retornar um token JWT"""
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /login (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
@@ -338,13 +378,13 @@ def home():
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
-# <--- MUDANÇAS APLICADAS AQUI PARA CORRIGIR O KPI DA TELA INICIAL ---
+# <--- MUDANÇA: Lógica de KPI atualizada para Pagamento Parcial -->
 @app.route('/obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obras():
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print("--- [LOG] Rota /obras (GET) acessada (com KPIs de Orçamento Restante CORRIGIDO) ---")
+    print("--- [LOG] Rota /obras (GET) acessada (KPIs com Pag. Parcial) ---")
     try:
         user = get_current_user() 
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -352,12 +392,11 @@ def get_obras():
         # 1. Lançamentos (Custo total e Custo pago)
         lancamentos_sum = db.session.query(
             Lancamento.obra_id,
-            func.sum(Lancamento.valor).label('total_geral_lanc'),
-            func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago_lanc')
+            func.sum(Lancamento.valor_total).label('total_geral_lanc'), # <-- MUDANÇA
+            func.sum(Lancamento.valor_pago).label('total_pago_lanc') # <-- MUDANÇA
         ).group_by(Lancamento.obra_id).subquery()
 
         # 2. Orçamento de Mão de Obra E Material (Custo total)
-        # <--- MUDANÇA 1: Query corrigida para incluir material -->
         servico_budget_sum = db.session.query(
             Servico.obra_id,
             func.sum(Servico.valor_global_mao_de_obra).label('total_budget_mo'),
@@ -367,15 +406,14 @@ def get_obras():
         # 3. Pagamentos de Serviço (Custo pago e Custo de material)
         pagamentos_sum = db.session.query(
             Servico.obra_id,
-            func.sum(case((PagamentoServico.status == 'Pago', PagamentoServico.valor), else_=0)).label('total_pago_pag'),
-            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor), else_=0)).label('total_geral_material_pag')
+            func.sum(PagamentoServico.valor_pago).label('total_pago_pag'), # <-- MUDANÇA
+            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_geral_material_pag') # <-- MUDANÇA
         ).select_from(PagamentoServico) \
          .join(Servico, PagamentoServico.servico_id == Servico.id) \
          .group_by(Servico.obra_id) \
          .subquery()
 
         # 4. Query Principal
-        # <--- MUDANÇA 2: Adicionado 'serv_budget_mat' -->
         obras_query = db.session.query(
             Obra,
             func.coalesce(lancamentos_sum.c.total_geral_lanc, 0).label('lanc_geral'),
@@ -403,7 +441,6 @@ def get_obras():
             ).order_by(Obra.nome).all()
 
         # 6. Formata a Saída (Lógica de Orçamento Restante)
-        # <--- MUDANÇA 3: Cálculo do KPI Corrigido -->
         resultados = []
         for obra, lanc_geral, lanc_pago, serv_budget_mo, serv_budget_mat, pag_pago, pag_material_geral in obras_com_totais:
             
@@ -436,6 +473,7 @@ def get_obras():
 @app.route('/obras', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def add_obra():
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /obras (POST) acessada ---")
     try:
         dados = request.json
@@ -450,12 +488,13 @@ def add_obra():
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- ROTA /obras/<id> (Dashboard Interno) ---
+# <--- MUDANÇA: Lógica de KPI atualizada para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (KPI CORRIGIDO) ---")
+    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (KPI com Pag. Parcial) ---")
     
     try:
         from sqlalchemy.orm import joinedload
@@ -469,9 +508,9 @@ def get_obra_detalhes(obra_id):
         
         # 1. Lançamentos (Total, Pago, A Pagar)
         sumarios_lancamentos = db.session.query(
-            func.sum(Lancamento.valor).label('total_geral'),
-            func.sum(case((Lancamento.status == 'Pago', Lancamento.valor), else_=0)).label('total_pago'),
-            func.sum(case((Lancamento.status == 'A Pagar', Lancamento.valor), else_=0)).label('total_a_pagar')
+            func.sum(Lancamento.valor_total).label('total_geral'), # <-- MUDANÇA
+            func.sum(Lancamento.valor_pago).label('total_pago'), # <-- MUDANÇA
+            func.sum(Lancamento.valor_total - Lancamento.valor_pago).label('total_a_pagar') # <-- MUDANÇA
         ).filter(Lancamento.obra_id == obra_id).first()
         total_lancamentos_geral = float(sumarios_lancamentos.total_geral or 0.0)
         total_lancamentos_pago = float(sumarios_lancamentos.total_pago or 0.0)
@@ -479,9 +518,9 @@ def get_obra_detalhes(obra_id):
 
         # 2. Pagamentos de Serviço (Pago, A Pagar, e Total de Material)
         sumarios_servicos = db.session.query(
-            func.sum(case((PagamentoServico.status == 'Pago', PagamentoServico.valor), else_=0)).label('total_pago'),
-            func.sum(case((PagamentoServico.status == 'A Pagar', PagamentoServico.valor), else_=0)).label('total_a_pagar'),
-            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor), else_=0)).label('total_material_geral')
+            func.sum(PagamentoServico.valor_pago).label('total_pago'), # <-- MUDANÇA
+            func.sum(PagamentoServico.valor_total - PagamentoServico.valor_pago).label('total_a_pagar'), # <-- MUDANÇA
+            func.sum(case((PagamentoServico.tipo_pagamento == 'material', PagamentoServico.valor_total), else_=0)).label('total_material_geral') # <-- MUDANÇA
         ).join(Servico).filter(Servico.obra_id == obra_id).first()
         total_servicos_pago = float(sumarios_servicos.total_pago or 0.0)
         total_servicos_apagar = float(sumarios_servicos.total_a_pagar or 0.0)
@@ -497,7 +536,6 @@ def get_obra_detalhes(obra_id):
         total_budget_mat = float(servico_budget_sum.total_budget_mat or 0.0)
 
         # 4. Cálculo dos KPIs Finais
-        
         kpi_total_pago = total_lancamentos_pago + total_servicos_pago
         kpi_liberado_pagamento = total_lancamentos_apagar + total_servicos_apagar
         kpi_total_geral_comprometido = kpi_total_pago + kpi_liberado_pagamento
@@ -511,7 +549,7 @@ def get_obra_detalhes(obra_id):
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
             Lancamento.tipo,
-            func.sum(Lancamento.valor)
+            func.sum(Lancamento.valor_total) # <-- MUDANÇA
         ).filter(
             Lancamento.obra_id == obra_id, 
             Lancamento.servico_id.is_(None)
@@ -538,7 +576,9 @@ def get_obra_detalhes(obra_id):
             
             historico_unificado.append({
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
-                "descricao": descricao, "tipo": lanc.tipo, "valor": float(lanc.valor or 0.0),
+                "descricao": descricao, "tipo": lanc.tipo, 
+                "valor_total": float(lanc.valor_total or 0.0), # <-- MUDANÇA
+                "valor_pago": float(lanc.valor_pago or 0.0), # <-- MUDANÇA
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
                 "prioridade": lanc.prioridade,
                 "fornecedor": lanc.fornecedor 
@@ -549,7 +589,9 @@ def get_obra_detalhes(obra_id):
                 desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
                 historico_unificado.append({
                     "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data,
-                    "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", "valor": float(pag.valor or 0.0),
+                    "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", 
+                    "valor_total": float(pag.valor_total or 0.0), # <-- MUDANÇA
+                    "valor_pago": float(pag.valor_pago or 0.0), # <-- MUDANÇA
                     "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
                     "pagamento_id": pag.id,
                     "prioridade": pag.prioridade,
@@ -566,11 +608,11 @@ def get_obra_detalhes(obra_id):
         for s in obra.servicos:
             serv_dict = s.to_dict()
             gastos_vinculados_mo = sum(
-                float(l.valor or 0.0) for l in todos_lancamentos 
+                float(l.valor_total or 0.0) for l in todos_lancamentos # <-- MUDANÇA
                 if l.servico_id == s.id and l.tipo == 'Mão de Obra'
             )
             gastos_vinculados_mat = sum(
-                float(l.valor or 0.0) for l in todos_lancamentos 
+                float(l.valor_total or 0.0) for l in todos_lancamentos # <-- MUDANÇA
                 if l.servico_id == s.id and l.tipo == 'Material'
             )
             serv_dict['total_gastos_vinculados_mo'] = gastos_vinculados_mo
@@ -582,7 +624,7 @@ def get_obra_detalhes(obra_id):
             obra_id=obra_id, 
             status='Pendente'
         ).options(
-            joinedload(Orcamento.anexos) # Força o carregamento dos anexos
+            joinedload(Orcamento.anexos)
         ).order_by(Orcamento.id.desc()).all()
         
         
@@ -604,6 +646,7 @@ def get_obra_detalhes(obra_id):
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_obra(obra_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
@@ -617,6 +660,7 @@ def deletar_obra(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- Rotas de Lançamento (Geral) ---
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>/lancamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_lancamento(obra_id):
@@ -626,13 +670,19 @@ def add_lancamento(obra_id):
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         dados = request.json
+        
+        valor_total = float(dados['valor'])
+        status = dados['status']
+        valor_pago = valor_total if status == 'Pago' else 0.0
+        
         novo_lancamento = Lancamento(
             obra_id=obra_id, 
             tipo=dados['tipo'], 
             descricao=dados['descricao'],
-            valor=float(dados['valor']), 
+            valor_total=valor_total, # <--- MUDANÇA
+            valor_pago=valor_pago, # <--- MUDANÇA
             data=datetime.date.fromisoformat(dados['data']),
-            status=dados['status'], 
+            status=status, 
             pix=dados.get('pix'),
             prioridade=int(dados.get('prioridade', 0)),
             fornecedor=dados.get('fornecedor'), 
@@ -647,6 +697,7 @@ def add_lancamento(obra_id):
         print(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# <--- MUDANÇA: Rota adaptada para Pagamento Parcial (paga 100% ou 0%) -->
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def marcar_como_pago(lancamento_id):
@@ -659,8 +710,10 @@ def marcar_como_pago(lancamento_id):
         
         if lancamento.status == 'Pago':
             lancamento.status = 'A Pagar'
+            lancamento.valor_pago = 0.0
         else:
             lancamento.status = 'Pago'
+            lancamento.valor_pago = lancamento.valor_total
         
         db.session.commit()
         return jsonify(lancamento.to_dict())
@@ -670,6 +723,7 @@ def marcar_como_pago(lancamento_id):
         print(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_lancamento(lancamento_id):
@@ -682,7 +736,8 @@ def editar_lancamento(lancamento_id):
         dados = request.json
         lancamento.data = datetime.date.fromisoformat(dados['data'])
         lancamento.descricao = dados['descricao']
-        lancamento.valor = float(dados['valor'])
+        lancamento.valor_total = float(dados['valor_total']) # <--- MUDANÇA
+        lancamento.valor_pago = float(dados.get('valor_pago', lancamento.valor_pago)) # <--- MUDANÇA
         lancamento.tipo = dados['tipo']
         lancamento.status = dados['status']
         lancamento.pix = dados.get('pix')
@@ -700,6 +755,7 @@ def editar_lancamento(lancamento_id):
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_lancamento(lancamento_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
     try:
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -718,6 +774,7 @@ def deletar_lancamento(lancamento_id):
 @app.route('/obras/<int:obra_id>/servicos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_servico(obra_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /obras/{obra_id}/servicos (POST) acessada ---")
     try:
         user = get_current_user()
@@ -745,6 +802,7 @@ def add_servico(obra_id):
 @app.route('/servicos/<int:servico_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_servico(servico_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /servicos/{servico_id} (PUT) acessada ---")
     try:
         user = get_current_user()
@@ -770,6 +828,7 @@ def editar_servico(servico_id):
 @app.route('/servicos/<int:servico_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_servico(servico_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /servicos/{servico_id} (DELETE) acessada ---")
     try:
         servico = Servico.query.get_or_404(servico_id)
@@ -782,6 +841,7 @@ def deletar_servico(servico_id):
         print(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/servicos/<int:servico_id>/pagamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_pagamento_servico(servico_id):
@@ -799,11 +859,16 @@ def add_pagamento_servico(servico_id):
         if tipo_pagamento not in ['mao_de_obra', 'material']:
             return jsonify({"erro": "O 'tipo_pagamento' é obrigatório e deve ser 'mao_de_obra' ou 'material'"}), 400
             
+        valor_total = float(dados['valor'])
+        status = dados.get('status', 'Pago')
+        valor_pago = valor_total if status == 'Pago' else 0.0
+
         novo_pagamento = PagamentoServico(
             servico_id=servico_id,
             data=datetime.date.fromisoformat(dados['data']),
-            valor=float(dados['valor']),
-            status=dados.get('status', 'Pago'),
+            valor_total=valor_total, # <--- MUDANÇA
+            valor_pago=valor_pago, # <--- MUDANÇA
+            status=status,
             tipo_pagamento=tipo_pagamento,
             prioridade=int(dados.get('prioridade', 0)),
             fornecedor=dados.get('fornecedor') 
@@ -821,6 +886,7 @@ def add_pagamento_servico(servico_id):
 @app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador']) 
 def deletar_pagamento_servico(servico_id, pagamento_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
     try:
         pagamento = PagamentoServico.query.filter_by(
@@ -837,6 +903,7 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
         print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# <--- MUDANÇA: Rota adaptada para Pagamento Parcial (paga 100% ou 0%) -->
 @app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def toggle_pagamento_servico_status(pagamento_id):
@@ -851,8 +918,10 @@ def toggle_pagamento_servico_status(pagamento_id):
         
         if pagamento.status == 'Pago':
             pagamento.status = 'A Pagar'
+            pagamento.valor_pago = 0.0
         else:
             pagamento.status = 'Pago'
+            pagamento.valor_pago = pagamento.valor_total
             
         db.session.commit()
         return jsonify(pagamento.to_dict()), 200
@@ -866,7 +935,7 @@ def toggle_pagamento_servico_status(pagamento_id):
 @app.route('/servicos/pagamentos/<int:pagamento_id>/prioridade', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def editar_pagamento_servico_prioridade(pagamento_id):
-    """Edita apenas a prioridade de um pagamento de serviço específico."""
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/prioridade (PATCH) acessada ---")
     if request.method == 'OPTIONS': 
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
@@ -903,7 +972,7 @@ def editar_pagamento_servico_prioridade(pagamento_id):
 @app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_orcamento(obra_id):
-    """Cria um novo orçamento para uma obra, agora com anexos"""
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada (com anexos) ---")
     try:
         user = get_current_user()
@@ -950,7 +1019,7 @@ def add_orcamento(obra_id):
 @app.route('/orcamentos/<int:orcamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def editar_orcamento(orcamento_id):
-    """Atualiza um orçamento existente. (Não lida com anexos, veja /orcamentos/<id>/anexos)"""
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
@@ -982,7 +1051,7 @@ def editar_orcamento(orcamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA ROTA ---
 
-
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def aprovar_orcamento(orcamento_id):
@@ -1006,7 +1075,8 @@ def aprovar_orcamento(orcamento_id):
             obra_id=orcamento.obra_id,
             tipo=orcamento.tipo,
             descricao=desc_lancamento,
-            valor=orcamento.valor,
+            valor_total=orcamento.valor, # <--- MUDANÇA
+            valor_pago=0.0, # <--- MUDANÇA
             data=datetime.date.today(), 
             status='A Pagar',
             pix=orcamento.dados_pagamento,
@@ -1026,6 +1096,7 @@ def aprovar_orcamento(orcamento_id):
         print(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/orcamentos/<int:orcamento_id>/converter_para_servico', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def converter_orcamento_para_servico(orcamento_id):
@@ -1076,7 +1147,8 @@ def converter_orcamento_para_servico(orcamento_id):
                 obra_id=orcamento.obra_id,
                 tipo=orcamento.tipo,
                 descricao=orcamento.descricao,
-                valor=orcamento.valor,
+                valor_total=orcamento.valor, # <--- MUDANÇA
+                valor_pago=0.0, # <--- MUDANÇA
                 data=datetime.date.today(),
                 status='A Pagar',
                 pix=orcamento.dados_pagamento,
@@ -1097,7 +1169,7 @@ def converter_orcamento_para_servico(orcamento_id):
 @app.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def rejeitar_orcamento(orcamento_id):
-    """Rejeita (deleta) um orçamento pendente"""
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (DELETE) acessada ---")
     try:
         user = get_current_user()
@@ -1121,7 +1193,7 @@ def rejeitar_orcamento(orcamento_id):
 @app.route('/orcamentos/<int:orcamento_id>/anexos', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master', 'comum'])
 def get_orcamento_anexos(orcamento_id):
-    """Lista os metadados dos anexos de um orçamento"""
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (GET) acessada ---")
     try:
         user = get_current_user()
@@ -1140,7 +1212,7 @@ def get_orcamento_anexos(orcamento_id):
 @app.route('/orcamentos/<int:orcamento_id>/anexos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def add_anexos_orcamento(orcamento_id):
-    """Adiciona novos anexos a um orçamento existente (usado na edição)"""
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (POST) acessada ---")
     try:
         user = get_current_user()
@@ -1175,8 +1247,7 @@ def add_anexos_orcamento(orcamento_id):
 @app.route('/anexos/<int:anexo_id>', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def get_anexo_data(anexo_id):
-    """Serve o arquivo de anexo (para abrir no navegador)"""
-    
+    # ... (código inalterado) ...
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
 
@@ -1204,7 +1275,7 @@ def get_anexo_data(anexo_id):
 @app.route('/anexos/<int:anexo_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def delete_anexo(anexo_id):
-    """Deleta um anexo específico"""
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /anexos/{anexo_id} (DELETE) acessada ---")
     try:
         user = get_current_user()
@@ -1227,6 +1298,7 @@ def delete_anexo(anexo_id):
 
 
 # --- ROTAS DE EXPORTAÇÃO (PROTEGIDAS) ---
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>/export/csv', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_csv(obra_id):
@@ -1242,11 +1314,11 @@ def export_csv(obra_id):
         items = obra.lancamentos
         si = io.StringIO()
         cw = csv.writer(si)
-        cw.writerow(['Data', 'Descricao', 'Tipo', 'Valor', 'Status', 'PIX', 'ServicoID', 'Fornecedor'])
+        cw.writerow(['Data', 'Descricao', 'Tipo', 'ValorTotal', 'ValorPago', 'Status', 'PIX', 'ServicoID', 'Fornecedor'])
         for item in items:
             cw.writerow([
                 item.data.isoformat(), item.descricao, item.tipo,
-                item.valor, item.status, item.pix, item.servico_id,
+                item.valor_total, item.valor_pago, item.status, item.pix, item.servico_id,
                 item.fornecedor
             ])
         output = make_response(si.getvalue())
@@ -1258,6 +1330,7 @@ def export_csv(obra_id):
         print(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes(obra_id):
@@ -1269,11 +1342,16 @@ def export_pdf_pendentes(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         
-        lancamentos_apagar = Lancamento.query.filter_by(obra_id=obra.id, status='A Pagar').all()
+        # 1. Lançamentos a pagar (total > pago)
+        lancamentos_apagar = Lancamento.query.filter(
+            Lancamento.obra_id == obra.id, 
+            Lancamento.valor_pago < Lancamento.valor_total
+        ).all()
         
+        # 2. Pagamentos de Serviços a pagar (total > pago)
         pagamentos_servico_apagar = PagamentoServico.query.join(Servico).filter(
             Servico.obra_id == obra.id,
-            PagamentoServico.status == 'A Pagar'
+            PagamentoServico.valor_pago < PagamentoServico.valor_total
         ).all()
         
         items = []
@@ -1283,7 +1361,8 @@ def export_pdf_pendentes(obra_id):
                 desc = f"{lanc.descricao} (Serviço: {lanc.servico.nome})"
             items.append({
                 "data": lanc.data, "tipo": lanc.tipo, "descricao": desc,
-                "valor": lanc.valor, "pix": lanc.pix,
+                "valor": lanc.valor_total - lanc.valor_pago, # Valor restante
+                "pix": lanc.pix,
                 "prioridade": lanc.prioridade 
             })
             
@@ -1292,7 +1371,8 @@ def export_pdf_pendentes(obra_id):
             items.append({
                 "data": pag.data, "tipo": "Serviço", 
                 "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
-                "valor": pag.valor, "pix": pag.servico.pix,
+                "valor": pag.valor_total - pag.valor_pago, # Valor restante
+                "pix": pag.servico.pix,
                 "prioridade": pag.prioridade 
             })
             
@@ -1311,13 +1391,14 @@ def export_pdf_pendentes(obra_id):
         if not items:
             elements.append(Paragraph("Nenhum pagamento pendente nesta obra.", styles['Normal']))
         else:
-            data = [['Prior.', 'Data', 'Tipo', 'Descricao', 'Valor', 'PIX']]
+            data = [['Prior.', 'Data', 'Tipo', 'Descricao', 'Valor Restante', 'PIX']] # <-- MUDANÇA
             total_pendente = 0
             for item in items:
                 data.append([
                     item.get('prioridade', 0), 
                     item['data'].strftime('%d/%m/%Y'), item['tipo'][:15] if item['tipo'] else 'N/A',
-                    item['descricao'][:35] if item['descricao'] else 'N/A', formatar_real(item['valor']),
+                    item['descricao'][:35] if item['descricao'] else 'N/A', 
+                    formatar_real(item['valor']), # 'valor' agora é o valor restante
                     (item['pix'] or 'Nao informado')[:20]
                 ])
                 total_pendente += item['valor']
@@ -1325,6 +1406,7 @@ def export_pdf_pendentes(obra_id):
             data.append(['', '', '', '', 'TOTAL A PAGAR', formatar_real(total_pendente)])
             
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 3*cm, 5.5*cm, 3*cm, 3.5*cm])
+            # ... (estilos da tabela inalterados) ...
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007bff')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke), ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
@@ -1367,7 +1449,7 @@ def export_pdf_pendentes(obra_id):
         return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
         
 
-# ROTA ATUALIZADA: Export PDF de TODAS as obras com pendências e filtro
+# <--- MUDANÇA: Atualizado para Pagamento Parcial -->
 @app.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
 @jwt_required() 
 def export_pdf_pendentes_todas_obras():
@@ -1402,14 +1484,17 @@ def export_pdf_pendentes_todas_obras():
         total_geral_pendente = 0.0
         
         for obra in obras:
-            lancamentos_query = Lancamento.query.filter_by(
-                obra_id=obra.id, 
-                status='A Pagar'
+            
+            # Query base de Lançamentos
+            lancamentos_query = Lancamento.query.filter(
+                Lancamento.obra_id == obra.id, 
+                Lancamento.valor_pago < Lancamento.valor_total
             )
             
+            # Query base de Pagamentos de Serviço
             pagamentos_query = PagamentoServico.query.join(Servico).filter(
                 Servico.obra_id == obra.id,
-                PagamentoServico.status == 'A Pagar'
+                PagamentoServico.valor_pago < PagamentoServico.valor_total
             )
 
             if prioridade_filtro and prioridade_filtro != 'todas':
@@ -1433,7 +1518,7 @@ def export_pdf_pendentes_todas_obras():
                     "data": lanc.data, 
                     "tipo": lanc.tipo, 
                     "descricao": desc,
-                    "valor": lanc.valor, 
+                    "valor": lanc.valor_total - lanc.valor_pago, # Valor restante
                     "pix": lanc.pix,
                     "prioridade": lanc.prioridade 
                 })
@@ -1444,7 +1529,7 @@ def export_pdf_pendentes_todas_obras():
                     "data": pag.data, 
                     "tipo": "Serviço", 
                     "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
-                    "valor": pag.valor, 
+                    "valor": pag.valor_total - pag.valor_pago, # Valor restante
                     "pix": pag.servico.pix,
                     "prioridade": pag.prioridade
                 })
@@ -1493,7 +1578,7 @@ def export_pdf_pendentes_todas_obras():
             elements.append(Paragraph(obra_header, styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
-            data = [['Prior.', 'Data', 'Tipo', 'Descrição', 'Valor', 'PIX']]
+            data = [['Prior.', 'Data', 'Tipo', 'Descrição', 'Valor Restante', 'PIX']] # <-- MUDANÇA
             
             for item in items:
                 data.append([
@@ -1508,6 +1593,7 @@ def export_pdf_pendentes_todas_obras():
             data.append(['', '', '', '', 'SUBTOTAL', formatar_real(total_obra)])
             
             table = Table(data, colWidths=[1.5*cm, 2.5*cm, 2.5*cm, 5*cm, 2.5*cm, 3*cm])
+            # ... (estilos da tabela inalterados) ...
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -1572,6 +1658,7 @@ def export_pdf_pendentes_todas_obras():
 @app.route('/admin/users', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_all_users():
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /admin/users (GET) acessada ---")
     try:
         current_user = get_current_user()
@@ -1585,6 +1672,7 @@ def get_all_users():
 @app.route('/admin/users', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def create_user():
+    # ... (código inalterado) ...
     print("--- [LOG] Rota /admin/users (POST) acessada ---")
     try:
         dados = request.json
@@ -1612,6 +1700,7 @@ def create_user():
 @app.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def get_user_permissions(user_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
@@ -1625,6 +1714,7 @@ def get_user_permissions(user_id):
 @app.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador'])
 def set_user_permissions(user_id):
+    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
