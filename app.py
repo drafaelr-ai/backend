@@ -1263,7 +1263,7 @@ def converter_orcamento_para_servico(orcamento_id):
 @app.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def rejeitar_orcamento(orcamento_id):
-    # ... (código inalterado) ...
+    # <-- MUDANÇA: Mudar status para 'Rejeitado' em vez de deletar
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (DELETE) acessada ---")
     try:
         user = get_current_user()
@@ -1272,10 +1272,12 @@ def rejeitar_orcamento(orcamento_id):
         if not user_has_access_to_obra(user, orcamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
-        db.session.delete(orcamento) 
+        # <-- MUDANÇA: Em vez de deletar, muda status para 'Rejeitado'
+        orcamento.status = 'Rejeitado'
         db.session.commit()
         
-        return jsonify({"sucesso": "Orçamento rejeitado/deletado com sucesso"}), 200
+        print(f"--- [LOG] Orçamento {orcamento_id} marcado como Rejeitado ---")
+        return jsonify({"sucesso": "Orçamento rejeitado com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
@@ -2217,8 +2219,16 @@ def relatorio_resumo_completo(obra_id):
         elements.append(Spacer(1, 0.3*cm))
         
         if orcamentos:
+            # <-- MUDANÇA: Log de debug para verificar status
+            print(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
+            for orc in orcamentos:
+                print(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
+            
             orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
             orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
+            orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
+            
+            print(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
             
             if orcamentos_pendentes:
                 elements.append(Paragraph("<b>4.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
@@ -2268,6 +2278,32 @@ def relatorio_resumo_completo(obra_id):
                     ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
                 ]))
                 elements.append(table_orc_apr)
+                elements.append(Spacer(1, 0.5*cm))
+            
+            # <-- NOVO: Seção de Orçamentos Rejeitados
+            if orcamentos_rejeitados:
+                elements.append(Paragraph("<b>4.3. Orçamentos Rejeitados (Histórico)</b>", styles['Heading3']))
+                data_orc_rej = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
+                for orc in orcamentos_rejeitados:
+                    data_orc_rej.append([
+                        orc.descricao[:35],
+                        orc.fornecedor or 'N/A',
+                        formatar_real(orc.valor),
+                        orc.tipo
+                    ])
+                
+                table_orc_rej = Table(data_orc_rej, colWidths=[7*cm, 4*cm, 3*cm, 2*cm])
+                table_orc_rej.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ef4444')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+                elements.append(table_orc_rej)
                 elements.append(Spacer(1, 0.5*cm))
         else:
             elements.append(Paragraph("Nenhum orçamento cadastrado.", styles['Normal']))
