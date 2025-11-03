@@ -2,6 +2,7 @@
 import os
 import traceback  # Importado para log de erros detalhado
 import re  # Importado para o CORS com regex
+import zipfile  # Importado para criar ZIP de notas fiscais
 from flask import Flask, jsonify, request, make_response, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -1979,6 +1980,316 @@ def deletar_nota_fiscal(nf_id):
         print(f"--- [ERRO] /notas-fiscais/{nf_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DAS ROTAS DE NOTAS FISCAIS ---
+
+
+# --- ROTAS DE RELATÓRIOS ---
+@app.route('/obras/<int:obra_id>/notas-fiscais/export/zip', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def export_notas_fiscais_zip(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais/export/zip (GET) acessada ---")
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        obra = Obra.query.get_or_404(obra_id)
+        notas = NotaFiscal.query.filter_by(obra_id=obra_id).all()
+        
+        if not notas:
+            return jsonify({"erro": "Nenhuma nota fiscal encontrada para esta obra"}), 404
+        
+        # Criar ZIP em memória
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for idx, nota in enumerate(notas, 1):
+                # Nome do arquivo com prefixo para organização
+                filename = f"{idx:03d}_{nota.filename}"
+                zip_file.writestr(filename, nota.data)
+        
+        zip_buffer.seek(0)
+        
+        response = make_response(zip_buffer.read())
+        response.headers['Content-Type'] = 'application/zip'
+        response.headers['Content-Disposition'] = f'attachment; filename=notas_fiscais_{obra.nome.replace(" ", "_")}.zip'
+        
+        print(f"--- [LOG] ZIP com {len(notas)} notas fiscais gerado para obra {obra_id} ---")
+        return response
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/notas-fiscais/export/zip (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/obras/<int:obra_id>/relatorio/resumo-completo', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def relatorio_resumo_completo(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/relatorio/resumo-completo (GET) acessada ---")
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        obra = Obra.query.get_or_404(obra_id)
+        
+        # Buscar todos os dados necessários
+        lancamentos = Lancamento.query.filter_by(obra_id=obra_id).all()
+        servicos = Servico.query.filter_by(obra_id=obra_id).options(joinedload(Servico.pagamentos)).all()
+        orcamentos = Orcamento.query.filter_by(obra_id=obra_id).all()
+        
+        # Calcular sumários
+        orcamento_total_lancamentos = sum((l.valor_total or 0) for l in lancamentos)
+        
+        orcamento_total_servicos = sum(
+            (s.valor_global_mao_de_obra or 0) + (s.valor_global_material or 0)
+            for s in servicos
+        )
+        
+        orcamento_total = orcamento_total_lancamentos + orcamento_total_servicos
+        
+        valores_pagos_lancamentos = sum((l.valor_pago or 0) for l in lancamentos)
+        valores_pagos_servicos = sum(
+            sum((p.valor_pago or 0) for p in s.pagamentos)
+            for s in servicos
+        )
+        valores_pagos = valores_pagos_lancamentos + valores_pagos_servicos
+        
+        # Criar PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Título
+        titulo = f"<b>RESUMO COMPLETO DA OBRA</b><br/>{obra.nome}"
+        elements.append(Paragraph(titulo, styles['Title']))
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Informações da Obra
+        info_text = f"<b>Cliente:</b> {obra.cliente or 'N/A'}<br/>"
+        info_text += f"<b>Data de Geração:</b> {datetime.datetime.now().strftime('%d/%m/%Y às %H:%M')}"
+        elements.append(Paragraph(info_text, styles['Normal']))
+        elements.append(Spacer(1, 0.8*cm))
+        
+        # === SEÇÃO 1: RESUMO FINANCEIRO ===
+        elements.append(Paragraph("<b>1. RESUMO FINANCEIRO</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        data_financeiro = [
+            ['Indicador', 'Valor'],
+            ['Orçamento Total', formatar_real(orcamento_total)],
+            ['Valores Pagos', formatar_real(valores_pagos)],
+            ['Percentual Executado', f"{(valores_pagos / orcamento_total * 100) if orcamento_total > 0 else 0:.1f}%"],
+            ['Saldo Restante', formatar_real(orcamento_total - valores_pagos)]
+        ]
+        
+        table_financeiro = Table(data_financeiro, colWidths=[8*cm, 8*cm])
+        table_financeiro.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]))
+        elements.append(table_financeiro)
+        elements.append(Spacer(1, 0.8*cm))
+        
+        # === SEÇÃO 2: SERVIÇOS ===
+        elements.append(Paragraph("<b>2. SERVIÇOS (EMPREITADAS)</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        if servicos:
+            for serv in servicos:
+                elements.append(Paragraph(f"<b>{serv.nome}</b>", styles['Heading3']))
+                
+                valor_global_mo = serv.valor_global_mao_de_obra or 0
+                valor_global_mat = serv.valor_global_material or 0
+                valor_global_total = valor_global_mo + valor_global_mat
+                
+                pagamentos_mo = [p for p in serv.pagamentos if p.tipo_pagamento == 'mao_de_obra']
+                pagamentos_mat = [p for p in serv.pagamentos if p.tipo_pagamento == 'material']
+                
+                valor_pago_mo = sum((p.valor_pago or 0) for p in pagamentos_mo)
+                valor_pago_mat = sum((p.valor_pago or 0) for p in pagamentos_mat)
+                valor_pago_total = valor_pago_mo + valor_pago_mat
+                
+                percentual_mo = (valor_pago_mo / valor_global_mo * 100) if valor_global_mo > 0 else 0
+                percentual_mat = (valor_pago_mat / valor_global_mat * 100) if valor_global_mat > 0 else 0
+                percentual_total = (valor_pago_total / valor_global_total * 100) if valor_global_total > 0 else 0
+                
+                status = "✓ PAGO 100%" if percentual_total >= 99.9 else f"⏳ EM ANDAMENTO ({percentual_total:.1f}%)"
+                
+                data_servico = [
+                    ['', 'Orçado', 'Pago', '% Executado'],
+                    ['Mão de Obra', formatar_real(valor_global_mo), formatar_real(valor_pago_mo), f"{percentual_mo:.1f}%"],
+                    ['Material', formatar_real(valor_global_mat), formatar_real(valor_pago_mat), f"{percentual_mat:.1f}%"],
+                    ['TOTAL', formatar_real(valor_global_total), formatar_real(valor_pago_total), f"{percentual_total:.1f}%"]
+                ]
+                
+                table_servico = Table(data_servico, colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+                table_servico.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+                    ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f0f0f0')),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ]))
+                elements.append(table_servico)
+                elements.append(Paragraph(f"<b>Status:</b> {status}", styles['Normal']))
+                elements.append(Spacer(1, 0.5*cm))
+        else:
+            elements.append(Paragraph("Nenhum serviço cadastrado.", styles['Normal']))
+            elements.append(Spacer(1, 0.5*cm))
+        
+        # === SEÇÃO 3: PENDÊNCIAS ===
+        elements.append(Paragraph("<b>3. PENDÊNCIAS ATUAIS (A PAGAR)</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        pendencias_lancamentos = [l for l in lancamentos if (l.valor_total or 0) > (l.valor_pago or 0)]
+        pendencias_servicos = []
+        for serv in servicos:
+            for pag in serv.pagamentos:
+                if (pag.valor_total or 0) > (pag.valor_pago or 0):
+                    pendencias_servicos.append((serv.nome, pag))
+        
+        total_pendente = 0
+        
+        if pendencias_lancamentos or pendencias_servicos:
+            data_pendencias = [['Descrição', 'Tipo', 'Valor Pendente']]
+            
+            for lanc in pendencias_lancamentos:
+                valor_pendente = (lanc.valor_total or 0) - (lanc.valor_pago or 0)
+                total_pendente += valor_pendente
+                data_pendencias.append([
+                    lanc.descricao[:40],
+                    lanc.tipo,
+                    formatar_real(valor_pendente)
+                ])
+            
+            for serv_nome, pag in pendencias_servicos:
+                valor_pendente = (pag.valor_total or 0) - (pag.valor_pago or 0)
+                total_pendente += valor_pendente
+                data_pendencias.append([
+                    f"{serv_nome} - {pag.tipo_pagamento}",
+                    "Serviço",
+                    formatar_real(valor_pendente)
+                ])
+            
+            data_pendencias.append(['', 'TOTAL PENDENTE', formatar_real(total_pendente)])
+            
+            table_pendencias = Table(data_pendencias, colWidths=[9*cm, 3.5*cm, 3.5*cm])
+            table_pendencias.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ef4444')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#ef4444')),
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
+            ]))
+            elements.append(table_pendencias)
+        else:
+            elements.append(Paragraph("✓ Nenhuma pendência encontrada. Todos os pagamentos estão em dia!", styles['Normal']))
+        
+        elements.append(Spacer(1, 0.8*cm))
+        
+        # === SEÇÃO 4: ORÇAMENTOS ===
+        elements.append(Paragraph("<b>4. ORÇAMENTOS</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        if orcamentos:
+            orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
+            orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
+            
+            if orcamentos_pendentes:
+                elements.append(Paragraph("<b>4.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
+                data_orc_pend = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
+                for orc in orcamentos_pendentes:
+                    data_orc_pend.append([
+                        orc.descricao[:35],
+                        orc.fornecedor or 'N/A',
+                        formatar_real(orc.valor),
+                        orc.tipo
+                    ])
+                
+                table_orc_pend = Table(data_orc_pend, colWidths=[7*cm, 4*cm, 3*cm, 2*cm])
+                table_orc_pend.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f59e0b')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+                elements.append(table_orc_pend)
+                elements.append(Spacer(1, 0.5*cm))
+            
+            if orcamentos_aprovados:
+                elements.append(Paragraph("<b>4.2. Orçamentos Aprovados</b>", styles['Heading3']))
+                data_orc_apr = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
+                for orc in orcamentos_aprovados:
+                    data_orc_apr.append([
+                        orc.descricao[:35],
+                        orc.fornecedor or 'N/A',
+                        formatar_real(orc.valor),
+                        orc.tipo
+                    ])
+                
+                table_orc_apr = Table(data_orc_apr, colWidths=[7*cm, 4*cm, 3*cm, 2*cm])
+                table_orc_apr.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+                elements.append(table_orc_apr)
+                elements.append(Spacer(1, 0.5*cm))
+        else:
+            elements.append(Paragraph("Nenhum orçamento cadastrado.", styles['Normal']))
+        
+        # Gerar PDF
+        doc.build(elements)
+        buffer.seek(0)
+        pdf_data = buffer.read()
+        buffer.close()
+        
+        response = make_response(pdf_data)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=resumo_completo_{obra.nome.replace(" ", "_")}.pdf'
+        
+        print(f"--- [LOG] Relatório completo gerado para obra {obra_id} ---")
+        return response
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DAS ROTAS DE RELATÓRIOS ---
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
