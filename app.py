@@ -1850,6 +1850,136 @@ def delete_user(user_id):
 # --- FIM DA NOVA ROTA ---
 # ---------------------------------------------------
 
+# --- ROTAS DE NOTAS FISCAIS ---
+@app.route('/obras/<int:obra_id>/notas-fiscais', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def upload_nota_fiscal(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais (POST) acessada ---")
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if 'file' not in request.files:
+            return jsonify({"erro": "Nenhum arquivo enviado"}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"erro": "Nome do arquivo vazio"}), 400
+        
+        item_id = request.form.get('item_id')
+        item_type = request.form.get('item_type')
+        
+        if not item_id or not item_type:
+            return jsonify({"erro": "item_id e item_type são obrigatórios"}), 400
+        
+        file_data = file.read()
+        
+        nota_fiscal = NotaFiscal(
+            obra_id=obra_id,
+            filename=file.filename,
+            mimetype=file.mimetype,
+            data=file_data,
+            item_id=int(item_id),
+            item_type=item_type
+        )
+        
+        db.session.add(nota_fiscal)
+        db.session.commit()
+        
+        print(f"--- [LOG] Nota fiscal '{file.filename}' anexada ao item {item_type}:{item_id} da obra {obra_id} ---")
+        return jsonify(nota_fiscal.to_dict()), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/obras/<int:obra_id>/notas-fiscais', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def listar_notas_fiscais(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais (GET) acessada ---")
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        notas = NotaFiscal.query.filter_by(obra_id=obra_id).all()
+        return jsonify([nota.to_dict() for nota in notas]), 200
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/notas-fiscais/<int:nf_id>', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def download_nota_fiscal(nf_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /notas-fiscais/{nf_id} (GET) acessada ---")
+    try:
+        nota = NotaFiscal.query.get_or_404(nf_id)
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, nota.obra_id):
+            return jsonify({"erro": "Acesso negado a esta nota fiscal."}), 403
+        
+        return send_file(
+            io.BytesIO(nota.data),
+            mimetype=nota.mimetype,
+            as_attachment=True,
+            download_name=nota.filename
+        )
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /notas-fiscais/{nf_id} (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/notas-fiscais/<int:nf_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def deletar_nota_fiscal(nf_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /notas-fiscais/{nf_id} (DELETE) acessada ---")
+    try:
+        nota = NotaFiscal.query.get_or_404(nf_id)
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, nota.obra_id):
+            return jsonify({"erro": "Acesso negado a esta nota fiscal."}), 403
+        
+        if current_user.role not in ['administrador', 'master']:
+            return jsonify({"erro": "Apenas administradores e masters podem excluir notas fiscais"}), 403
+        
+        db.session.delete(nota)
+        db.session.commit()
+        
+        print(f"--- [LOG] Nota fiscal {nf_id} deletada ---")
+        return jsonify({"sucesso": "Nota fiscal deletada com sucesso"}), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /notas-fiscais/{nf_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DAS ROTAS DE NOTAS FISCAIS ---
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
