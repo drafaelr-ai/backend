@@ -1065,6 +1065,51 @@ def pagar_item_parcial(item_type, item_id):
 
 # --- ROTAS DE ORÇAMENTO (MODIFICADAS PARA ANEXOS) ---
 
+@app.route('/obras/<int:obra_id>/orcamentos', methods=['GET', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master', 'comum'])
+def get_orcamentos_obra(obra_id):
+    """Lista todos os orçamentos de uma obra com seus anexos"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (GET) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        # Buscar obra para validar
+        obra = Obra.query.get_or_404(obra_id)
+        
+        # Buscar todos os orçamentos da obra com eager loading dos anexos
+        orcamentos = Orcamento.query.filter_by(obra_id=obra_id).options(
+            joinedload(Orcamento.anexos),
+            joinedload(Orcamento.servico)
+        ).all()
+        
+        # Montar resposta com informações dos anexos
+        orcamentos_data = []
+        for orc in orcamentos:
+            orc_dict = orc.to_dict()
+            # Adicionar lista de anexos com detalhes
+            orc_dict['anexos'] = [
+                {
+                    'id': anexo.id,
+                    'filename': anexo.filename,
+                    'mimetype': anexo.mimetype
+                }
+                for anexo in orc.anexos
+            ]
+            orcamentos_data.append(orc_dict)
+        
+        print(f"--- [LOG] {len(orcamentos_data)} orçamentos encontrados para obra {obra_id} ---")
+        return jsonify(orcamentos_data), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/orcamentos (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
 @app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_orcamento(obra_id):
