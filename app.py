@@ -42,7 +42,7 @@ print("--- [LOG] JWT Manager inicializado ---")
 # --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
 DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
-DB_PORT = "5432"
+DB_PORT = "6543"  # Porta 6543 = Transaction mode (mais conexões permitidas)
 DB_NAME = "postgres"
 
 print("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
@@ -63,15 +63,30 @@ app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_pre_ping': True,
-    'pool_recycle': 300,
-    'pool_timeout': 30,
-    'pool_size': 5,
-    'max_overflow': 10
+    'pool_recycle': 280,  # Recicla conexões a cada 280 segundos (antes dos 300s do Supabase)
+    'pool_timeout': 20,    # Timeout reduzido
+    'pool_size': 2,        # Reduzido para 2 conexões permanentes
+    'max_overflow': 3,     # Máximo de 3 conexões extras (total: 5)
+    'connect_args': {
+        'connect_timeout': 10,
+        'keepalives': 1,
+        'keepalives_idle': 30,
+        'keepalives_interval': 10,
+        'keepalives_count': 5
+    }
 }
 # --------------------------------------------------------------
 
 db = SQLAlchemy(app)
 print("--- [LOG] SQLAlchemy inicializado ---")
+
+# --- GERENCIAMENTO AUTOMÁTICO DE CONEXÕES ---
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    """Fecha a sessão do banco após cada requisição para liberar conexões"""
+    db.session.remove()
+print("--- [LOG] Teardown de sessão configurado ---")
+# ------------------------------------------------
 
 
 # --- TABELAS E MODELOS DE AUTENTICAÇÃO ---
