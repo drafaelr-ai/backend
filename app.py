@@ -110,7 +110,64 @@ class User(db.Model):
     def to_dict(self):
         return { "id": self.id, "username": self.username, "role": self.role }
 # ---------------------------------------------
+# --- COLE ISTO JUNTO COM SEUS OUTROS MODELOS NO app.py ---
 
+class CompraAgendada(db.Model):
+    __tablename__ = 'compra_agendada'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    
+    # Item e Descrição
+    item = db.Column(db.String(255), nullable=False)
+    descricao = db.Column(db.Text, nullable=True)
+    
+    # Valores
+    valor_estimado = db.Column(db.Float, nullable=False, default=0.0)
+    valor_real = db.Column(db.Float, nullable=True)
+    
+    # Datas
+    data_prevista = db.Column(db.Date, nullable=False)
+    data_realizacao = db.Column(db.Date, nullable=True)
+    
+    # Categorização e Status
+    categoria = db.Column(db.String(100), nullable=False, default='Material') # Material, Ferramenta, Serviço, Equipamento, Outros
+    prioridade = db.Column(db.Integer, nullable=False, default=3) # 1-5
+    status = db.Column(db.String(20), nullable=False, default='Pendente') # Pendente, Realizada, Atrasada, Cancelada
+    
+    # Detalhes Adicionais
+    fornecedor_sugerido = db.Column(db.String(150), nullable=True)
+    observacoes = db.Column(db.Text, nullable=True)
+    
+    # Vinculação (opcional)
+    lancamento_vinculado_id = db.Column(db.Integer, db.ForeignKey('lancamento.id'), nullable=True)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, server_default=func.now())
+    
+    # Relacionamentos
+    obra = db.relationship('Obra', backref=db.backref('compras_agendadas', lazy=True, cascade="all, delete-orphan"))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "item": self.item,
+            "descricao": self.descricao,
+            "valor_estimado": self.valor_estimado,
+            "valor_real": self.valor_real,
+            "data_prevista": self.data_prevista.isoformat() if self.data_prevista else None,
+            "data_realizacao": self.data_realizacao.isoformat() if self.data_realizacao else None,
+            "categoria": self.categoria,
+            "prioridade": self.prioridade,
+            "status": self.status,
+            "fornecedor_sugerido": self.fornecedor_sugerido,
+            "observacoes": self.observacoes,
+            "lancamento_vinculado_id": self.lancamento_vinculado_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+# --- FIM DO MODELO ---
 
 # --- MODELOS DO BANCO DE DADOS (PRINCIPAIS) ---
 class Obra(db.Model):
@@ -2386,7 +2443,230 @@ def relatorio_resumo_completo(obra_id):
         print(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DAS ROTAS DE RELATÓRIOS ---
+# --- COLE ISTO ANTES DE if __name__ == '__main__': NO app.py ---
 
+from datetime import datetime, timedelta # Adicione isso aos seus imports no topo do app.py se não existir
+
+# =========================================================
+# === NOVAS ROTAS: CRONOGRAMA DE COMPRAS (v1.0) ===
+# =========================================================
+
+@app.route('/obras/<int:obra_id>/compras', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def get_compras_agendadas(obra_id):
+    """ Lista todas as compras agendadas de uma obra """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/compras (GET) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        compras = CompraAgendada.query.filter_by(obra_id=obra_id).order_by(CompraAgendada.data_prevista.asc()).all()
+        
+        # Opcional: Atualiza status de compras atrasadas
+        hoje = datetime.date.today()
+        mudancas_feitas = False
+        for compra in compras:
+            if compra.status == 'Pendente' and compra.data_prevista < hoje:
+                compra.status = 'Atrasada'
+                mudancas_feitas = True
+        
+        if mudancas_feitas:
+            db.session.commit()
+            
+        return jsonify([c.to_dict() for c in compras]), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/compras (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/compras', methods=['POST', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def add_compra_agendada(obra_id):
+    """ Cria uma nova compra agendada """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/compras (POST) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json
+        
+        nova_compra = CompraAgendada(
+            obra_id=obra_id,
+            item=dados['item'],
+            descricao=dados.get('descricao') or None,
+            valor_estimado=float(dados.get('valor_estimado', 0)),
+            data_prevista=datetime.date.fromisoformat(dados['data_prevista']),
+            categoria=dados.get('categoria', 'Material'),
+            prioridade=int(dados.get('prioridade', 3)),
+            status='Pendente', # Status inicial
+            fornecedor_sugerido=dados.get('fornecedor_sugerido') or None,
+            observacoes=dados.get('observacoes') or None
+        )
+        
+        db.session.add(nova_compra)
+        db.session.commit()
+        
+        return jsonify(nova_compra.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/compras (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/compras/<int:compra_id>', methods=['PUT', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def update_compra_agendada(obra_id, compra_id):
+    """ Atualiza uma compra agendada """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/.../compras/{compra_id} (PUT) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        compra = CompraAgendada.query.filter_by(id=compra_id, obra_id=obra_id).first_or_404()
+        
+        dados = request.json
+        
+        compra.item = dados.get('item', compra.item)
+        compra.descricao = dados.get('descricao', compra.descricao)
+        compra.valor_estimado = float(dados.get('valor_estimado', compra.valor_estimado))
+        compra.data_prevista = datetime.date.fromisoformat(dados.get('data_prevista', compra.data_prevista))
+        compra.categoria = dados.get('categoria', compra.categoria)
+        compra.prioridade = int(dados.get('prioridade', compra.prioridade))
+        compra.fornecedor_sugerido = dados.get('fornecedor_sugerido', compra.fornecedor_sugerido)
+        compra.observacoes = dados.get('observacoes', compra.observacoes)
+        
+        # Se a data foi alterada, o status pode precisar de reset
+        if compra.data_prevista >= datetime.date.today() and compra.status == 'Atrasada':
+            compra.status = 'Pendente'
+            
+        db.session.commit()
+        return jsonify(compra.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/.../compras/{compra_id} (PUT): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/compras/<int:compra_id>', methods=['DELETE', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def delete_compra_agendada(obra_id, compra_id):
+    """ Deleta uma compra agendada """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/.../compras/{compra_id} (DELETE) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        compra = CompraAgendada.query.filter_by(id=compra_id, obra_id=obra_id).first_or_404()
+        
+        db.session.delete(compra)
+        db.session.commit()
+        
+        return jsonify({"sucesso": "Compra agendada deletada com sucesso"}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/.../compras/{compra_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/compras/<int:compra_id>/marcar-realizada', methods=['POST', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def marcar_compra_realizada(obra_id, compra_id):
+    """ Marca uma compra como realizada e define o valor real """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/.../compras/{compra_id}/marcar-realizada (POST) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        compra = CompraAgendada.query.filter_by(id=compra_id, obra_id=obra_id).first_or_404()
+        dados = request.json
+        
+        valor_real_input = dados.get('valor_real')
+        
+        compra.status = 'Realizada'
+        compra.data_realizacao = datetime.date.today()
+        
+        if valor_real_input:
+            compra.valor_real = float(valor_real_input)
+        else:
+            compra.valor_real = compra.valor_estimado # Usa o estimado se nada for informado
+            
+        db.session.commit()
+        return jsonify(compra.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/.../compras/{compra_id}/marcar-realizada (POST): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/compras/alertas', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def get_compras_alertas(obra_id):
+    """ Retorna compras atrasadas e próximas (7 dias) """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/compras/alertas (GET) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+            
+        hoje = datetime.date.today()
+        limite_proximas = hoje + timedelta(days=7)
+        
+        # Atrasadas
+        atrasadas = CompraAgendada.query.filter(
+            CompraAgendada.obra_id == obra_id,
+            CompraAgendada.status.in_(['Pendente', 'Atrasada']),
+            CompraAgendada.data_prevista < hoje
+        ).order_by(CompraAgendada.data_prevista.asc()).all()
+        
+        # Próximas
+        proximas = CompraAgendada.query.filter(
+            CompraAgendada.obra_id == obra_id,
+            CompraAgendada.status == 'Pendente',
+            CompraAgendada.data_prevista >= hoje,
+            CompraAgendada.data_prevista <= limite_proximas
+        ).order_by(CompraAgendada.data_prevista.asc()).all()
+        
+        return jsonify({
+            "atrasadas": [c.to_dict() for c in atrasadas],
+            "proximas": [c.to_dict() for c in proximas]
+        }), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/compras/alertas (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# =========================================================
+# === FIM DAS ROTAS DE CRONOGRAMA DE COMPRAS ===
+# =========================================================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
