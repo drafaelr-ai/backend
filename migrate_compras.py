@@ -1,12 +1,11 @@
 """
-Script de Migração - Cronograma de Compras
+Script de Migracao - Cronograma de Compras
 Sistema OBRALY v2.0
 
-Este script cria a tabela 'compra_agendada' no banco de dados.
-Execute este script após atualizar o app.py com o novo modelo.
+Execute: python migrate_compras_windows.py
 """
 
-from app import app, db, CompraAgendada
+from app import app, db
 from sqlalchemy import text, inspect
 import sys
 
@@ -20,58 +19,58 @@ def criar_tabela_compras():
     with app.app_context():
         try:
             print("=" * 60)
-            print("MIGRAÇÃO: Cronograma de Compras")
+            print("MIGRACAO: Cronograma de Compras")
             print("=" * 60)
             print()
             
-            # Verifica se a tabela já existe
+            # Verifica se a tabela ja existe
             if verificar_tabela_existe('compra_agendada'):
-                print("⚠️  ATENÇÃO: A tabela 'compra_agendada' já existe!")
-                resposta = input("Deseja recriar a tabela? (TODOS OS DADOS SERÃO PERDIDOS) [s/N]: ")
+                print("ATENCAO: A tabela 'compra_agendada' ja existe!")
+                resposta = input("Deseja recriar a tabela? (TODOS OS DADOS SERAO PERDIDOS) [s/N]: ")
                 
                 if resposta.lower() != 's':
-                    print("❌ Migração cancelada pelo usuário.")
+                    print("Migracao cancelada pelo usuario.")
                     return False
                 
-                print("🗑️  Deletando tabela existente...")
+                print("Deletando tabela existente...")
                 db.session.execute(text('DROP TABLE IF EXISTS compra_agendada CASCADE'))
                 db.session.commit()
-                print("✅ Tabela deletada.")
+                print("Tabela deletada.")
                 print()
             
-            print("📦 Criando tabela 'compra_agendada'...")
+            print("Criando tabela 'compra_agendada'...")
             
             # Cria todas as tabelas (incluindo a nova)
             db.create_all()
             
             # Verifica se a tabela foi criada
             if verificar_tabela_existe('compra_agendada'):
-                print("✅ Tabela 'compra_agendada' criada com sucesso!")
+                print("Tabela 'compra_agendada' criada com sucesso!")
                 print()
                 
                 # Exibe a estrutura da tabela
                 inspector = inspect(db.engine)
                 columns = inspector.get_columns('compra_agendada')
                 
-                print("📋 Estrutura da tabela:")
+                print("Estrutura da tabela:")
                 print("-" * 60)
                 for column in columns:
                     nullable = "NULL" if column['nullable'] else "NOT NULL"
                     default = f" DEFAULT {column['default']}" if column['default'] else ""
-                    print(f"  • {column['name']:<25} {str(column['type']):<15} {nullable}{default}")
+                    print(f"  {column['name']:<25} {str(column['type']):<15} {nullable}{default}")
                 print("-" * 60)
                 print()
                 
-                print("✅ Migração concluída com sucesso!")
+                print("Migracao concluida com sucesso!")
                 print()
-                print("🎉 O Cronograma de Compras está pronto para uso!")
+                print("O Cronograma de Compras esta pronto para uso!")
                 return True
             else:
-                print("❌ ERRO: Tabela não foi criada corretamente.")
+                print("ERRO: Tabela nao foi criada corretamente.")
                 return False
                 
         except Exception as e:
-            print(f"❌ ERRO durante a migração: {str(e)}")
+            print(f"ERRO durante a migracao: {str(e)}")
             print()
             print("Traceback completo:")
             import traceback
@@ -83,16 +82,17 @@ def criar_dados_exemplo():
     """Cria alguns dados de exemplo (opcional)"""
     with app.app_context():
         try:
-            from app import Obra
+            # Importar modelos necessarios
+            from app import Obra, CompraAgendada
             
             # Verifica se existem obras
             obras = Obra.query.all()
             if not obras:
-                print("⚠️  Nenhuma obra encontrada. Dados de exemplo não serão criados.")
+                print("Nenhuma obra encontrada. Dados de exemplo nao serao criados.")
                 return
             
             obra = obras[0]
-            print(f"📝 Criando dados de exemplo para a obra '{obra.nome}'...")
+            print(f"Criando dados de exemplo para a obra '{obra.nome}'...")
             
             import datetime
             from datetime import timedelta
@@ -101,7 +101,7 @@ def criar_dados_exemplo():
                 CompraAgendada(
                     obra_id=obra.id,
                     item="Cimento CP-II (50 sacos)",
-                    descricao="Cimento para fundação",
+                    descricao="Cimento para fundacao",
                     fornecedor_sugerido="Casa de Materiais ABC",
                     valor_estimado=1500.00,
                     data_prevista=datetime.date.today() + timedelta(days=3),
@@ -112,7 +112,7 @@ def criar_dados_exemplo():
                 ),
                 CompraAgendada(
                     obra_id=obra.id,
-                    item="Areia fina (5m³)",
+                    item="Areia fina (5m3)",
                     descricao="Areia para reboco",
                     fornecedor_sugerido="Areia Silva",
                     valor_estimado=350.00,
@@ -131,7 +131,7 @@ def criar_dados_exemplo():
                     categoria="Ferramenta",
                     prioridade=5,
                     status="Pendente",
-                    observacoes="URGENTE - Necessário para instalação elétrica"
+                    observacoes="URGENTE - Necessario para instalacao eletrica"
                 )
             ]
             
@@ -139,37 +139,37 @@ def criar_dados_exemplo():
                 db.session.add(compra)
             
             db.session.commit()
-            print(f"✅ {len(exemplos)} compras de exemplo criadas com sucesso!")
+            print(f"{len(exemplos)} compras de exemplo criadas com sucesso!")
             print()
             
         except Exception as e:
-            print(f"❌ Erro ao criar dados de exemplo: {str(e)}")
+            print(f"Erro ao criar dados de exemplo: {str(e)}")
             db.session.rollback()
 
 def menu_principal():
-    """Menu interativo para o script de migração"""
+    """Menu interativo para o script de migracao"""
     print()
     print("=" * 60)
-    print("  MIGRAÇÃO: CRONOGRAMA DE COMPRAS - Sistema OBRALY")
+    print("  MIGRACAO: CRONOGRAMA DE COMPRAS - Sistema OBRALY")
     print("=" * 60)
     print()
-    print("Escolha uma opção:")
+    print("Escolha uma opcao:")
     print()
-    print("  1. Criar tabela (migração completa)")
+    print("  1. Criar tabela (migracao completa)")
     print("  2. Criar tabela + dados de exemplo")
     print("  3. Apenas verificar estrutura")
     print("  0. Sair")
     print()
     
-    opcao = input("Digite a opção desejada: ")
+    opcao = input("Digite a opcao desejada: ")
     print()
     
     if opcao == "1":
         sucesso = criar_tabela_compras()
         if sucesso:
             print()
-            print("💡 Dica: Você pode criar dados de exemplo executando:")
-            print("   python migrate_compras.py --exemplo")
+            print("Dica: Voce pode criar dados de exemplo executando:")
+            print("   python migrate_compras_windows.py --exemplo")
     
     elif opcao == "2":
         sucesso = criar_tabela_compras()
@@ -179,29 +179,29 @@ def menu_principal():
     elif opcao == "3":
         with app.app_context():
             if verificar_tabela_existe('compra_agendada'):
-                print("✅ Tabela 'compra_agendada' existe no banco de dados.")
+                print("Tabela 'compra_agendada' existe no banco de dados.")
                 print()
                 
                 inspector = inspect(db.engine)
                 columns = inspector.get_columns('compra_agendada')
                 
-                print("📋 Estrutura atual:")
+                print("Estrutura atual:")
                 print("-" * 60)
                 for column in columns:
                     nullable = "NULL" if column['nullable'] else "NOT NULL"
-                    print(f"  • {column['name']:<25} {str(column['type']):<15} {nullable}")
+                    print(f"  {column['name']:<25} {str(column['type']):<15} {nullable}")
                 print("-" * 60)
             else:
-                print("❌ Tabela 'compra_agendada' NÃO existe no banco de dados.")
+                print("Tabela 'compra_agendada' NAO existe no banco de dados.")
                 print()
-                print("Execute a opção 1 para criar a tabela.")
+                print("Execute a opcao 1 para criar a tabela.")
     
     elif opcao == "0":
-        print("👋 Saindo...")
+        print("Saindo...")
         sys.exit(0)
     
     else:
-        print("❌ Opção inválida!")
+        print("Opcao invalida!")
 
 if __name__ == '__main__':
     import sys
@@ -213,15 +213,15 @@ if __name__ == '__main__':
         elif sys.argv[1] == '--verificar':
             with app.app_context():
                 if verificar_tabela_existe('compra_agendada'):
-                    print("✅ Tabela existe")
+                    print("Tabela existe")
                     sys.exit(0)
                 else:
-                    print("❌ Tabela não existe")
+                    print("Tabela nao existe")
                     sys.exit(1)
         elif sys.argv[1] == '--criar':
             criar_tabela_compras()
         else:
-            print("Uso: python migrate_compras.py [--criar|--exemplo|--verificar]")
+            print("Uso: python migrate_compras_windows.py [--criar|--exemplo|--verificar]")
             sys.exit(1)
     else:
         # Menu interativo
