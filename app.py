@@ -281,6 +281,65 @@ class NotaFiscal(db.Model):
             "item_id": self.item_id,
             "item_type": self.item_type
         }
+
+# --- MODELOS DO CRONOGRAMA FINANCEIRO ---
+class PagamentoFuturo(db.Model):
+    """Pagamentos únicos planejados para o futuro"""
+    __tablename__ = 'pagamento_futuro'
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    descricao = db.Column(db.String(255), nullable=False)
+    valor = db.Column(db.Float, nullable=False)
+    data_vencimento = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto/Pago/Cancelado
+    fornecedor = db.Column(db.String(150), nullable=True)
+    observacoes = db.Column(db.Text, nullable=True)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "descricao": self.descricao,
+            "valor": self.valor,
+            "data_vencimento": self.data_vencimento.isoformat(),
+            "status": self.status,
+            "fornecedor": self.fornecedor,
+            "observacoes": self.observacoes
+        }
+
+class PagamentoParcelado(db.Model):
+    """Pagamentos parcelados (ex: 1/10, 2/10, etc)"""
+    __tablename__ = 'pagamento_parcelado'
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    descricao = db.Column(db.String(255), nullable=False)
+    fornecedor = db.Column(db.String(150), nullable=True)
+    
+    # Informações do parcelamento
+    valor_total = db.Column(db.Float, nullable=False)
+    numero_parcelas = db.Column(db.Integer, nullable=False)
+    valor_parcela = db.Column(db.Float, nullable=False)
+    data_primeira_parcela = db.Column(db.Date, nullable=False)
+    
+    # Controle de pagamentos
+    parcelas_pagas = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(20), nullable=False, default='Ativo')  # Ativo/Concluído/Cancelado
+    observacoes = db.Column(db.Text, nullable=True)
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "descricao": self.descricao,
+            "fornecedor": self.fornecedor,
+            "valor_total": self.valor_total,
+            "numero_parcelas": self.numero_parcelas,
+            "valor_parcela": self.valor_parcela,
+            "data_primeira_parcela": self.data_primeira_parcela.isoformat(),
+            "parcelas_pagas": self.parcelas_pagas,
+            "status": self.status,
+            "observacoes": self.observacoes
+        }
 # ----------------------------------------------------
 
 # (Funções auxiliares e de permissão permanecem as mesmas)
@@ -2397,6 +2456,362 @@ def relatorio_resumo_completo(obra_id):
         print(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DAS ROTAS DE RELATÓRIOS ---
+
+
+# ===========================
+# ROTAS DO CRONOGRAMA FINANCEIRO
+# ===========================
+
+# --- PAGAMENTOS FUTUROS (Únicos) ---
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET'])
+@jwt_required()
+def listar_pagamentos_futuros(obra_id):
+    """Lista todos os pagamentos futuros de uma obra"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamentos = PagamentoFuturo.query.filter_by(obra_id=obra_id).order_by(PagamentoFuturo.data_vencimento).all()
+        return jsonify([p.to_dict() for p in pagamentos]), 200
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST'])
+@jwt_required()
+def criar_pagamento_futuro(obra_id):
+    """Cria um novo pagamento futuro"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        data = request.get_json()
+        
+        novo_pagamento = PagamentoFuturo(
+            obra_id=obra_id,
+            descricao=data.get('descricao'),
+            valor=float(data.get('valor', 0)),
+            data_vencimento=datetime.datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
+            fornecedor=data.get('fornecedor'),
+            observacoes=data.get('observacoes'),
+            status='Previsto'
+        )
+        
+        db.session.add(novo_pagamento)
+        db.session.commit()
+        
+        print(f"--- [LOG] Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} ---")
+        return jsonify(novo_pagamento.to_dict()), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
+@jwt_required()
+def editar_pagamento_futuro(obra_id, pagamento_id):
+    """Edita um pagamento futuro existente"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoFuturo, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        data = request.get_json()
+        
+        if 'descricao' in data:
+            pagamento.descricao = data['descricao']
+        if 'valor' in data:
+            pagamento.valor = float(data['valor'])
+        if 'data_vencimento' in data:
+            pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        if 'fornecedor' in data:
+            pagamento.fornecedor = data['fornecedor']
+        if 'observacoes' in data:
+            pagamento.observacoes = data['observacoes']
+        if 'status' in data:
+            pagamento.status = data['status']
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Pagamento futuro {pagamento_id} editado na obra {obra_id} ---")
+        return jsonify(pagamento.to_dict()), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_pagamento_futuro(obra_id, pagamento_id):
+    """Deleta um pagamento futuro"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoFuturo, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        db.session.delete(pagamento)
+        db.session.commit()
+        
+        print(f"--- [LOG] Pagamento futuro {pagamento_id} deletado da obra {obra_id} ---")
+        return jsonify({"mensagem": "Pagamento futuro deletado com sucesso"}), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# --- PAGAMENTOS PARCELADOS ---
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET'])
+@jwt_required()
+def listar_pagamentos_parcelados(obra_id):
+    """Lista todos os pagamentos parcelados de uma obra"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamentos = PagamentoParcelado.query.filter_by(obra_id=obra_id).order_by(PagamentoParcelado.data_primeira_parcela).all()
+        return jsonify([p.to_dict() for p in pagamentos]), 200
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST'])
+@jwt_required()
+def criar_pagamento_parcelado(obra_id):
+    """Cria um novo pagamento parcelado"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        data = request.get_json()
+        
+        valor_total = float(data.get('valor_total', 0))
+        numero_parcelas = int(data.get('numero_parcelas', 1))
+        valor_parcela = valor_total / numero_parcelas if numero_parcelas > 0 else 0
+        
+        novo_pagamento = PagamentoParcelado(
+            obra_id=obra_id,
+            descricao=data.get('descricao'),
+            fornecedor=data.get('fornecedor'),
+            valor_total=valor_total,
+            numero_parcelas=numero_parcelas,
+            valor_parcela=valor_parcela,
+            data_primeira_parcela=datetime.datetime.strptime(data.get('data_primeira_parcela'), '%Y-%m-%d').date(),
+            parcelas_pagas=0,
+            status='Ativo',
+            observacoes=data.get('observacoes')
+        )
+        
+        db.session.add(novo_pagamento)
+        db.session.commit()
+        
+        print(f"--- [LOG] Pagamento parcelado criado: ID {novo_pagamento.id} na obra {obra_id} ---")
+        return jsonify(novo_pagamento.to_dict()), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['PUT'])
+@jwt_required()
+def editar_pagamento_parcelado(obra_id, pagamento_id):
+    """Edita um pagamento parcelado existente"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoParcelado, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        data = request.get_json()
+        
+        if 'descricao' in data:
+            pagamento.descricao = data['descricao']
+        if 'fornecedor' in data:
+            pagamento.fornecedor = data['fornecedor']
+        if 'observacoes' in data:
+            pagamento.observacoes = data['observacoes']
+        if 'parcelas_pagas' in data:
+            pagamento.parcelas_pagas = int(data['parcelas_pagas'])
+            # Atualiza status se todas as parcelas foram pagas
+            if pagamento.parcelas_pagas >= pagamento.numero_parcelas:
+                pagamento.status = 'Concluído'
+        if 'status' in data:
+            pagamento.status = data['status']
+        
+        # Recalcula valor_parcela se valor_total ou numero_parcelas mudarem
+        if 'valor_total' in data or 'numero_parcelas' in data:
+            if 'valor_total' in data:
+                pagamento.valor_total = float(data['valor_total'])
+            if 'numero_parcelas' in data:
+                pagamento.numero_parcelas = int(data['numero_parcelas'])
+            pagamento.valor_parcela = pagamento.valor_total / pagamento.numero_parcelas if pagamento.numero_parcelas > 0 else 0
+        
+        if 'data_primeira_parcela' in data:
+            pagamento.data_primeira_parcela = datetime.datetime.strptime(data['data_primeira_parcela'], '%Y-%m-%d').date()
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Pagamento parcelado {pagamento_id} editado na obra {obra_id} ---")
+        return jsonify(pagamento.to_dict()), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_pagamento_parcelado(obra_id, pagamento_id):
+    """Deleta um pagamento parcelado"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoParcelado, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        db.session.delete(pagamento)
+        db.session.commit()
+        
+        print(f"--- [LOG] Pagamento parcelado {pagamento_id} deletado da obra {obra_id} ---")
+        return jsonify({"mensagem": "Pagamento parcelado deletado com sucesso"}), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# --- TABELA DE PREVISÕES (CÁLCULO) ---
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/previsoes', methods=['GET'])
+@jwt_required()
+def calcular_previsoes(obra_id):
+    """
+    Calcula a tabela de previsões mensais somando:
+    - Pagamentos futuros (status != Cancelado)
+    - Parcelas de pagamentos parcelados (status != Cancelado)
+    - Lançamentos com data_vencimento futura (status != Pago)
+    - Pagamentos de serviços com data_vencimento futura (status != Pago)
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        previsoes_por_mes = {}
+        
+        # 1. PAGAMENTOS FUTUROS
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(
+            obra_id=obra_id
+        ).filter(
+            PagamentoFuturo.status != 'Cancelado',
+            PagamentoFuturo.status != 'Pago'
+        ).all()
+        
+        for pag in pagamentos_futuros:
+            mes_chave = pag.data_vencimento.strftime('%Y-%m')
+            if mes_chave not in previsoes_por_mes:
+                previsoes_por_mes[mes_chave] = 0
+            previsoes_por_mes[mes_chave] += pag.valor
+        
+        # 2. PAGAMENTOS PARCELADOS (gerar parcelas)
+        pagamentos_parcelados = PagamentoParcelado.query.filter_by(
+            obra_id=obra_id
+        ).filter(
+            PagamentoParcelado.status != 'Cancelado'
+        ).all()
+        
+        for pag in pagamentos_parcelados:
+            # Gera cada parcela
+            for i in range(pag.parcelas_pagas, pag.numero_parcelas):
+                # Calcula a data da parcela (primeira parcela + i meses)
+                data_parcela = pag.data_primeira_parcela + datetime.timedelta(days=30*i)
+                mes_chave = data_parcela.strftime('%Y-%m')
+                
+                if mes_chave not in previsoes_por_mes:
+                    previsoes_por_mes[mes_chave] = 0
+                previsoes_por_mes[mes_chave] += pag.valor_parcela
+        
+        # 3. LANÇAMENTOS COM VENCIMENTO FUTURO
+        hoje = datetime.date.today()
+        lancamentos_futuros = Lancamento.query.filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.data_vencimento != None,
+            Lancamento.data_vencimento >= hoje,
+            Lancamento.status != 'Pago'
+        ).all()
+        
+        for lanc in lancamentos_futuros:
+            valor_pendente = (lanc.valor_total or 0) - (lanc.valor_pago or 0)
+            if valor_pendente > 0:
+                mes_chave = lanc.data_vencimento.strftime('%Y-%m')
+                if mes_chave not in previsoes_por_mes:
+                    previsoes_por_mes[mes_chave] = 0
+                previsoes_por_mes[mes_chave] += valor_pendente
+        
+        # 4. PAGAMENTOS DE SERVIÇOS COM VENCIMENTO FUTURO
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        for serv in servicos:
+            for pag in serv.pagamentos:
+                if pag.data_vencimento and pag.data_vencimento >= hoje and pag.status != 'Pago':
+                    valor_pendente = (pag.valor_total or 0) - (pag.valor_pago or 0)
+                    if valor_pendente > 0:
+                        mes_chave = pag.data_vencimento.strftime('%Y-%m')
+                        if mes_chave not in previsoes_por_mes:
+                            previsoes_por_mes[mes_chave] = 0
+                        previsoes_por_mes[mes_chave] += valor_pendente
+        
+        # Converte para lista ordenada
+        previsoes_lista = []
+        for mes_chave in sorted(previsoes_por_mes.keys()):
+            ano, mes = mes_chave.split('-')
+            meses_pt = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+            mes_nome = meses_pt[int(mes)]
+            
+            previsoes_lista.append({
+                'mes_chave': mes_chave,
+                'mes_nome': f"{mes_nome}/{ano}",
+                'valor': round(previsoes_por_mes[mes_chave], 2)
+            })
+        
+        print(f"--- [LOG] Previsões calculadas para obra {obra_id}: {len(previsoes_lista)} meses ---")
+        return jsonify(previsoes_lista), 200
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/previsoes: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# --- FIM DAS ROTAS DO CRONOGRAMA FINANCEIRO ---
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
