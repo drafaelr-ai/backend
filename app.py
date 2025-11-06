@@ -2720,11 +2720,11 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
 @jwt_required()
 def calcular_previsoes(obra_id):
     """
-    Calcula a tabela de previsões mensais somando:
+    ✅ CORRIGIDO: Calcula a tabela de previsões mensais do CRONOGRAMA somando:
     - Pagamentos futuros (status != Cancelado)
-    - Parcelas de pagamentos parcelados (status != Cancelado)
-    - Lançamentos com data_vencimento futura (status != Pago)
-    - Pagamentos de serviços com data_vencimento futura (status != Pago)
+    - Parcelas de pagamentos parcelados (status != Cancelado) com ajuste na última parcela
+    
+    NOTA: Lançamentos e serviços aparecem na Lista de Pendências, NÃO no Cronograma
     """
     try:
         current_user = get_current_user()
@@ -2758,44 +2758,29 @@ def calcular_previsoes(obra_id):
             # Define o intervalo de dias com base na periodicidade
             dias_intervalo = 7 if pag.periodicidade == 'Semanal' else 30
             
+            # ✅ CORREÇÃO: Calcula parcelas com ajuste na última
+            valor_parcela_normal = pag.valor_parcela
+            
             # Gera cada parcela
             for i in range(pag.parcelas_pagas, pag.numero_parcelas):
+                # ✅ Se for a ÚLTIMA parcela, ajusta o valor para fechar o total
+                if i == pag.numero_parcelas - 1:
+                    # Calcula quanto falta para fechar o valor total
+                    valor_ja_parcelado = valor_parcela_normal * (pag.numero_parcelas - 1)
+                    valor_ultima_parcela = pag.valor_total - valor_ja_parcelado
+                else:
+                    valor_ultima_parcela = valor_parcela_normal
+                
                 # Calcula a data da parcela (primeira parcela + i * intervalo)
                 data_parcela = pag.data_primeira_parcela + datetime.timedelta(days=dias_intervalo * i)
                 mes_chave = data_parcela.strftime('%Y-%m')
                 
                 if mes_chave not in previsoes_por_mes:
                     previsoes_por_mes[mes_chave] = 0
-                previsoes_por_mes[mes_chave] += pag.valor_parcela
+                previsoes_por_mes[mes_chave] += valor_ultima_parcela
         
-        # 3. LANÇAMENTOS COM VENCIMENTO FUTURO
-        hoje = datetime.date.today()
-        lancamentos_futuros = Lancamento.query.filter(
-            Lancamento.obra_id == obra_id,
-            Lancamento.data_vencimento != None,
-            Lancamento.data_vencimento >= hoje,
-            Lancamento.status != 'Pago'
-        ).all()
-        
-        for lanc in lancamentos_futuros:
-            valor_pendente = (lanc.valor_total or 0) - (lanc.valor_pago or 0)
-            if valor_pendente > 0:
-                mes_chave = lanc.data_vencimento.strftime('%Y-%m')
-                if mes_chave not in previsoes_por_mes:
-                    previsoes_por_mes[mes_chave] = 0
-                previsoes_por_mes[mes_chave] += valor_pendente
-        
-        # 4. PAGAMENTOS DE SERVIÇOS COM VENCIMENTO FUTURO
-        servicos = Servico.query.filter_by(obra_id=obra_id).all()
-        for serv in servicos:
-            for pag in serv.pagamentos:
-                if pag.data_vencimento and pag.data_vencimento >= hoje and pag.status != 'Pago':
-                    valor_pendente = (pag.valor_total or 0) - (pag.valor_pago or 0)
-                    if valor_pendente > 0:
-                        mes_chave = pag.data_vencimento.strftime('%Y-%m')
-                        if mes_chave not in previsoes_por_mes:
-                            previsoes_por_mes[mes_chave] = 0
-                        previsoes_por_mes[mes_chave] += valor_pendente
+        # ✅ CORREÇÃO: Cronograma mostra APENAS pagamentos do cronograma
+        # (Lançamentos e serviços aparecem na Lista de Pendências, não aqui)
         
         # Converte para lista ordenada
         previsoes_lista = []
