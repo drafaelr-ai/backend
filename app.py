@@ -135,6 +135,7 @@ class Lancamento(db.Model):
     valor_pago = db.Column(db.Float, nullable=False, default=0.0)
     
     data = db.Column(db.Date, nullable=False)
+    data_vencimento = db.Column(db.Date, nullable=True)
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
     pix = db.Column(db.String(100))
     prioridade = db.Column(db.Integer, nullable=False, default=0) 
@@ -150,6 +151,7 @@ class Lancamento(db.Model):
             "valor_total": self.valor_total, 
             "valor_pago": self.valor_pago, 
             "data": self.data.isoformat(),
+            "data_vencimento": self.data_vencimento.isoformat() if self.data_vencimento else None,
             "status": self.status, "pix": self.pix,
             "prioridade": self.prioridade, 
             "fornecedor": self.fornecedor, 
@@ -184,6 +186,7 @@ class PagamentoServico(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
+    data_vencimento = db.Column(db.Date, nullable=True)
     
     valor_total = db.Column(db.Float, nullable=False)
     valor_pago = db.Column(db.Float, nullable=False, default=0.0)
@@ -196,6 +199,7 @@ class PagamentoServico(db.Model):
     def to_dict(self):
         return {
             "id": self.id, "data": self.data.isoformat(),
+            "data_vencimento": self.data_vencimento.isoformat() if self.data_vencimento else None,
             "valor_total": self.valor_total, 
             "valor_pago": self.valor_pago, 
             "status": self.status,
@@ -625,6 +629,7 @@ def get_obra_detalhes(obra_id):
             
             historico_unificado.append({
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
+                "data_vencimento": lanc.data_vencimento,
                 "descricao": descricao, "tipo": lanc.tipo, 
                 "valor_total": float(lanc.valor_total or 0.0), 
                 "valor_pago": float(lanc.valor_pago or 0.0), 
@@ -638,6 +643,7 @@ def get_obra_detalhes(obra_id):
                 desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
                 historico_unificado.append({
                     "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data,
+                    "data_vencimento": pag.data_vencimento,
                     "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", 
                     "valor_total": float(pag.valor_total or 0.0), 
                     "valor_pago": float(pag.valor_pago or 0.0), 
@@ -651,6 +657,8 @@ def get_obra_detalhes(obra_id):
         for item in historico_unificado:
             if item['data']:
                 item['data'] = item['data'].isoformat()
+            if item.get('data_vencimento'):
+                item['data_vencimento'] = item['data_vencimento'].isoformat()
             
         # --- Cálculo dos totais de serviço ---
         servicos_com_totais = []
@@ -731,6 +739,7 @@ def add_lancamento(obra_id):
             valor_total=valor_total,
             valor_pago=valor_pago,
             data=datetime.date.fromisoformat(dados['data']),
+            data_vencimento=datetime.date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
             status=status, 
             pix=dados.get('pix'),
             prioridade=int(dados.get('prioridade', 0)),
@@ -784,6 +793,7 @@ def editar_lancamento(lancamento_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         dados = request.json
         lancamento.data = datetime.date.fromisoformat(dados['data'])
+        lancamento.data_vencimento = datetime.date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None
         lancamento.descricao = dados['descricao']
         lancamento.valor_total = float(dados['valor_total']) 
         lancamento.valor_pago = float(dados.get('valor_pago', lancamento.valor_pago)) 
@@ -915,6 +925,7 @@ def add_pagamento_servico(servico_id):
         novo_pagamento = PagamentoServico(
             servico_id=servico_id,
             data=datetime.date.fromisoformat(dados['data']),
+            data_vencimento=datetime.date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
             valor_total=valor_total, 
             valor_pago=valor_pago, 
             status=status,
