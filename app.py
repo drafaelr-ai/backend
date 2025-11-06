@@ -27,7 +27,7 @@ print("--- [LOG] Iniciando app.py (VERSÃO com Novos KPIs v3) ---")
 
 app = Flask(__name__)
 
-# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---
+# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS ('*') ---")
 # -----------------------------------------------------------------
