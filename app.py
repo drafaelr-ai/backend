@@ -320,6 +320,7 @@ class PagamentoParcelado(db.Model):
     numero_parcelas = db.Column(db.Integer, nullable=False)
     valor_parcela = db.Column(db.Float, nullable=False)
     data_primeira_parcela = db.Column(db.Date, nullable=False)
+    periodicidade = db.Column(db.String(10), nullable=False, default='Mensal')  # Semanal ou Mensal
     
     # Controle de pagamentos
     parcelas_pagas = db.Column(db.Integer, nullable=False, default=0)
@@ -336,6 +337,7 @@ class PagamentoParcelado(db.Model):
             "numero_parcelas": self.numero_parcelas,
             "valor_parcela": self.valor_parcela,
             "data_primeira_parcela": self.data_primeira_parcela.isoformat(),
+            "periodicidade": self.periodicidade,
             "parcelas_pagas": self.parcelas_pagas,
             "status": self.status,
             "observacoes": self.observacoes
@@ -2609,6 +2611,7 @@ def criar_pagamento_parcelado(obra_id):
         valor_total = float(data.get('valor_total', 0))
         numero_parcelas = int(data.get('numero_parcelas', 1))
         valor_parcela = valor_total / numero_parcelas if numero_parcelas > 0 else 0
+        periodicidade = data.get('periodicidade', 'Mensal')  # Semanal ou Mensal
         
         novo_pagamento = PagamentoParcelado(
             obra_id=obra_id,
@@ -2618,6 +2621,7 @@ def criar_pagamento_parcelado(obra_id):
             numero_parcelas=numero_parcelas,
             valor_parcela=valor_parcela,
             data_primeira_parcela=datetime.datetime.strptime(data.get('data_primeira_parcela'), '%Y-%m-%d').date(),
+            periodicidade=periodicidade,
             parcelas_pagas=0,
             status='Ativo',
             observacoes=data.get('observacoes')
@@ -2751,10 +2755,13 @@ def calcular_previsoes(obra_id):
         ).all()
         
         for pag in pagamentos_parcelados:
+            # Define o intervalo de dias com base na periodicidade
+            dias_intervalo = 7 if pag.periodicidade == 'Semanal' else 30
+            
             # Gera cada parcela
             for i in range(pag.parcelas_pagas, pag.numero_parcelas):
-                # Calcula a data da parcela (primeira parcela + i meses)
-                data_parcela = pag.data_primeira_parcela + datetime.timedelta(days=30*i)
+                # Calcula a data da parcela (primeira parcela + i * intervalo)
+                data_parcela = pag.data_primeira_parcela + datetime.timedelta(days=dias_intervalo * i)
                 mes_chave = data_parcela.strftime('%Y-%m')
                 
                 if mes_chave not in previsoes_por_mes:
