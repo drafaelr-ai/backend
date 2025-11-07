@@ -13,7 +13,7 @@ import json
 # CONFIGURAÇÕES
 API_URL = "https://backend-production-78c9.up.railway.app"
 # Coloque seu token JWT aqui (copie do localStorage do navegador)
-TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2MjUzNzEyNiwianRpIjoiZTFmNDE5OTItMmFkMC00MTJlLWEzZmQtYzZmZjY2ODAyMDhkIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjEiLCJuYmYiOjE3NjI1MzcxMjYsImNzcmYiOiI1MTk0YjY5Mi1kYThhLTQ0ODktODRiYy04ODJlMTkxYjlmMTAiLCJleHAiOjE3NjI1MzgwMjYsInVzZXJuYW1lIjoiYWRtaW5fcHJpbmNpcGFsIiwicm9sZSI6ImFkbWluaXN0cmFkb3IifQ.QQAN3i3LCvc78J1PGDsSQnVa-b9rxySvH0DAYTx8Nn4"
+TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmcmVzaCI6ZmFsc2UsImlhdCI6MTc2MjU0MzAyMiwianRpIjoiMDhkNWU3MmMtODQ1YS00ZWExLWJmNzctOTVkNTZmNmUxNmRkIiwidHlwZSI6ImFjY2VzcyIsInN1YiI6IjEiLCJuYmYiOjE3NjI1NDMwMjIsImNzcmYiOiJiZjAyMDM4OS00MWM2LTQwZWYtYmRiNS0wYTc3ZmFiODMwYTkiLCJleHAiOjE3NjI1NDM5MjIsInVzZXJuYW1lIjoiYWRtaW5fcHJpbmNpcGFsIiwicm9sZSI6ImFkbWluaXN0cmFkb3IifQ.tf2spq90Dc1NZoNjHvC6aoVLZ3qR3sWWdfPivvg-G4Q"
 
 # ID da obra que você quer verificar/limpar
 OBRA_ID = 1  # Altere para o ID da sua obra
@@ -119,13 +119,13 @@ def excluir_todos():
 def excluir_todas_obras():
     """Exclui TODOS os lançamentos pendentes de TODAS as obras de uma vez"""
     print("\n" + "="*60)
-    print("🚨 LIMPEZA GLOBAL - TODAS AS OBRAS")
+    print("🚨 LIMPEZA GLOBAL - TODAS AS OBRAS (Apenas Lançamentos)")
     print("="*60)
     
     print("\n" + "⚠️ " * 20)
     print("ATENÇÃO MÁXIMA!")
     print("Você está prestes a EXCLUIR PERMANENTEMENTE:")
-    print("  • TODOS os lançamentos pendentes")
+    print("  • TODOS os LANÇAMENTOS pendentes")
     print("  • De TODAS as obras que você tem acesso")
     print("  • Esta operação NÃO PODE ser desfeita!")
     print("⚠️ " * 20)
@@ -168,6 +168,66 @@ def excluir_todas_obras():
         print(response.text)
         return False
 
+def super_limpeza_global():
+    """SUPER LIMPEZA: Exclui TODOS os lançamentos E pagamentos de serviço pendentes"""
+    print("\n" + "="*60)
+    print("🔥 SUPER LIMPEZA - TUDO (Lançamentos + Pagamentos)")
+    print("="*60)
+    
+    print("\n" + "🔥 " * 20)
+    print("⚠️  ATENÇÃO MÁXIMA - SUPER LIMPEZA! ⚠️")
+    print()
+    print("Você está prestes a EXCLUIR PERMANENTEMENTE:")
+    print("  ✓ TODOS os LANÇAMENTOS com saldo pendente")
+    print("  ✓ TODOS os PAGAMENTOS DE SERVIÇO com saldo pendente")
+    print("  ✓ De TODAS as obras que você tem acesso")
+    print()
+    print("Isso vai ZERAR completamente o KPI 'Liberado p/ Pagamento'!")
+    print("Esta operação NÃO PODE ser desfeita!")
+    print("🔥 " * 20)
+    
+    confirmacao1 = input("\n⚠️  Tem CERTEZA ABSOLUTA? (digite 'SIM' para continuar): ")
+    if confirmacao1 != 'SIM':
+        print("❌ Operação cancelada.")
+        return
+    
+    confirmacao2 = input("⚠️  Digite 'LIMPAR TUDO' para confirmar a SUPER LIMPEZA: ")
+    if confirmacao2 != 'LIMPAR TUDO':
+        print("❌ Operação cancelada.")
+        return
+    
+    print("\n🔥 Processando SUPER LIMPEZA...")
+    
+    url = f"{API_URL}/limpar-tudo-pendente-global"
+    response = requests.delete(url, headers=headers)
+    
+    if response.status_code == 200:
+        data = response.json()
+        print(f"\n✅ {data['mensagem']}")
+        print(f"   Total de obras processadas: {data['total_obras_processadas']}")
+        print(f"   Obras com pendências: {data['obras_com_pendencias']}")
+        print(f"   Lançamentos excluídos: {data['total_lancamentos_excluidos']}")
+        print(f"   Pagamentos excluídos: {data['total_pagamentos_excluidos']}")
+        print(f"   💰 Valor total removido: R$ {data['valor_total_removido']:.2f}\n")
+        
+        if data['detalhes_por_obra']:
+            print("📋 DETALHES POR OBRA:\n")
+            for obra in data['detalhes_por_obra']:
+                print(f"  🏗️  {obra['obra_nome']} (ID: {obra['obra_id']})")
+                print(f"      Lançamentos: {obra['lancamentos_excluidos']}")
+                print(f"      Pagamentos: {obra['pagamentos_excluidos']}")
+                print(f"      Total: {obra['total_excluido']} itens")
+                print(f"      Valor removido: R$ {obra['valor_removido']:.2f}")
+                print()
+        
+        print("\n🔥 SUPER LIMPEZA CONCLUÍDA!")
+        print("   O KPI 'Liberado p/ Pagamento' deve estar ZERADO agora!")
+        return True
+    else:
+        print(f"❌ Erro: {response.status_code}")
+        print(response.text)
+        return False
+
 def menu():
     """Menu principal"""
     while True:
@@ -179,9 +239,11 @@ def menu():
         print("  1 - Listar lançamentos pendentes de UMA obra")
         print("  2 - Excluir um lançamento específico")
         print("  3 - Excluir TODOS os lançamentos de UMA obra")
-        print("  4 - 🚨 LIMPAR TODAS AS OBRAS de uma vez (RECOMENDADO)")
+        print("  4 - 🚨 Limpar lançamentos de TODAS as obras")
+        print("  5 - 🔥 SUPER LIMPEZA - Lançamentos + Pagamentos (RECOMENDADO)")
         print("  0 - Sair")
         print("="*60)
+        print("\n💡 DICA: Use a opção 5 para limpar TUDO de uma vez!")
         
         opcao = input("\nEscolha uma opção: ")
         
@@ -200,6 +262,9 @@ def menu():
         
         elif opcao == "4":
             excluir_todas_obras()
+        
+        elif opcao == "5":
+            super_limpeza_global()
         
         elif opcao == "0":
             print("\n👋 Até logo!")

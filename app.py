@@ -3758,6 +3758,267 @@ def excluir_todos_lancamentos_pendentes_global():
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
+
+# --- NOVO ENDPOINT: EXCLUIR PAGAMENTOS DE SERVIÇO PENDENTES (UMA OBRA) ---
+@app.route('/obras/<int:obra_id>/pagamentos-servico/excluir-todos-pendentes', methods=['DELETE'])
+@check_permission(roles=['administrador', 'master'])
+def excluir_pagamentos_servico_pendentes(obra_id):
+    """
+    Exclui TODOS os pagamentos de serviço com saldo pendente de uma obra.
+    Remove completamente do banco de dados.
+    
+    ⚠️ ATENÇÃO: Esta operação não pode ser desfeita!
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        # Buscar pagamentos de serviço com saldo pendente
+        pagamentos = db.session.query(PagamentoServico).join(
+            Servico, PagamentoServico.servico_id == Servico.id
+        ).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.valor_total > PagamentoServico.valor_pago
+        ).all()
+        
+        if not pagamentos:
+            return jsonify({"mensagem": "Nenhum pagamento de serviço pendente encontrado"}), 200
+        
+        excluidos = []
+        valor_total_removido = 0
+        
+        for pagamento in pagamentos:
+            valor_restante = pagamento.valor_total - pagamento.valor_pago
+            
+            excluidos.append({
+                'pagamento_id': pagamento.id,
+                'servico_id': pagamento.servico_id,
+                'descricao': pagamento.descricao,
+                'tipo': pagamento.tipo_pagamento,
+                'valor_pendente_removido': valor_restante
+            })
+            valor_total_removido += valor_restante
+            
+            # Excluir do banco
+            db.session.delete(pagamento)
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] {len(excluidos)} pagamentos de serviço pendentes excluídos da obra {obra_id}. Total: R$ {valor_total_removido:.2f} ---")
+        
+        return jsonify({
+            "mensagem": f"{len(excluidos)} pagamentos de serviço pendentes excluídos com sucesso",
+            "quantidade_excluida": len(excluidos),
+            "valor_total_removido": round(valor_total_removido, 2),
+            "pagamentos_excluidos": excluidos
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
+
+# --- NOVO ENDPOINT GLOBAL: EXCLUIR PAGAMENTOS DE SERVIÇO PENDENTES (TODAS AS OBRAS) ---
+@app.route('/pagamentos-servico/excluir-todos-pendentes-global', methods=['DELETE'])
+@check_permission(roles=['administrador', 'master'])
+def excluir_pagamentos_servico_pendentes_global():
+    """
+    Exclui TODOS os pagamentos de serviço com saldo pendente de TODAS as obras.
+    
+    Administrador: Limpa todas as obras do sistema
+    Master: Limpa apenas as obras que tem acesso
+    
+    ⚠️ ATENÇÃO: Esta operação não pode ser desfeita!
+    """
+    try:
+        current_user = get_current_user()
+        
+        # Determinar quais obras o usuário pode acessar
+        if current_user.role == 'administrador':
+            obras = Obra.query.all()
+        else:
+            obras = current_user.obras_permitidas
+        
+        if not obras:
+            return jsonify({"mensagem": "Nenhuma obra acessível encontrada"}), 200
+        
+        resultado_por_obra = []
+        total_geral_excluido = 0
+        total_geral_removido = 0.0
+        
+        for obra in obras:
+            # Buscar pagamentos de serviço pendentes desta obra
+            pagamentos = db.session.query(PagamentoServico).join(
+                Servico, PagamentoServico.servico_id == Servico.id
+            ).filter(
+                Servico.obra_id == obra.id,
+                PagamentoServico.valor_total > PagamentoServico.valor_pago
+            ).all()
+            
+            if pagamentos:
+                excluidos = []
+                valor_total_obra = 0
+                
+                for pagamento in pagamentos:
+                    valor_restante = pagamento.valor_total - pagamento.valor_pago
+                    
+                    excluidos.append({
+                        'pagamento_id': pagamento.id,
+                        'descricao': pagamento.descricao,
+                        'tipo': pagamento.tipo_pagamento,
+                        'valor_pendente': valor_restante
+                    })
+                    valor_total_obra += valor_restante
+                    
+                    # Excluir do banco
+                    db.session.delete(pagamento)
+                
+                total_geral_excluido += len(excluidos)
+                total_geral_removido += valor_total_obra
+                
+                resultado_por_obra.append({
+                    'obra_id': obra.id,
+                    'obra_nome': obra.nome,
+                    'quantidade_excluida': len(excluidos),
+                    'valor_removido': round(valor_total_obra, 2),
+                    'pagamentos': excluidos
+                })
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] LIMPEZA GLOBAL PAGAMENTOS: {total_geral_excluido} pagamentos de serviço excluídos em {len(resultado_por_obra)} obras. Total: R$ {total_geral_removido:.2f} ---")
+        
+        return jsonify({
+            "mensagem": f"Limpeza de pagamentos concluída! {total_geral_excluido} pagamentos excluídos em {len(resultado_por_obra)} obras",
+            "total_obras_processadas": len(obras),
+            "obras_com_pendencias": len(resultado_por_obra),
+            "total_pagamentos_excluidos": total_geral_excluido,
+            "valor_total_removido": round(total_geral_removido, 2),
+            "detalhes_por_obra": resultado_por_obra
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
+
+# --- NOVO ENDPOINT: LIMPEZA TOTAL (LANÇAMENTOS + PAGAMENTOS DE SERVIÇO) ---
+@app.route('/limpar-tudo-pendente-global', methods=['DELETE'])
+@check_permission(roles=['administrador', 'master'])
+def limpar_tudo_pendente_global():
+    """
+    SUPER LIMPEZA: Exclui TODOS os lançamentos E pagamentos de serviço pendentes de TODAS as obras.
+    
+    Este é o endpoint mais poderoso - limpa TUDO que contribui para "Liberado p/ Pagamento":
+    - Lançamentos com saldo pendente
+    - Pagamentos de Serviço com saldo pendente
+    
+    ⚠️ ATENÇÃO: Esta operação não pode ser desfeita!
+    """
+    try:
+        current_user = get_current_user()
+        
+        # Determinar quais obras o usuário pode acessar
+        if current_user.role == 'administrador':
+            obras = Obra.query.all()
+        else:
+            obras = current_user.obras_permitidas
+        
+        if not obras:
+            return jsonify({"mensagem": "Nenhuma obra acessível encontrada"}), 200
+        
+        resultado_por_obra = []
+        total_lancamentos_excluidos = 0
+        total_pagamentos_excluidos = 0
+        total_valor_removido = 0.0
+        
+        for obra in obras:
+            lancamentos_obra = []
+            pagamentos_obra = []
+            valor_obra = 0
+            
+            # 1. Lançamentos pendentes
+            lancamentos = Lancamento.query.filter_by(obra_id=obra.id).filter(
+                Lancamento.valor_total > Lancamento.valor_pago
+            ).all()
+            
+            for lancamento in lancamentos:
+                valor_restante = lancamento.valor_total - lancamento.valor_pago
+                lancamentos_obra.append({
+                    'id': lancamento.id,
+                    'tipo': 'Lançamento',
+                    'descricao': lancamento.descricao,
+                    'valor': valor_restante
+                })
+                valor_obra += valor_restante
+                db.session.delete(lancamento)
+            
+            # 2. Pagamentos de Serviço pendentes
+            pagamentos = db.session.query(PagamentoServico).join(
+                Servico, PagamentoServico.servico_id == Servico.id
+            ).filter(
+                Servico.obra_id == obra.id,
+                PagamentoServico.valor_total > PagamentoServico.valor_pago
+            ).all()
+            
+            for pagamento in pagamentos:
+                valor_restante = pagamento.valor_total - pagamento.valor_pago
+                pagamentos_obra.append({
+                    'id': pagamento.id,
+                    'tipo': 'Pagamento de Serviço',
+                    'descricao': pagamento.descricao,
+                    'valor': valor_restante
+                })
+                valor_obra += valor_restante
+                db.session.delete(pagamento)
+            
+            if lancamentos_obra or pagamentos_obra:
+                total_lancamentos_excluidos += len(lancamentos_obra)
+                total_pagamentos_excluidos += len(pagamentos_obra)
+                total_valor_removido += valor_obra
+                
+                resultado_por_obra.append({
+                    'obra_id': obra.id,
+                    'obra_nome': obra.nome,
+                    'lancamentos_excluidos': len(lancamentos_obra),
+                    'pagamentos_excluidos': len(pagamentos_obra),
+                    'total_excluido': len(lancamentos_obra) + len(pagamentos_obra),
+                    'valor_removido': round(valor_obra, 2),
+                    'detalhes': {
+                        'lancamentos': lancamentos_obra,
+                        'pagamentos': pagamentos_obra
+                    }
+                })
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] SUPER LIMPEZA: {total_lancamentos_excluidos} lançamentos + {total_pagamentos_excluidos} pagamentos excluídos. Total: R$ {total_valor_removido:.2f} ---")
+        
+        return jsonify({
+            "mensagem": f"SUPER LIMPEZA concluída! {total_lancamentos_excluidos + total_pagamentos_excluidos} itens excluídos em {len(resultado_por_obra)} obras",
+            "total_obras_processadas": len(obras),
+            "obras_com_pendencias": len(resultado_por_obra),
+            "total_lancamentos_excluidos": total_lancamentos_excluidos,
+            "total_pagamentos_excluidos": total_pagamentos_excluidos,
+            "total_itens_excluidos": total_lancamentos_excluidos + total_pagamentos_excluidos,
+            "valor_total_removido": round(total_valor_removido, 2),
+            "detalhes_por_obra": resultado_por_obra
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /limpar-tudo-pendente-global: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
 # --- MUDANÇA 3: NOVO ENDPOINT - INSERIR PAGAMENTO ---
 @app.route('/obras/<int:obra_id>/inserir-pagamento', methods=['POST', 'OPTIONS'])
 @jwt_required()
