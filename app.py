@@ -2695,6 +2695,34 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
         print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST'])
+@jwt_required()
+def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
+    """Marca um pagamento futuro como pago"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoFuturo, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        if pagamento.status == 'Pago':
+            return jsonify({"mensagem": "Pagamento já está marcado como pago"}), 200
+        
+        pagamento.status = 'Pago'
+        db.session.commit()
+        
+        print(f"--- [LOG] Pagamento futuro {pagamento_id} marcado como pago na obra {obra_id} ---")
+        return jsonify({"mensagem": "Pagamento marcado como pago com sucesso"}), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}/marcar-pago: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
 # --- PAGAMENTOS PARCELADOS ---
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET'])
 @jwt_required()
