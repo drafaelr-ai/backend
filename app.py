@@ -526,8 +526,26 @@ def get_obras():
          .join(Servico, PagamentoServico.servico_id == Servico.id) \
          .group_by(Servico.obra_id) \
          .subquery()
+        
+        # CORREÇÃO: 4. Pagamentos Futuros (Cronograma Financeiro)
+        pagamentos_futuros_sum = db.session.query(
+            PagamentoFuturo.obra_id,
+            func.sum(PagamentoFuturo.valor).label('total_futuro')
+        ).filter(
+            PagamentoFuturo.status == 'Previsto'
+        ).group_by(PagamentoFuturo.obra_id).subquery()
+        
+        # CORREÇÃO: 5. Parcelas Previstas (Cronograma Financeiro)
+        parcelas_previstas_sum = db.session.query(
+            PagamentoParcelado.obra_id,
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas')
+        ).select_from(ParcelaIndividual) \
+         .join(PagamentoParcelado, ParcelaIndividual.pagamento_parcelado_id == PagamentoParcelado.id) \
+         .filter(ParcelaIndividual.status == 'Previsto') \
+         .group_by(PagamentoParcelado.obra_id) \
+         .subquery()
 
-        # 4. Query Principal
+        # 6. Query Principal
         obras_query = db.session.query(
             Obra,
             func.coalesce(lancamentos_sum.c.total_geral_lanc, 0).label('lanc_geral'),
@@ -536,16 +554,22 @@ def get_obras():
             func.coalesce(servico_budget_sum.c.total_budget_mo, 0).label('serv_budget_mo'),
             func.coalesce(servico_budget_sum.c.total_budget_mat, 0).label('serv_budget_mat'),
             func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago'),
-            func.coalesce(pagamentos_sum.c.total_pendente_pag, 0).label('pag_pendente')
+            func.coalesce(pagamentos_sum.c.total_pendente_pag, 0).label('pag_pendente'),
+            func.coalesce(pagamentos_futuros_sum.c.total_futuro, 0).label('futuro_previsto'),
+            func.coalesce(parcelas_previstas_sum.c.total_parcelas, 0).label('parcelas_previstas')
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
             servico_budget_sum, Obra.id == servico_budget_sum.c.obra_id
         ).outerjoin(
             pagamentos_sum, Obra.id == pagamentos_sum.c.obra_id
+        ).outerjoin(
+            pagamentos_futuros_sum, Obra.id == pagamentos_futuros_sum.c.obra_id
+        ).outerjoin(
+            parcelas_previstas_sum, Obra.id == parcelas_previstas_sum.c.obra_id
         )
 
-        # 5. Filtra permissões
+        # 7. Filtra permissões
         if user.role == 'administrador':
             obras_com_totais = obras_query.order_by(Obra.nome).all()
         else:
@@ -555,9 +579,9 @@ def get_obras():
                 user_obra_association.c.user_id == user.id
             ).order_by(Obra.nome).all()
 
-        # 6. Formata a Saída com os 4 KPIs
+        # 8. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas in obras_com_totais:
             
             # KPI 1: Orçamento Total
             orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
@@ -565,8 +589,13 @@ def get_obras():
             # KPI 2: Total Pago (Valores Efetivados)
             total_pago = float(lanc_pago) + float(pag_pago)
             
-            # KPI 3: Liberado para Pagamento (Fila)
-            liberado_pagamento = float(lanc_pendente) + float(pag_pendente)
+            # KPI 3: Liberado para Pagamento (Fila) - CORREÇÃO: Incluindo Cronograma Financeiro
+            liberado_pagamento = (
+                float(lanc_pendente) + 
+                float(pag_pendente) + 
+                float(futuro_previsto) + 
+                float(parcelas_previstas)
+            )
             
             # KPI 4: Residual (Orçamento - Pago)
             residual = orcamento_total - total_pago
@@ -680,7 +709,29 @@ def get_obra_detalhes(obra_id):
             PagamentoServico.valor_total > PagamentoServico.valor_pago
         ).first()
         
-        kpi_liberado_pagamento = float(lancamentos_pendentes.total_pendente or 0.0) + float(pagamentos_servico_pendentes.total_pendente or 0.0)
+        # CORREÇÃO: Incluir Pagamentos Futuros e Parcelas do Cronograma Financeiro
+        # Pagamentos Futuros com status='Previsto'
+        pagamentos_futuros_previstos = db.session.query(
+            func.sum(PagamentoFuturo.valor).label('total_futuro')
+        ).filter(
+            PagamentoFuturo.obra_id == obra_id,
+            PagamentoFuturo.status == 'Previsto'
+        ).first()
+        
+        # Parcelas Individuais com status='Previsto'
+        parcelas_previstas = db.session.query(
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas')
+        ).join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Previsto'
+        ).first()
+        
+        kpi_liberado_pagamento = (
+            float(lancamentos_pendentes.total_pendente or 0.0) + 
+            float(pagamentos_servico_pendentes.total_pendente or 0.0) +
+            float(pagamentos_futuros_previstos.total_futuro or 0.0) +
+            float(parcelas_previstas.total_parcelas or 0.0)
+        )
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
@@ -3281,6 +3332,53 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT DE RELATÓRIO DO CRONOGRAMA ---
 
+# --- NOVO ENDPOINT: BUSCAR PAGAMENTOS DE SERVIÇO PENDENTES ---
+@app.route('/obras/<int:obra_id>/pagamentos-servico-pendentes', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def get_pagamentos_servico_pendentes(obra_id):
+    """
+    Retorna todos os pagamentos de serviço com valor_pago < valor_total
+    para exibir no Cronograma Financeiro
+    """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        # Buscar pagamentos de serviço pendentes
+        pagamentos_pendentes = db.session.query(PagamentoServico, Servico).join(
+            Servico, PagamentoServico.servico_id == Servico.id
+        ).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.valor_total > PagamentoServico.valor_pago
+        ).all()
+        
+        resultado = []
+        for pagamento, servico in pagamentos_pendentes:
+            resultado.append({
+                'id': pagamento.id,
+                'servico_id': servico.id,
+                'servico_nome': servico.nome,
+                'descricao': pagamento.descricao or f"Pagamento - {servico.nome}",
+                'tipo_pagamento': 'Mão de Obra' if pagamento.tipo_pagamento == 'mao_de_obra' else 'Material',
+                'valor_total': pagamento.valor_total,
+                'valor_pago': pagamento.valor_pago,
+                'valor_restante': pagamento.valor_total - pagamento.valor_pago,
+                'data': pagamento.data.isoformat() if pagamento.data else None,
+                'prioridade': pagamento.prioridade
+            })
+        
+        return jsonify(resultado), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /pagamentos-servico-pendentes: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
 # --- MUDANÇA 3: NOVO ENDPOINT - INSERIR PAGAMENTO ---
 @app.route('/obras/<int:obra_id>/inserir-pagamento', methods=['POST', 'OPTIONS'])
 @jwt_required()
@@ -3483,6 +3581,52 @@ def marcar_multiplos_como_pago(obra_id):
                             "id": item_id,
                             "status": "error",
                             "mensagem": "Parcela não encontrada"
+                        })
+                
+                elif tipo_item == 'servico':
+                    # NOVO: Marcar pagamento de serviço como totalmente pago
+                    pagamento_servico = PagamentoServico.query.get(item_id)
+                    if pagamento_servico:
+                        servico = Servico.query.get(pagamento_servico.servico_id)
+                        if servico and servico.obra_id == obra_id:
+                            # Marcar como totalmente pago
+                            pagamento_servico.valor_pago = pagamento_servico.valor_total
+                            
+                            # Atualizar percentuais do serviço
+                            pagamentos = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+                            
+                            # Separar por tipo
+                            pagamentos_mao_de_obra = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
+                            pagamentos_material = [p for p in pagamentos if p.tipo_pagamento == 'material']
+                            
+                            # Calcular percentuais
+                            if servico.valor_global_mao_de_obra > 0:
+                                total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                                servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+                            
+                            if servico.valor_global_material > 0:
+                                total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                                servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                            
+                            resultados.append({
+                                "tipo": "servico",
+                                "id": item_id,
+                                "status": "success",
+                                "mensagem": f"Pagamento do serviço '{servico.nome}' marcado como pago"
+                            })
+                        else:
+                            resultados.append({
+                                "tipo": "servico",
+                                "id": item_id,
+                                "status": "error",
+                                "mensagem": "Serviço não encontrado ou acesso negado"
+                            })
+                    else:
+                        resultados.append({
+                            "tipo": "servico",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Pagamento de serviço não encontrado"
                         })
             
             except Exception as e:
