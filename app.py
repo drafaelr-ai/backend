@@ -2548,14 +2548,50 @@ def relatorio_resumo_completo(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_futuros(obra_id):
-    """Lista todos os pagamentos futuros de uma obra"""
+    """Lista todos os pagamentos futuros de uma obra, incluindo pagamentos de serviços pendentes"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
-        pagamentos = PagamentoFuturo.query.filter_by(obra_id=obra_id).order_by(PagamentoFuturo.data_vencimento).all()
-        return jsonify([p.to_dict() for p in pagamentos]), 200
+        resultado = []
+        
+        # 1. Pagamentos Futuros (cadastrados pelo botão azul)
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id).order_by(PagamentoFuturo.data_vencimento).all()
+        for p in pagamentos_futuros:
+            resultado.append(p.to_dict())
+        
+        # 2. NOVO: Pagamentos de Serviços com saldo pendente
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        for servico in servicos:
+            pagamentos_servico = PagamentoServico.query.filter_by(
+                servico_id=servico.id
+            ).filter(
+                PagamentoServico.valor_pago < PagamentoServico.valor_total
+            ).all()
+            
+            for pag_serv in pagamentos_servico:
+                valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
+                if valor_pendente > 0 and pag_serv.data_vencimento:
+                    # Adicionar como se fosse um pagamento futuro
+                    resultado.append({
+                        'id': f'servico-{pag_serv.id}',  # ID especial para distinguir
+                        'tipo_origem': 'servico',  # Flag para identificar origem
+                        'pagamento_servico_id': pag_serv.id,
+                        'servico_id': servico.id,
+                        'servico_nome': servico.nome,
+                        'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
+                        'fornecedor': pag_serv.fornecedor,
+                        'valor': valor_pendente,
+                        'data_vencimento': pag_serv.data_vencimento.isoformat(),
+                        'status': 'Previsto',
+                        'periodicidade': None
+                    })
+        
+        # Ordenar todos por data de vencimento
+        resultado.sort(key=lambda x: x.get('data_vencimento', '9999-12-31'))
+        
+        return jsonify(resultado), 200
     
     except Exception as e:
         error_details = traceback.format_exc()
@@ -2799,7 +2835,7 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/previsoes', methods=['GET'])
 @jwt_required()
 def calcular_previsoes(obra_id):
-    """Calcula a tabela de previsões mensais usando parcelas individuais"""
+    """Calcula a tabela de previsões mensais usando parcelas individuais e pagamentos de serviços"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -2807,6 +2843,7 @@ def calcular_previsoes(obra_id):
         
         previsoes_por_mes = {}
         
+        # 1. Pagamentos Futuros (Únicos)
         pagamentos_futuros = PagamentoFuturo.query.filter_by(
             obra_id=obra_id
         ).filter(
@@ -2820,6 +2857,7 @@ def calcular_previsoes(obra_id):
                 previsoes_por_mes[mes_chave] = 0
             previsoes_por_mes[mes_chave] += pag.valor
         
+        # 2. Parcelas Individuais
         parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
             PagamentoParcelado.obra_id == obra_id,
             PagamentoParcelado.status != 'Cancelado',
@@ -2831,6 +2869,24 @@ def calcular_previsoes(obra_id):
             if mes_chave not in previsoes_por_mes:
                 previsoes_por_mes[mes_chave] = 0
             previsoes_por_mes[mes_chave] += parcela.valor_parcela
+        
+        # 3. NOVO: Pagamentos de Serviços com status "A Pagar"
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        for servico in servicos:
+            pagamentos_servico = PagamentoServico.query.filter_by(
+                servico_id=servico.id
+            ).filter(
+                PagamentoServico.valor_pago < PagamentoServico.valor_total  # Tem saldo a pagar
+            ).all()
+            
+            for pag_serv in pagamentos_servico:
+                if pag_serv.data_vencimento:  # Se tem data de vencimento
+                    valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
+                    if valor_pendente > 0:
+                        mes_chave = pag_serv.data_vencimento.strftime('%Y-%m')
+                        if mes_chave not in previsoes_por_mes:
+                            previsoes_por_mes[mes_chave] = 0
+                        previsoes_por_mes[mes_chave] += valor_pendente
         
         previsoes_lista = []
         for mes_chave in sorted(previsoes_por_mes.keys()):
@@ -3133,6 +3189,48 @@ def obter_alertas_vencimento(obra_id):
                 alertas["futuros"]["quantidade"] += 1
                 alertas["futuros"]["valor_total"] += parcela.valor_parcela
         
+        # 3. NOVO: PAGAMENTOS DE SERVIÇOS COM SALDO PENDENTE
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        for servico in servicos:
+            pagamentos_servico = PagamentoServico.query.filter_by(
+                servico_id=servico.id
+            ).filter(
+                PagamentoServico.valor_pago < PagamentoServico.valor_total
+            ).all()
+            
+            for pag_serv in pagamentos_servico:
+                valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
+                if valor_pendente > 0 and pag_serv.data_vencimento:
+                    item = {
+                        "tipo": "Pagamento Serviço",
+                        "descricao": f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
+                        "fornecedor": pag_serv.fornecedor,
+                        "valor": valor_pendente,
+                        "data_vencimento": pag_serv.data_vencimento.isoformat(),
+                        "id": pag_serv.id,
+                        "servico_id": servico.id
+                    }
+                    
+                    if pag_serv.data_vencimento < hoje:
+                        alertas["vencidos"]["quantidade"] += 1
+                        alertas["vencidos"]["valor_total"] += valor_pendente
+                        alertas["vencidos"]["itens"].append(item)
+                    elif pag_serv.data_vencimento == hoje:
+                        alertas["vence_hoje"]["quantidade"] += 1
+                        alertas["vence_hoje"]["valor_total"] += valor_pendente
+                        alertas["vence_hoje"]["itens"].append(item)
+                    elif pag_serv.data_vencimento == amanha:
+                        alertas["vence_amanha"]["quantidade"] += 1
+                        alertas["vence_amanha"]["valor_total"] += valor_pendente
+                        alertas["vence_amanha"]["itens"].append(item)
+                    elif pag_serv.data_vencimento <= em_7_dias:
+                        alertas["vence_7_dias"]["quantidade"] += 1
+                        alertas["vence_7_dias"]["valor_total"] += valor_pendente
+                        alertas["vence_7_dias"]["itens"].append(item)
+                    else:
+                        alertas["futuros"]["quantidade"] += 1
+                        alertas["futuros"]["valor_total"] += valor_pendente
+        
         # Arredonda os valores
         for categoria in alertas.values():
             if 'valor_total' in categoria:
@@ -3165,6 +3263,27 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             obra_id=obra_id
         ).order_by(PagamentoFuturo.data_vencimento).all()
         
+        # NOVO: Buscar também pagamentos de serviços pendentes
+        pagamentos_servicos_pendentes = []
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        for servico in servicos:
+            pagamentos_servico = PagamentoServico.query.filter_by(
+                servico_id=servico.id
+            ).filter(
+                PagamentoServico.valor_pago < PagamentoServico.valor_total
+            ).all()
+            
+            for pag_serv in pagamentos_servico:
+                valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
+                if valor_pendente > 0 and pag_serv.data_vencimento:
+                    pagamentos_servicos_pendentes.append({
+                        'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
+                        'fornecedor': pag_serv.fornecedor,
+                        'valor': valor_pendente,
+                        'data_vencimento': pag_serv.data_vencimento,
+                        'status': 'Previsto'
+                    })
+        
         pagamentos_parcelados = PagamentoParcelado.query.filter_by(
             obra_id=obra_id
         ).all()
@@ -3196,13 +3315,15 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         elements.append(Paragraph(info_text, info_style))
         elements.append(Spacer(1, 0.5*cm))
         
-        # Seção: Pagamentos Futuros
-        if pagamentos_futuros:
+        # Seção: Pagamentos Futuros (incluindo serviços)
+        if pagamentos_futuros or pagamentos_servicos_pendentes:
             section_title = Paragraph("<b>1. Pagamentos Futuros (Únicos)</b>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
             data_futuros = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento', 'Status']]
+            
+            # Adicionar pagamentos futuros cadastrados
             for pag in pagamentos_futuros:
                 data_futuros.append([
                     pag.descricao[:30],
@@ -3210,6 +3331,16 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     formatar_real(pag.valor),
                     pag.data_vencimento.strftime('%d/%m/%Y'),
                     pag.status
+                ])
+            
+            # NOVO: Adicionar pagamentos de serviços pendentes
+            for pag_serv in pagamentos_servicos_pendentes:
+                data_futuros.append([
+                    pag_serv['descricao'][:30],
+                    pag_serv['fornecedor'][:20] if pag_serv['fornecedor'] else '-',
+                    formatar_real(pag_serv['valor']),
+                    pag_serv['data_vencimento'].strftime('%d/%m/%Y'),
+                    pag_serv['status']
                 ])
             
             table = Table(data_futuros, colWidths=[6*cm, 4*cm, 3*cm, 2.5*cm, 2.5*cm])
@@ -3283,17 +3414,22 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Calcular totais
         total_futuros = sum(pag.valor for pag in pagamentos_futuros if pag.status == 'Previsto')
+        
+        # NOVO: Adicionar pagamentos de serviços pendentes ao total
+        total_servicos_pendentes = sum(pag_serv['valor'] for pag_serv in pagamentos_servicos_pendentes)
+        
         total_parcelados = sum(
             parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Previsto'
         )
         total_pago_parcelas = sum(
             parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Pago'
         )
-        total_geral_previsto = total_futuros + total_parcelados
+        total_geral_previsto = total_futuros + total_servicos_pendentes + total_parcelados
         
         resumo_data = [
             ['Descrição', 'Valor'],
             ['Total de Pagamentos Futuros (Previstos)', formatar_real(total_futuros)],
+            ['Total de Pagamentos de Serviços (Pendentes)', formatar_real(total_servicos_pendentes)],
             ['Total de Parcelas (Previstas)', formatar_real(total_parcelados)],
             ['Total de Parcelas Pagas', formatar_real(total_pago_parcelas)],
             ['TOTAL PREVISTO (A Pagar)', formatar_real(total_geral_previsto)]
