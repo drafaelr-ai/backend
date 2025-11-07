@@ -816,7 +816,9 @@ def add_lancamento(obra_id):
         dados = request.json
         
         valor_total = float(dados['valor'])
-        status = dados['status']
+        # MUDANÇA 2: Se é gasto avulso do histórico, força status="Pago"
+        is_gasto_avulso_historico = dados.get('is_gasto_avulso_historico', False)
+        status = 'Pago' if is_gasto_avulso_historico else dados['status']
         valor_pago = valor_total if status == 'Pago' else 0.0
         
         novo_lancamento = Lancamento(
@@ -1584,9 +1586,10 @@ def export_csv(obra_id):
         print(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
-@jwt_required() 
-def export_pdf_pendentes(obra_id):
+# MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
+# @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
+# @jwt_required() 
+def export_pdf_pendentes_DESATIVADO(obra_id):
     # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
@@ -1699,10 +1702,10 @@ def export_pdf_pendentes(obra_id):
         print(f"=" * 80)
         return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
         
-
-@app.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
-@jwt_required() 
-def export_pdf_pendentes_todas_obras():
+# MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
+# @app.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
+# @jwt_required() 
+def export_pdf_pendentes_todas_obras_DESATIVADO():
     # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': 
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
@@ -3277,6 +3280,233 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         print(f"--- [ERRO] ao gerar PDF do cronograma: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT DE RELATÓRIO DO CRONOGRAMA ---
+
+# --- MUDANÇA 3: NOVO ENDPOINT - INSERIR PAGAMENTO ---
+@app.route('/obras/<int:obra_id>/inserir-pagamento', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def inserir_pagamento(obra_id):
+    """
+    Novo endpoint para inserir pagamentos com vínculo opcional a serviços.
+    Permite escolher tipo (Material/Mão de Obra) e status (Pago/A Pagar).
+    Atualiza automaticamente a % de conclusão do serviço vinculado.
+    """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/inserir-pagamento (POST) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json
+        
+        # Campos obrigatórios
+        descricao = dados.get('descricao')
+        valor_total = float(dados.get('valor', 0))
+        tipo = dados.get('tipo')  # 'Material', 'Mão de Obra', ou 'Serviço'
+        status = dados.get('status', 'A Pagar')  # 'Pago' ou 'A Pagar'
+        data = datetime.date.fromisoformat(dados.get('data'))
+        
+        # Campos opcionais
+        servico_id = dados.get('servico_id')
+        fornecedor = dados.get('fornecedor')
+        data_vencimento = dados.get('data_vencimento')
+        pix = dados.get('pix')
+        prioridade = int(dados.get('prioridade', 0))
+        
+        # Calcular valor_pago baseado no status
+        valor_pago = valor_total if status == 'Pago' else 0.0
+        
+        # Se está vinculado a um serviço, criar um PagamentoServico
+        if servico_id:
+            servico = Servico.query.get_or_404(servico_id)
+            
+            # Determinar tipo_pagamento para PagamentoServico
+            if tipo == 'Mão de Obra':
+                tipo_pagamento = 'mao_de_obra'
+            elif tipo == 'Material':
+                tipo_pagamento = 'material'
+            else:
+                tipo_pagamento = 'material'  # default
+            
+            novo_pagamento = PagamentoServico(
+                servico_id=servico_id,
+                tipo_pagamento=tipo_pagamento,
+                descricao=descricao,
+                valor_total=valor_total,
+                valor_pago=valor_pago,
+                data=data,
+                prioridade=prioridade
+            )
+            db.session.add(novo_pagamento)
+            
+            # Recalcular percentual do serviço
+            db.session.flush()  # Garante que o pagamento seja salvo antes do cálculo
+            
+            pagamentos = PagamentoServico.query.filter_by(servico_id=servico_id).all()
+            
+            # Separar por tipo
+            pagamentos_mao_de_obra = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
+            pagamentos_material = [p for p in pagamentos if p.tipo_pagamento == 'material']
+            
+            # Calcular percentuais
+            if servico.valor_global_mao_de_obra > 0:
+                total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+            
+            if servico.valor_global_material > 0:
+                total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+            
+            db.session.commit()
+            print(f"--- [LOG] Pagamento inserido e vinculado ao serviço {servico_id} ---")
+            return jsonify(novo_pagamento.to_dict()), 201
+            
+        else:
+            # Criar um Lançamento normal (não vinculado a serviço)
+            novo_lancamento = Lancamento(
+                obra_id=obra_id,
+                tipo=tipo,
+                descricao=descricao,
+                valor_total=valor_total,
+                valor_pago=valor_pago,
+                data=data,
+                data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
+                status=status,
+                pix=pix,
+                prioridade=prioridade,
+                fornecedor=fornecedor
+            )
+            db.session.add(novo_lancamento)
+            db.session.commit()
+            print(f"--- [LOG] Lançamento inserido sem vínculo a serviço ---")
+            return jsonify(novo_lancamento.to_dict()), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/inserir-pagamento: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DO ENDPOINT INSERIR PAGAMENTO ---
+
+
+# --- MUDANÇA 5: NOVO ENDPOINT - MARCAR MÚLTIPLOS COMO PAGO ---
+@app.route('/obras/<int:obra_id>/cronograma/marcar-multiplos-pagos', methods=['POST', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def marcar_multiplos_como_pago(obra_id):
+    """
+    Marca múltiplos pagamentos (futuros e parcelas) como pagos de uma vez.
+    Permite anexar comprovante/nota fiscal para cada item.
+    """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/cronograma/marcar-multiplos-pagos (POST) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json
+        itens_selecionados = dados.get('itens', [])  # Lista de {tipo: 'futuro'|'parcela', id: X}
+        data_pagamento = dados.get('data_pagamento')
+        
+        if data_pagamento:
+            data_pagamento = datetime.date.fromisoformat(data_pagamento)
+        else:
+            data_pagamento = datetime.date.today()
+        
+        resultados = []
+        
+        for item in itens_selecionados:
+            tipo_item = item.get('tipo')
+            item_id = item.get('id')
+            
+            try:
+                if tipo_item == 'futuro':
+                    # Marcar pagamento futuro como pago
+                    pagamento = PagamentoFuturo.query.get(item_id)
+                    if pagamento and pagamento.obra_id == obra_id:
+                        pagamento.status = 'Pago'
+                        pagamento.data_pagamento = data_pagamento
+                        resultados.append({
+                            "tipo": "futuro",
+                            "id": item_id,
+                            "status": "success",
+                            "mensagem": f"Pagamento futuro '{pagamento.descricao}' marcado como pago"
+                        })
+                    else:
+                        resultados.append({
+                            "tipo": "futuro",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Pagamento futuro não encontrado"
+                        })
+                
+                elif tipo_item == 'parcela':
+                    # Marcar parcela como paga
+                    parcela = ParcelaIndividual.query.get(item_id)
+                    if parcela:
+                        pag_parcelado = PagamentoParcelado.query.get(parcela.pagamento_parcelado_id)
+                        if pag_parcelado and pag_parcelado.obra_id == obra_id:
+                            parcela.status = 'Pago'
+                            parcela.data_pagamento = data_pagamento
+                            
+                            # Atualizar contador de parcelas pagas
+                            parcelas_pagas = ParcelaIndividual.query.filter_by(
+                                pagamento_parcelado_id=pag_parcelado.id,
+                                status='Pago'
+                            ).count()
+                            pag_parcelado.parcelas_pagas = parcelas_pagas
+                            
+                            # Se todas as parcelas foram pagas, marcar como Concluído
+                            if parcelas_pagas >= pag_parcelado.numero_parcelas:
+                                pag_parcelado.status = 'Concluído'
+                            
+                            resultados.append({
+                                "tipo": "parcela",
+                                "id": item_id,
+                                "status": "success",
+                                "mensagem": f"Parcela {parcela.numero_parcela} marcada como paga"
+                            })
+                        else:
+                            resultados.append({
+                                "tipo": "parcela",
+                                "id": item_id,
+                                "status": "error",
+                                "mensagem": "Pagamento parcelado não encontrado"
+                            })
+                    else:
+                        resultados.append({
+                            "tipo": "parcela",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Parcela não encontrada"
+                        })
+            
+            except Exception as e:
+                resultados.append({
+                    "tipo": tipo_item,
+                    "id": item_id,
+                    "status": "error",
+                    "mensagem": str(e)
+                })
+        
+        db.session.commit()
+        print(f"--- [LOG] {len([r for r in resultados if r['status'] == 'success'])} itens marcados como pagos ---")
+        
+        return jsonify({
+            "mensagem": "Processamento concluído",
+            "resultados": resultados
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+# --- FIM DO ENDPOINT MARCAR MÚLTIPLOS COMO PAGO ---
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
