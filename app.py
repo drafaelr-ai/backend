@@ -343,7 +343,32 @@ class PagamentoParcelado(db.Model):
             "observacoes": self.observacoes
         }
 # ----------------------------------------------------
-
+class ParcelaIndividual(db.Model):
+    """Modelo para armazenar valores individuais de cada parcela"""
+    __tablename__ = 'parcela_individual'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    pagamento_parcelado_id = db.Column(db.Integer, db.ForeignKey('pagamento_parcelado.id'), nullable=False)
+    numero_parcela = db.Column(db.Integer, nullable=False)  # 1, 2, 3...
+    valor_parcela = db.Column(db.Float, nullable=False)
+    data_vencimento = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto, Pago
+    data_pagamento = db.Column(db.Date, nullable=True)
+    observacao = db.Column(db.String(255), nullable=True)
+    
+    pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "pagamento_parcelado_id": self.pagamento_parcelado_id,
+            "numero_parcela": self.numero_parcela,
+            "valor_parcela": self.valor_parcela,
+            "data_vencimento": self.data_vencimento.isoformat(),
+            "status": self.status,
+            "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
+            "observacao": self.observacao
+        }
 # (Funções auxiliares e de permissão permanecem as mesmas)
 def formatar_real(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
@@ -2720,11 +2745,7 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
 @jwt_required()
 def calcular_previsoes(obra_id):
     """
-    ✅ CORRIGIDO: Calcula a tabela de previsões mensais do CRONOGRAMA somando:
-    - Pagamentos futuros (status != Cancelado)
-    - Parcelas de pagamentos parcelados (status != Cancelado) com ajuste na última parcela
-    
-    NOTA: Lançamentos e serviços aparecem na Lista de Pendências, NÃO no Cronograma
+    Calcula a tabela de previsões mensais usando parcelas individuais
     """
     try:
         current_user = get_current_user()
@@ -2747,38 +2768,335 @@ def calcular_previsoes(obra_id):
                 previsoes_por_mes[mes_chave] = 0
             previsoes_por_mes[mes_chave] += pag.valor
         
-        # 2. PAGAMENTOS PARCELADOS (gerar parcelas)
-        pagamentos_parcelados = PagamentoParcelado.query.filter_by(
-            obra_id=obra_id
-        ).filter(
-            PagamentoParcelado.status != 'Cancelado'
+        # 2. PARCELAS INDIVIDUAIS
+        parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            PagamentoParcelado.status != 'Cancelado',
+            ParcelaIndividual.status == 'Previsto'
         ).all()
         
-        for pag in pagamentos_parcelados:
-            # Define o intervalo de dias com base na periodicidade
-            dias_intervalo = 7 if pag.periodicidade == 'Semanal' else 30
-            
-            # ✅ CORREÇÃO: Calcula parcelas com ajuste na última
-            valor_parcela_normal = pag.valor_parcela
-            
-            # Gera cada parcela
-            for i in range(pag.parcelas_pagas, pag.numero_parcelas):
-                # ✅ Se for a ÚLTIMA parcela, ajusta o valor para fechar o total
-                if i == pag.numero_parcelas - 1:
-                    # Calcula quanto falta para fechar o valor total
-                    valor_ja_parcelado = valor_parcela_normal * (pag.numero_parcelas - 1)
-                    valor_ultima_parcela = pag.valor_total - valor_ja_parcelado
-                else:
-                    valor_ultima_parcela = valor_parcela_normal
-                
-                # Calcula a data da parcela (primeira parcela + i * intervalo)
-                data_parcela = pag.data_primeira_parcela + datetime.timedelta(days=dias_intervalo * i)
-                mes_chave = data_parcela.strftime('%Y-%m')
-                
-                if mes_chave not in previsoes_por_mes:
-                    previsoes_por_mes[mes_chave] = 0
-                previsoes_por_mes[mes_chave] += valor_ultima_parcela
+        for parcela in parcelas:
+            mes_chave = parcela.data_vencimento.strftime('%Y-%m')
+            if mes_chave not in previsoes_por_mes:
+                previsoes_por_mes[mes_chave] = 0
+            previsoes_por_mes[mes_chave] += parcela.valor_parcela
         
+        # Converte para lista ordenada
+        previsoes_lista = []
+        for mes_chave in sorted(previsoes_por_mes.keys()):
+            ano, mes = mes_chave.split('-')
+            meses_pt = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+            mes_nome = meses_pt[int(mes)]
+            
+            previsoes_lista.append({
+                'mes_chave': mes_chave,
+                'mes_nome': f"{mes_nome}/{ano}",
+                'valor': round(previsoes_por_mes[mes_chave], 2)
+            })
+        
+        print(f"--- [LOG] Previsões calculadas para obra {obra_id}: {len(previsoes_lista)} meses ---")
+        return jsonify(previsoes_lista), 200
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET previsões: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+# ========================================
+# ENDPOINTS: PARCELAS INDIVIDUAIS (NOVO!)
+# ========================================
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas', methods=['GET'])
+@jwt_required()
+def listar_parcelas_individuais(obra_id, pagamento_id):
+    """Lista todas as parcelas individuais de um pagamento parcelado"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoParcelado, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        # Busca as parcelas individuais
+        parcelas = ParcelaIndividual.query.filter_by(
+            pagamento_parcelado_id=pagamento_id
+        ).order_by(ParcelaIndividual.numero_parcela).all()
+        
+        # Se não existem parcelas individuais, gera automaticamente
+        if not parcelas:
+            dias_intervalo = 7 if pagamento.periodicidade == 'Semanal' else 30
+            valor_parcela_normal = pagamento.valor_parcela
+            
+            for i in range(pagamento.numero_parcelas):
+                # Ajusta a última parcela
+                if i == pagamento.numero_parcelas - 1:
+                    valor_ja_parcelado = valor_parcela_normal * (pagamento.numero_parcelas - 1)
+                    valor_ultima = pagamento.valor_total - valor_ja_parcelado
+                else:
+                    valor_ultima = valor_parcela_normal
+                
+                data_vencimento = pagamento.data_primeira_parcela + datetime.timedelta(days=dias_intervalo * i)
+                status = 'Pago' if i < pagamento.parcelas_pagas else 'Previsto'
+                
+                parcela = ParcelaIndividual(
+                    pagamento_parcelado_id=pagamento_id,
+                    numero_parcela=i + 1,
+                    valor_parcela=valor_ultima,
+                    data_vencimento=data_vencimento,
+                    status=status
+                )
+                db.session.add(parcela)
+            
+            db.session.commit()
+            
+            # Recarrega as parcelas
+            parcelas = ParcelaIndividual.query.filter_by(
+                pagamento_parcelado_id=pagamento_id
+            ).order_by(ParcelaIndividual.numero_parcela).all()
+        
+        return jsonify([p.to_dict() for p in parcelas]), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET parcelas individuais: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT'])
+@jwt_required()
+def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
+    """Edita uma parcela individual (valor, data, observação)"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoParcelado, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        parcela = db.session.get(ParcelaIndividual, parcela_id)
+        if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
+            return jsonify({"erro": "Parcela não encontrada"}), 404
+        
+        data = request.get_json()
+        
+        # Atualiza os campos permitidos
+        if 'valor_parcela' in data:
+            parcela.valor_parcela = float(data['valor_parcela'])
+        
+        if 'data_vencimento' in data:
+            parcela.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        
+        if 'observacao' in data:
+            parcela.observacao = data['observacao']
+        
+        if 'status' in data:
+            parcela.status = data['status']
+            if data['status'] == 'Pago' and 'data_pagamento' in data:
+                parcela.data_pagamento = datetime.datetime.strptime(data['data_pagamento'], '%Y-%m-%d').date()
+        
+        db.session.commit()
+        
+        # Recalcula o valor_total do pagamento parcelado
+        todas_parcelas = ParcelaIndividual.query.filter_by(
+            pagamento_parcelado_id=pagamento_id
+        ).all()
+        
+        novo_valor_total = sum(p.valor_parcela for p in todas_parcelas)
+        pagamento.valor_total = novo_valor_total
+        
+        # Atualiza parcelas_pagas
+        parcelas_pagas_count = sum(1 for p in todas_parcelas if p.status == 'Pago')
+        pagamento.parcelas_pagas = parcelas_pagas_count
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Parcela {parcela_id} editada ---")
+        return jsonify(parcela.to_dict()), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] PUT parcela individual: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
+@jwt_required()
+def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
+    """Marca uma parcela individual como paga"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        pagamento = db.session.get(PagamentoParcelado, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        parcela = db.session.get(ParcelaIndividual, parcela_id)
+        if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
+            return jsonify({"erro": "Parcela não encontrada"}), 404
+        
+        data = request.get_json()
+        
+        parcela.status = 'Pago'
+        parcela.data_pagamento = datetime.datetime.strptime(
+            data.get('data_pagamento', datetime.date.today().isoformat()), 
+            '%Y-%m-%d'
+        ).date()
+        
+        db.session.commit()
+        
+        # Atualiza o contador de parcelas pagas no pagamento parcelado
+        todas_parcelas = ParcelaIndividual.query.filter_by(
+            pagamento_parcelado_id=pagamento_id
+        ).all()
+        
+        parcelas_pagas_count = sum(1 for p in todas_parcelas if p.status == 'Pago')
+        pagamento.parcelas_pagas = parcelas_pagas_count
+        
+        # Se todas foram pagas, atualiza status do pagamento
+        if parcelas_pagas_count >= pagamento.numero_parcelas:
+            pagamento.status = 'Concluído'
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Parcela {parcela_id} marcada como paga ---")
+        return jsonify({
+            "mensagem": "Parcela marcada como paga",
+            "parcela": parcela.to_dict(),
+            "pagamento": pagamento.to_dict()
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] POST marcar parcela paga: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET'])
+@jwt_required()
+def obter_alertas_vencimento(obra_id):
+    """
+    Retorna um resumo dos pagamentos por categoria de vencimento:
+    - Vencidos (atrasados)
+    - Vence Hoje
+    - Vence Amanhã
+    - Vence em 7 dias
+    - Futuros (mais de 7 dias)
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        hoje = datetime.date.today()
+        amanha = hoje + datetime.timedelta(days=1)
+        em_7_dias = hoje + datetime.timedelta(days=7)
+        
+        alertas = {
+            "vencidos": {"quantidade": 0, "valor_total": 0, "itens": []},
+            "vence_hoje": {"quantidade": 0, "valor_total": 0, "itens": []},
+            "vence_amanha": {"quantidade": 0, "valor_total": 0, "itens": []},
+            "vence_7_dias": {"quantidade": 0, "valor_total": 0, "itens": []},
+            "futuros": {"quantidade": 0, "valor_total": 0}
+        }
+        
+        # 1. PAGAMENTOS FUTUROS
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(
+            obra_id=obra_id
+        ).filter(
+            PagamentoFuturo.status == 'Previsto'
+        ).all()
+        
+        for pag in pagamentos_futuros:
+            item = {
+                "tipo": "Pagamento Futuro",
+                "descricao": pag.descricao,
+                "fornecedor": pag.fornecedor,
+                "valor": pag.valor,
+                "data_vencimento": pag.data_vencimento.isoformat(),
+                "id": pag.id
+            }
+            
+            if pag.data_vencimento < hoje:
+                alertas["vencidos"]["quantidade"] += 1
+                alertas["vencidos"]["valor_total"] += pag.valor
+                alertas["vencidos"]["itens"].append(item)
+            elif pag.data_vencimento == hoje:
+                alertas["vence_hoje"]["quantidade"] += 1
+                alertas["vence_hoje"]["valor_total"] += pag.valor
+                alertas["vence_hoje"]["itens"].append(item)
+            elif pag.data_vencimento == amanha:
+                alertas["vence_amanha"]["quantidade"] += 1
+                alertas["vence_amanha"]["valor_total"] += pag.valor
+                alertas["vence_amanha"]["itens"].append(item)
+            elif pag.data_vencimento <= em_7_dias:
+                alertas["vence_7_dias"]["quantidade"] += 1
+                alertas["vence_7_dias"]["valor_total"] += pag.valor
+                alertas["vence_7_dias"]["itens"].append(item)
+            else:
+                alertas["futuros"]["quantidade"] += 1
+                alertas["futuros"]["valor_total"] += pag.valor
+        
+        # 2. PARCELAS INDIVIDUAIS DE PAGAMENTOS PARCELADOS
+        parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Previsto'
+        ).all()
+        
+        for parcela in parcelas:
+            pag = parcela.pagamento_parcelado
+            item = {
+                "tipo": "Parcela",
+                "descricao": f"{pag.descricao} - Parcela {parcela.numero_parcela}/{pag.numero_parcelas}",
+                "fornecedor": pag.fornecedor,
+                "valor": parcela.valor_parcela,
+                "data_vencimento": parcela.data_vencimento.isoformat(),
+                "id": parcela.id,
+                "pagamento_parcelado_id": pag.id
+            }
+            
+            if parcela.data_vencimento < hoje:
+                alertas["vencidos"]["quantidade"] += 1
+                alertas["vencidos"]["valor_total"] += parcela.valor_parcela
+                alertas["vencidos"]["itens"].append(item)
+            elif parcela.data_vencimento == hoje:
+                alertas["vence_hoje"]["quantidade"] += 1
+                alertas["vence_hoje"]["valor_total"] += parcela.valor_parcela
+                alertas["vence_hoje"]["itens"].append(item)
+            elif parcela.data_vencimento == amanha:
+                alertas["vence_amanha"]["quantidade"] += 1
+                alertas["vence_amanha"]["valor_total"] += parcela.valor_parcela
+                alertas["vence_amanha"]["itens"].append(item)
+            elif parcela.data_vencimento <= em_7_dias:
+                alertas["vence_7_dias"]["quantidade"] += 1
+                alertas["vence_7_dias"]["valor_total"] += parcela.valor_parcela
+                alertas["vence_7_dias"]["itens"].append(item)
+            else:
+                alertas["futuros"]["quantidade"] += 1
+                alertas["futuros"]["valor_total"] += parcela.valor_parcela
+        
+        # Arredonda os valores
+        for categoria in alertas.values():
+            if 'valor_total' in categoria:
+                categoria['valor_total'] = round(categoria['valor_total'], 2)
+        
+        print(f"--- [LOG] Alertas de vencimento calculados para obra {obra_id} ---")
+        return jsonify(alertas), 200
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET alertas vencimento: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+# --- FIM DAS ROTAS DO CRONOGRAMA FINANCEIRO ---
         # ✅ CORREÇÃO: Cronograma mostra APENAS pagamentos do cronograma
         # (Lançamentos e serviços aparecem na Lista de Pendências, não aqui)
         
