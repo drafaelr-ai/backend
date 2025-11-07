@@ -3518,6 +3518,246 @@ def get_pagamentos_servico_pendentes(obra_id):
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
+
+# --- NOVO ENDPOINT: LISTAR LANÇAMENTOS COM SALDO PENDENTE ---
+@app.route('/obras/<int:obra_id>/lancamentos-pendentes', methods=['GET'])
+@jwt_required()
+def listar_lancamentos_pendentes(obra_id):
+    """
+    Lista todos os lançamentos com saldo pendente (valor_total > valor_pago).
+    Esses são os lançamentos "fantasmas" que contribuem para o KPI "Liberado p/ Pagamento"
+    mas não aparecem mais no quadro de pendências (que foi removido).
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        # Buscar lançamentos com saldo pendente
+        lancamentos = Lancamento.query.filter_by(obra_id=obra_id).filter(
+            Lancamento.valor_total > Lancamento.valor_pago
+        ).order_by(Lancamento.data).all()
+        
+        resultado = []
+        for lanc in lancamentos:
+            valor_restante = lanc.valor_total - lanc.valor_pago
+            resultado.append({
+                'id': lanc.id,
+                'tipo': lanc.tipo,
+                'descricao': lanc.descricao,
+                'fornecedor': lanc.fornecedor,
+                'valor_total': lanc.valor_total,
+                'valor_pago': lanc.valor_pago,
+                'valor_restante': valor_restante,
+                'data': lanc.data.isoformat() if lanc.data else None,
+                'data_vencimento': lanc.data_vencimento.isoformat() if lanc.data_vencimento else None,
+                'status': lanc.status,
+                'prioridade': lanc.prioridade,
+                'pix': lanc.pix,
+                'servico_id': lanc.servico_id,
+                'servico_nome': lanc.servico.nome if lanc.servico else None
+            })
+        
+        total_pendente = sum(lanc.valor_total - lanc.valor_pago for lanc in lancamentos)
+        
+        print(f"--- [LOG] Encontrados {len(resultado)} lançamentos pendentes na obra {obra_id}. Total: R$ {total_pendente:.2f} ---")
+        
+        return jsonify({
+            'lancamentos': resultado,
+            'total_lancamentos': len(resultado),
+            'total_pendente': round(total_pendente, 2)
+        }), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /lancamentos-pendentes: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
+
+# --- NOVO ENDPOINT: EXCLUIR LANÇAMENTO PENDENTE ---
+@app.route('/obras/<int:obra_id>/lancamentos/<int:lancamento_id>/excluir-pendente', methods=['DELETE'])
+@check_permission(roles=['administrador', 'master'])
+def excluir_lancamento_pendente(obra_id, lancamento_id):
+    """
+    Exclui um lançamento com saldo pendente.
+    Remove completamente do banco de dados.
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        # Buscar o lançamento
+        lancamento = Lancamento.query.filter_by(id=lancamento_id, obra_id=obra_id).first()
+        if not lancamento:
+            return jsonify({"erro": "Lançamento não encontrado"}), 404
+        
+        # Guardar info antes de excluir
+        descricao = lancamento.descricao
+        valor_restante = lancamento.valor_total - lancamento.valor_pago
+        
+        # Excluir o lançamento
+        db.session.delete(lancamento)
+        db.session.commit()
+        
+        print(f"--- [LOG] Lançamento {lancamento_id} excluído. Valor restante era: R$ {valor_restante:.2f} ---")
+        
+        return jsonify({
+            "mensagem": "Lançamento excluído com sucesso",
+            "lancamento_id": lancamento_id,
+            "descricao": descricao,
+            "valor_que_estava_pendente": valor_restante
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /excluir-pendente: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
+
+# --- NOVO ENDPOINT: EXCLUIR TODOS OS LANÇAMENTOS PENDENTES ---
+@app.route('/obras/<int:obra_id>/lancamentos/excluir-todos-pendentes', methods=['DELETE'])
+@check_permission(roles=['administrador', 'master'])
+def excluir_todos_lancamentos_pendentes(obra_id):
+    """
+    Exclui TODOS os lançamentos pendentes de uma obra de uma vez.
+    Remove completamente do banco de dados - limpa os valores "fantasmas".
+    
+    ⚠️ ATENÇÃO: Esta operação não pode ser desfeita!
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        # Buscar todos os lançamentos com saldo pendente
+        lancamentos = Lancamento.query.filter_by(obra_id=obra_id).filter(
+            Lancamento.valor_total > Lancamento.valor_pago
+        ).all()
+        
+        if not lancamentos:
+            return jsonify({"mensagem": "Nenhum lançamento pendente encontrado"}), 200
+        
+        excluidos = []
+        valor_total_removido = 0
+        
+        for lancamento in lancamentos:
+            valor_restante = lancamento.valor_total - lancamento.valor_pago
+            
+            excluidos.append({
+                'lancamento_id': lancamento.id,
+                'descricao': lancamento.descricao,
+                'valor_pendente_removido': valor_restante
+            })
+            valor_total_removido += valor_restante
+            
+            # Excluir do banco
+            db.session.delete(lancamento)
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] {len(excluidos)} lançamentos pendentes excluídos. Total removido: R$ {valor_total_removido:.2f} ---")
+        
+        return jsonify({
+            "mensagem": f"{len(excluidos)} lançamentos pendentes excluídos com sucesso",
+            "quantidade_excluida": len(excluidos),
+            "valor_total_removido": round(valor_total_removido, 2),
+            "lancamentos_excluidos": excluidos
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /excluir-todos-pendentes: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
+
+# --- NOVO ENDPOINT GLOBAL: EXCLUIR PENDENTES DE TODAS AS OBRAS ---
+@app.route('/lancamentos/excluir-todos-pendentes-global', methods=['DELETE'])
+@check_permission(roles=['administrador', 'master'])
+def excluir_todos_lancamentos_pendentes_global():
+    """
+    Exclui TODOS os lançamentos pendentes de TODAS as obras acessíveis pelo usuário.
+    
+    Administrador: Limpa todas as obras do sistema
+    Master: Limpa apenas as obras que tem acesso
+    
+    ⚠️ ATENÇÃO: Esta operação não pode ser desfeita!
+    """
+    try:
+        current_user = get_current_user()
+        
+        # Determinar quais obras o usuário pode acessar
+        if current_user.role == 'administrador':
+            obras = Obra.query.all()
+        else:
+            obras = current_user.obras_permitidas
+        
+        if not obras:
+            return jsonify({"mensagem": "Nenhuma obra acessível encontrada"}), 200
+        
+        resultado_por_obra = []
+        total_geral_excluido = 0
+        total_geral_removido = 0.0
+        
+        for obra in obras:
+            # Buscar lançamentos pendentes desta obra
+            lancamentos = Lancamento.query.filter_by(obra_id=obra.id).filter(
+                Lancamento.valor_total > Lancamento.valor_pago
+            ).all()
+            
+            if lancamentos:
+                excluidos = []
+                valor_total_obra = 0
+                
+                for lancamento in lancamentos:
+                    valor_restante = lancamento.valor_total - lancamento.valor_pago
+                    
+                    excluidos.append({
+                        'lancamento_id': lancamento.id,
+                        'descricao': lancamento.descricao,
+                        'valor_pendente': valor_restante
+                    })
+                    valor_total_obra += valor_restante
+                    
+                    # Excluir do banco
+                    db.session.delete(lancamento)
+                
+                total_geral_excluido += len(excluidos)
+                total_geral_removido += valor_total_obra
+                
+                resultado_por_obra.append({
+                    'obra_id': obra.id,
+                    'obra_nome': obra.nome,
+                    'quantidade_excluida': len(excluidos),
+                    'valor_removido': round(valor_total_obra, 2),
+                    'lancamentos': excluidos
+                })
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] LIMPEZA GLOBAL: {total_geral_excluido} lançamentos excluídos em {len(resultado_por_obra)} obras. Total: R$ {total_geral_removido:.2f} ---")
+        
+        return jsonify({
+            "mensagem": f"Limpeza concluída! {total_geral_excluido} lançamentos excluídos em {len(resultado_por_obra)} obras",
+            "total_obras_processadas": len(obras),
+            "obras_com_pendencias": len(resultado_por_obra),
+            "total_lancamentos_excluidos": total_geral_excluido,
+            "valor_total_removido": round(total_geral_removido, 2),
+            "detalhes_por_obra": resultado_por_obra
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT ---
+
 # --- MUDANÇA 3: NOVO ENDPOINT - INSERIR PAGAMENTO ---
 @app.route('/obras/<int:obra_id>/inserir-pagamento', methods=['POST', 'OPTIONS'])
 @jwt_required()
