@@ -3234,18 +3234,21 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             elements.append(Spacer(1, 0.3*cm))
             
             for pag_parcelado in pagamentos_parcelados:
-                # Subtítulo do pagamento parcelado
+                # Buscar parcelas deste pagamento para calcular o total
+                parcelas = ParcelaIndividual.query.filter_by(
+                    pagamento_parcelado_id=pag_parcelado.id
+                ).order_by(ParcelaIndividual.numero_parcela).all()
+                
+                # Calcular valor total real de todas as parcelas
+                valor_total_parcelas = sum(p.valor_parcela for p in parcelas)
+                
+                # Subtítulo do pagamento parcelado - mostra apenas o valor total
                 sub_title = Paragraph(
-                    f"<b>{pag_parcelado.descricao}</b> - {pag_parcelado.numero_parcelas}x de {formatar_real(pag_parcelado.valor_parcela)}",
+                    f"<b>{pag_parcelado.descricao}</b> - Total: {formatar_real(valor_total_parcelas)}",
                     styles['Heading3']
                 )
                 elements.append(sub_title)
                 elements.append(Spacer(1, 0.2*cm))
-                
-                # Buscar parcelas deste pagamento
-                parcelas = ParcelaIndividual.query.filter_by(
-                    pagamento_parcelado_id=pag_parcelado.id
-                ).order_by(ParcelaIndividual.numero_parcela).all()
                 
                 if parcelas:
                     data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Pago em']]
@@ -3293,7 +3296,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             ['Total de Pagamentos Futuros (Previstos)', formatar_real(total_futuros)],
             ['Total de Parcelas (Previstas)', formatar_real(total_parcelados)],
             ['Total de Parcelas Pagas', formatar_real(total_pago_parcelas)],
-            ['<b>TOTAL PREVISTO (A Pagar)</b>', f"<b>{formatar_real(total_geral_previsto)}</b>"]
+            ['TOTAL PREVISTO (A Pagar)', formatar_real(total_geral_previsto)]
         ]
         
         table_resumo = Table(resumo_data, colWidths=[12*cm, 5*cm])
