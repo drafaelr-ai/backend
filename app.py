@@ -3497,11 +3497,12 @@ def get_pagamentos_servico_pendentes(obra_id):
         
         resultado = []
         for pagamento, servico in pagamentos_pendentes:
+            descricao = pagamento.fornecedor or f"Pagamento - {servico.nome}"
             resultado.append({
                 'id': pagamento.id,
                 'servico_id': servico.id,
                 'servico_nome': servico.nome,
-                'descricao': pagamento.descricao or f"Pagamento - {servico.nome}",
+                'descricao': descricao,
                 'tipo_pagamento': 'Mão de Obra' if pagamento.tipo_pagamento == 'mao_de_obra' else 'Material',
                 'valor_total': pagamento.valor_total,
                 'valor_pago': pagamento.valor_pago,
@@ -3791,10 +3792,14 @@ def excluir_pagamentos_servico_pendentes(obra_id):
         for pagamento in pagamentos:
             valor_restante = pagamento.valor_total - pagamento.valor_pago
             
+            # Buscar nome do serviço
+            servico = Servico.query.get(pagamento.servico_id)
+            descricao = pagamento.fornecedor or (servico.nome if servico else f"Pagamento ID {pagamento.id}")
+            
             excluidos.append({
                 'pagamento_id': pagamento.id,
                 'servico_id': pagamento.servico_id,
-                'descricao': pagamento.descricao,
+                'descricao': descricao,
                 'tipo': pagamento.tipo_pagamento,
                 'valor_pendente_removido': valor_restante
             })
@@ -3866,9 +3871,13 @@ def excluir_pagamentos_servico_pendentes_global():
                 for pagamento in pagamentos:
                     valor_restante = pagamento.valor_total - pagamento.valor_pago
                     
+                    # Buscar nome do serviço
+                    servico = Servico.query.get(pagamento.servico_id)
+                    descricao = pagamento.fornecedor or (servico.nome if servico else f"Pagamento ID {pagamento.id}")
+                    
                     excluidos.append({
                         'pagamento_id': pagamento.id,
-                        'descricao': pagamento.descricao,
+                        'descricao': descricao,
                         'tipo': pagamento.tipo_pagamento,
                         'valor_pendente': valor_restante
                     })
@@ -3970,10 +3979,15 @@ def limpar_tudo_pendente_global():
             
             for pagamento in pagamentos:
                 valor_restante = pagamento.valor_total - pagamento.valor_pago
+                
+                # Buscar nome do serviço
+                servico = Servico.query.get(pagamento.servico_id)
+                descricao = pagamento.fornecedor or (servico.nome if servico else f"Pagamento ID {pagamento.id}")
+                
                 pagamentos_obra.append({
                     'id': pagamento.id,
                     'tipo': 'Pagamento de Serviço',
-                    'descricao': pagamento.descricao,
+                    'descricao': descricao,
                     'valor': valor_restante
                 })
                 valor_obra += valor_restante
