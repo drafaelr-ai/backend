@@ -3091,7 +3091,192 @@ def obter_alertas_vencimento(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] GET alertas vencimento: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
-# --- FIM DAS ROTAS DO CRONOGRAMA FINANCEIRO ---
+
+# --- ENDPOINT PARA GERAR RELATÓRIO DO CRONOGRAMA FINANCEIRO (PDF) ---
+@app.route('/obras/<int:obra_id>/relatorio-cronograma-pdf', methods=['GET'])
+@jwt_required()
+def gerar_relatorio_cronograma_pdf(obra_id):
+    """Gera um relatório PDF do cronograma financeiro de uma obra"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        obra = db.session.get(Obra, obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        # Buscar dados do cronograma
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(
+            obra_id=obra_id
+        ).order_by(PagamentoFuturo.data_vencimento).all()
+        
+        pagamentos_parcelados = PagamentoParcelado.query.filter_by(
+            obra_id=obra_id
+        ).all()
+        
+        # Buscar parcelas de todos os pagamentos parcelados
+        todas_parcelas = []
+        for pag_parcelado in pagamentos_parcelados:
+            parcelas = ParcelaIndividual.query.filter_by(
+                pagamento_parcelado_id=pag_parcelado.id
+            ).order_by(ParcelaIndividual.numero_parcela).all()
+            todas_parcelas.extend(parcelas)
+        
+        # Criar o PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Título
+        title_style = styles['Title']
+        title = Paragraph(f"<b>Relatório do Cronograma Financeiro</b><br/>{obra.nome}", title_style)
+        elements.append(title)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Informações da obra
+        info_style = styles['Normal']
+        info_text = f"<b>Cliente:</b> {obra.cliente or 'N/A'}<br/>"
+        info_text += f"<b>Data do Relatório:</b> {datetime.date.today().strftime('%d/%m/%Y')}"
+        elements.append(Paragraph(info_text, info_style))
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Seção: Pagamentos Futuros
+        if pagamentos_futuros:
+            section_title = Paragraph("<b>1. Pagamentos Futuros (Únicos)</b>", styles['Heading2'])
+            elements.append(section_title)
+            elements.append(Spacer(1, 0.3*cm))
+            
+            data_futuros = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento', 'Status']]
+            for pag in pagamentos_futuros:
+                data_futuros.append([
+                    pag.descricao[:30],
+                    pag.fornecedor[:20] if pag.fornecedor else '-',
+                    formatar_real(pag.valor),
+                    pag.data_vencimento.strftime('%d/%m/%Y'),
+                    pag.status
+                ])
+            
+            table = Table(data_futuros, colWidths=[6*cm, 4*cm, 3*cm, 2.5*cm, 2.5*cm])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white])
+            ]))
+            elements.append(table)
+            elements.append(Spacer(1, 0.5*cm))
+        
+        # Seção: Pagamentos Parcelados
+        if pagamentos_parcelados:
+            section_title = Paragraph("<b>2. Pagamentos Parcelados</b>", styles['Heading2'])
+            elements.append(section_title)
+            elements.append(Spacer(1, 0.3*cm))
+            
+            for pag_parcelado in pagamentos_parcelados:
+                # Subtítulo do pagamento parcelado
+                sub_title = Paragraph(
+                    f"<b>{pag_parcelado.descricao}</b> - {pag_parcelado.numero_parcelas}x de {formatar_real(pag_parcelado.valor_parcela)}",
+                    styles['Heading3']
+                )
+                elements.append(sub_title)
+                elements.append(Spacer(1, 0.2*cm))
+                
+                # Buscar parcelas deste pagamento
+                parcelas = ParcelaIndividual.query.filter_by(
+                    pagamento_parcelado_id=pag_parcelado.id
+                ).order_by(ParcelaIndividual.numero_parcela).all()
+                
+                if parcelas:
+                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Pago em']]
+                    for parcela in parcelas:
+                        data_parcelas.append([
+                            f"{parcela.numero_parcela}/{pag_parcelado.numero_parcelas}",
+                            formatar_real(parcela.valor_parcela),
+                            parcela.data_vencimento.strftime('%d/%m/%Y'),
+                            parcela.status,
+                            parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
+                        ])
+                    
+                    table_parcelas = Table(data_parcelas, colWidths=[2*cm, 3*cm, 3*cm, 3*cm, 3*cm])
+                    table_parcelas.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5cb85c')),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, 0), 9),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                        ('FONTSIZE', (0, 1), (-1, -1), 8),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white])
+                    ]))
+                    elements.append(table_parcelas)
+                    elements.append(Spacer(1, 0.3*cm))
+        
+        # Seção: Resumo Financeiro
+        section_title = Paragraph("<b>3. Resumo Financeiro</b>", styles['Heading2'])
+        elements.append(section_title)
+        elements.append(Spacer(1, 0.3*cm))
+        
+        # Calcular totais
+        total_futuros = sum(pag.valor for pag in pagamentos_futuros if pag.status == 'Previsto')
+        total_parcelados = sum(
+            parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Previsto'
+        )
+        total_pago_parcelas = sum(
+            parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Pago'
+        )
+        total_geral_previsto = total_futuros + total_parcelados
+        
+        resumo_data = [
+            ['Descrição', 'Valor'],
+            ['Total de Pagamentos Futuros (Previstos)', formatar_real(total_futuros)],
+            ['Total de Parcelas (Previstas)', formatar_real(total_parcelados)],
+            ['Total de Parcelas Pagas', formatar_real(total_pago_parcelas)],
+            ['<b>TOTAL PREVISTO (A Pagar)</b>', f"<b>{formatar_real(total_geral_previsto)}</b>"]
+        ]
+        
+        table_resumo = Table(resumo_data, colWidths=[12*cm, 5*cm])
+        table_resumo.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff9800')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#ffc107')),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold')
+        ]))
+        elements.append(table_resumo)
+        
+        # Construir o PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        print(f"--- [LOG] PDF do cronograma gerado para obra {obra_id} ---")
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f"Cronograma_{obra.nome.replace(' ', '_')}_{datetime.date.today()}.pdf",
+            mimetype='application/pdf'
+        )
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] ao gerar PDF do cronograma: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+# --- FIM DO ENDPOINT DE RELATÓRIO DO CRONOGRAMA ---
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
