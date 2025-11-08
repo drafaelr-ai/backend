@@ -370,6 +370,81 @@ class ParcelaIndividual(db.Model):
             "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
             "observacao": self.observacao
         }
+
+# ===== MODELOS DO DIÁRIO DE OBRAS =====
+class DiarioObra(db.Model):
+    """Diário de obras - registro diário de atividades"""
+    __tablename__ = 'diario_obra'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    data = db.Column(db.Date, nullable=False)
+    titulo = db.Column(db.String(200), nullable=False)
+    descricao = db.Column(db.Text)
+    
+    # Condições do dia
+    clima = db.Column(db.String(50))  # Ensolarado, Chuvoso, etc
+    temperatura = db.Column(db.String(20))
+    
+    # Informações da obra
+    equipe_presente = db.Column(db.Text)
+    atividades_realizadas = db.Column(db.Text)
+    materiais_utilizados = db.Column(db.Text)
+    equipamentos_utilizados = db.Column(db.Text)
+    observacoes = db.Column(db.Text)
+    
+    # Controle
+    criado_por = db.Column(db.Integer, db.ForeignKey('user.id'))
+    criado_em = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    
+    # Relacionamentos
+    imagens = db.relationship('DiarioImagem', backref='entrada', lazy=True, cascade='all, delete-orphan')
+    criador = db.relationship('User', backref='entradas_diario', foreign_keys=[criado_por])
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'obra_id': self.obra_id,
+            'data': self.data.isoformat() if self.data else None,
+            'titulo': self.titulo,
+            'descricao': self.descricao,
+            'clima': self.clima,
+            'temperatura': self.temperatura,
+            'equipe_presente': self.equipe_presente,
+            'atividades_realizadas': self.atividades_realizadas,
+            'materiais_utilizados': self.materiais_utilizados,
+            'equipamentos_utilizados': self.equipamentos_utilizados,
+            'observacoes': self.observacoes,
+            'criado_por': self.criado_por,
+            'criado_em': self.criado_em.strftime('%Y-%m-%d %H:%M:%S') if self.criado_em else None,
+            'atualizado_em': self.atualizado_em.strftime('%Y-%m-%d %H:%M:%S') if self.atualizado_em else None,
+            'imagens': [img.to_dict() for img in self.imagens] if self.imagens else []
+        }
+
+class DiarioImagem(db.Model):
+    """Imagens do diário de obras"""
+    __tablename__ = 'diario_imagens'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    diario_id = db.Column(db.Integer, db.ForeignKey('diario_obra.id'), nullable=False)
+    arquivo_nome = db.Column(db.String(255), nullable=False)
+    arquivo_base64 = db.Column(db.Text, nullable=False)  # Armazena imagem em base64
+    legenda = db.Column(db.String(500))
+    ordem = db.Column(db.Integer, default=0)
+    criado_em = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'diario_id': self.diario_id,
+            'arquivo_nome': self.arquivo_nome,
+            'arquivo_base64': self.arquivo_base64,
+            'legenda': self.legenda,
+            'ordem': self.ordem,
+            'criado_em': self.criado_em.strftime('%Y-%m-%d %H:%M:%S') if self.criado_em else None
+        }
+
 # (Funções auxiliares e de permissão permanecem as mesmas)
 def formatar_real(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
@@ -4333,6 +4408,397 @@ def marcar_multiplos_como_pago(obra_id):
         print(f"--- [ERRO] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DO ENDPOINT MARCAR MÚLTIPLOS COMO PAGO ---
+
+# ========================================
+# ROTAS DO DIÁRIO DE OBRAS
+# ========================================
+
+@app.route('/obras/<int:obra_id>/diario', methods=['GET'])
+@jwt_required()
+def listar_diario_obra(obra_id):
+    """Lista todas as entradas do diário de uma obra"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        entradas = DiarioObra.query.filter_by(obra_id=obra_id).order_by(DiarioObra.data.desc()).all()
+        
+        return jsonify({
+            'entradas': [entrada.to_dict() for entrada in entradas]
+        }), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/obras/<int:obra_id>/diario', methods=['POST'])
+@jwt_required()
+def criar_entrada_diario(obra_id):
+    """Cria uma nova entrada no diário de obras"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        data = request.get_json()
+        
+        # Criar entrada
+        entrada = DiarioObra(
+            obra_id=obra_id,
+            data=datetime.datetime.strptime(data.get('data'), '%Y-%m-%d').date() if data.get('data') else datetime.datetime.utcnow().date(),
+            titulo=data.get('titulo'),
+            descricao=data.get('descricao'),
+            clima=data.get('clima'),
+            temperatura=data.get('temperatura'),
+            equipe_presente=data.get('equipe_presente'),
+            atividades_realizadas=data.get('atividades_realizadas'),
+            materiais_utilizados=data.get('materiais_utilizados'),
+            equipamentos_utilizados=data.get('equipamentos_utilizados'),
+            observacoes=data.get('observacoes'),
+            criado_por=int(get_jwt_identity())
+        )
+        
+        db.session.add(entrada)
+        db.session.flush()  # Para obter o ID
+        
+        # Processar imagens (base64)
+        if 'imagens' in data and isinstance(data['imagens'], list):
+            for idx, img_data in enumerate(data['imagens']):
+                imagem = DiarioImagem(
+                    diario_id=entrada.id,
+                    arquivo_nome=img_data.get('nome', f'imagem_{idx+1}.jpg'),
+                    arquivo_base64=img_data.get('base64', ''),
+                    legenda=img_data.get('legenda', ''),
+                    ordem=idx
+                )
+                db.session.add(imagem)
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Entrada de diário criada: ID {entrada.id} na obra {obra_id} ---")
+        return jsonify({
+            'mensagem': 'Entrada criada com sucesso',
+            'entrada': entrada.to_dict()
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] POST /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/diario/<int:entrada_id>', methods=['GET'])
+@jwt_required()
+def obter_entrada_diario(entrada_id):
+    """Obtém uma entrada específica do diário"""
+    try:
+        entrada = db.session.get(DiarioObra, entrada_id)
+        if not entrada:
+            return jsonify({"erro": "Entrada não encontrada"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, entrada.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        return jsonify(entrada.to_dict()), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET /diario/{entrada_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/diario/<int:entrada_id>', methods=['PUT'])
+@jwt_required()
+def atualizar_entrada_diario(entrada_id):
+    """Atualiza uma entrada do diário"""
+    try:
+        entrada = db.session.get(DiarioObra, entrada_id)
+        if not entrada:
+            return jsonify({"erro": "Entrada não encontrada"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, entrada.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        data = request.get_json()
+        
+        # Atualizar campos
+        if 'data' in data:
+            entrada.data = datetime.datetime.strptime(data['data'], '%Y-%m-%d').date()
+        if 'titulo' in data:
+            entrada.titulo = data['titulo']
+        if 'descricao' in data:
+            entrada.descricao = data['descricao']
+        if 'clima' in data:
+            entrada.clima = data['clima']
+        if 'temperatura' in data:
+            entrada.temperatura = data['temperatura']
+        if 'equipe_presente' in data:
+            entrada.equipe_presente = data['equipe_presente']
+        if 'atividades_realizadas' in data:
+            entrada.atividades_realizadas = data['atividades_realizadas']
+        if 'materiais_utilizados' in data:
+            entrada.materiais_utilizados = data['materiais_utilizados']
+        if 'equipamentos_utilizados' in data:
+            entrada.equipamentos_utilizados = data['equipamentos_utilizados']
+        if 'observacoes' in data:
+            entrada.observacoes = data['observacoes']
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Entrada {entrada_id} atualizada ---")
+        return jsonify({
+            'mensagem': 'Entrada atualizada com sucesso',
+            'entrada': entrada.to_dict()
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] PUT /diario/{entrada_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/diario/<int:entrada_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_entrada_diario(entrada_id):
+    """Deleta uma entrada do diário"""
+    try:
+        entrada = db.session.get(DiarioObra, entrada_id)
+        if not entrada:
+            return jsonify({"erro": "Entrada não encontrada"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, entrada.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        db.session.delete(entrada)
+        db.session.commit()
+        
+        print(f"--- [LOG] Entrada {entrada_id} deletada ---")
+        return jsonify({'mensagem': 'Entrada deletada com sucesso'}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] DELETE /diario/{entrada_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/diario/<int:entrada_id>/imagens', methods=['POST'])
+@jwt_required()
+def adicionar_imagem_diario(entrada_id):
+    """Adiciona uma imagem a uma entrada existente"""
+    try:
+        entrada = db.session.get(DiarioObra, entrada_id)
+        if not entrada:
+            return jsonify({"erro": "Entrada não encontrada"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, entrada.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        data = request.get_json()
+        
+        # Obter próxima ordem
+        max_ordem = db.session.query(func.max(DiarioImagem.ordem)).filter_by(diario_id=entrada_id).scalar() or -1
+        
+        imagem = DiarioImagem(
+            diario_id=entrada_id,
+            arquivo_nome=data.get('nome', 'imagem.jpg'),
+            arquivo_base64=data.get('base64', ''),
+            legenda=data.get('legenda', ''),
+            ordem=max_ordem + 1
+        )
+        
+        db.session.add(imagem)
+        db.session.commit()
+        
+        print(f"--- [LOG] Imagem adicionada à entrada {entrada_id} ---")
+        return jsonify({
+            'mensagem': 'Imagem adicionada com sucesso',
+            'imagem': imagem.to_dict()
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] POST /diario/{entrada_id}/imagens: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/diario/imagens/<int:imagem_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_imagem_diario(imagem_id):
+    """Deleta uma imagem do diário"""
+    try:
+        imagem = db.session.get(DiarioImagem, imagem_id)
+        if not imagem:
+            return jsonify({"erro": "Imagem não encontrada"}), 404
+        
+        entrada = db.session.get(DiarioObra, imagem.diario_id)
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, entrada.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        db.session.delete(imagem)
+        db.session.commit()
+        
+        print(f"--- [LOG] Imagem {imagem_id} deletada ---")
+        return jsonify({'mensagem': 'Imagem deletada com sucesso'}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] DELETE /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/obras/<int:obra_id>/diario/relatorio', methods=['GET'])
+@jwt_required()
+def gerar_relatorio_diario(obra_id):
+    """Gera relatório PDF do diário de obras"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        obra = db.session.get(Obra, obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        # Filtros
+        data_inicio = request.args.get('data_inicio')
+        data_fim = request.args.get('data_fim')
+        
+        query = DiarioObra.query.filter_by(obra_id=obra_id)
+        
+        if data_inicio:
+            query = query.filter(DiarioObra.data >= datetime.datetime.strptime(data_inicio, '%Y-%m-%d').date())
+        if data_fim:
+            query = query.filter(DiarioObra.data <= datetime.datetime.strptime(data_fim, '%Y-%m-%d').date())
+        
+        entradas = query.order_by(DiarioObra.data.asc()).all()
+        
+        # Criar PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+        
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Título
+        titulo = Paragraph(f"<b>Diário de Obras - {obra.nome}</b>", styles['Title'])
+        story.append(titulo)
+        story.append(Spacer(1, 0.5*cm))
+        
+        # Informações do relatório
+        info_data = [
+            ['Relatório gerado em:', datetime.datetime.now().strftime('%d/%m/%Y %H:%M')],
+            ['Obra:', obra.nome],
+            ['Cliente:', obra.cliente or 'N/A'],
+        ]
+        
+        if data_inicio or data_fim:
+            periodo = f"{data_inicio or 'Início'} até {data_fim or 'Hoje'}"
+            info_data.append(['Período:', periodo])
+        
+        info_table = Table(info_data, colWidths=[5*cm, 12*cm])
+        info_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#e2e8f0')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('PADDING', (0, 0), (-1, -1), 8),
+        ]))
+        
+        story.append(info_table)
+        story.append(Spacer(1, 1*cm))
+        
+        # Entradas
+        for entrada in entradas:
+            # Data e título
+            story.append(Paragraph(f"<b>{entrada.data.strftime('%d/%m/%Y')}</b> - {entrada.titulo}", styles['Heading2']))
+            
+            # Clima
+            if entrada.clima or entrada.temperatura:
+                clima_info = []
+                if entrada.clima:
+                    clima_info.append(f"Clima: {entrada.clima}")
+                if entrada.temperatura:
+                    clima_info.append(f"Temperatura: {entrada.temperatura}")
+                story.append(Paragraph(" | ".join(clima_info), styles['Normal']))
+                story.append(Spacer(1, 0.2*cm))
+            
+            # Descrição
+            if entrada.descricao:
+                story.append(Paragraph("<b>Descrição:</b>", styles['Normal']))
+                story.append(Paragraph(entrada.descricao, styles['Normal']))
+                story.append(Spacer(1, 0.3*cm))
+            
+            # Atividades
+            if entrada.atividades_realizadas:
+                story.append(Paragraph("<b>Atividades Realizadas:</b>", styles['Normal']))
+                story.append(Paragraph(entrada.atividades_realizadas, styles['Normal']))
+                story.append(Spacer(1, 0.3*cm))
+            
+            # Equipe
+            if entrada.equipe_presente:
+                story.append(Paragraph("<b>Equipe Presente:</b>", styles['Normal']))
+                story.append(Paragraph(entrada.equipe_presente, styles['Normal']))
+                story.append(Spacer(1, 0.3*cm))
+            
+            # Materiais
+            if entrada.materiais_utilizados:
+                story.append(Paragraph("<b>Materiais Utilizados:</b>", styles['Normal']))
+                story.append(Paragraph(entrada.materiais_utilizados, styles['Normal']))
+                story.append(Spacer(1, 0.3*cm))
+            
+            # Equipamentos
+            if entrada.equipamentos_utilizados:
+                story.append(Paragraph("<b>Equipamentos Utilizados:</b>", styles['Normal']))
+                story.append(Paragraph(entrada.equipamentos_utilizados, styles['Normal']))
+                story.append(Spacer(1, 0.3*cm))
+            
+            # Observações
+            if entrada.observacoes:
+                story.append(Paragraph("<b>Observações:</b>", styles['Normal']))
+                story.append(Paragraph(entrada.observacoes, styles['Normal']))
+                story.append(Spacer(1, 0.3*cm))
+            
+            # Imagens (apenas contador)
+            if entrada.imagens:
+                story.append(Paragraph(f"<b>Imagens:</b> {len(entrada.imagens)} foto(s)", styles['Normal']))
+            
+            # Separador
+            story.append(Spacer(1, 0.5*cm))
+            story.append(Paragraph("_" * 100, styles['Normal']))
+            story.append(Spacer(1, 0.5*cm))
+        
+        # Gerar PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        print(f"--- [LOG] Relatório do diário gerado para obra {obra_id} ---")
+        
+        return send_file(
+            buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'diario_obra_{obra.nome}_{datetime.datetime.now().strftime("%Y%m%d")}.pdf'
+        )
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET /obras/{obra_id}/diario/relatorio: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# --- FIM DAS ROTAS DO DIÁRIO DE OBRAS ---
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
