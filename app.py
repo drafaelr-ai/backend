@@ -2445,45 +2445,112 @@ def relatorio_resumo_completo(obra_id):
             elements.append(Paragraph("Nenhum serviço cadastrado.", styles['Normal']))
             elements.append(Spacer(1, 0.5*cm))
         
-        # === SEÇÃO 3: PENDÊNCIAS ===
-        elements.append(Paragraph("<b>3. PENDÊNCIAS ATUAIS (A PAGAR)</b>", styles['Heading2']))
+        # === SEÇÃO 3: PENDÊNCIAS VENCIDAS ===
+        elements.append(Paragraph("<b>3. PENDÊNCIAS VENCIDAS ⚠️</b>", styles['Heading2']))
         elements.append(Spacer(1, 0.3*cm))
         
-        pendencias_lancamentos = [l for l in lancamentos if (l.valor_total or 0) > (l.valor_pago or 0)]
-        pendencias_servicos = []
+        hoje = datetime.date.today()
+        
+        pendencias_lanc_vencidas = []
+        pendencias_lanc_a_pagar = []
+        
+        for l in lancamentos:
+            if (l.valor_total or 0) > (l.valor_pago or 0):
+                if l.data_vencimento and l.data_vencimento < hoje:
+                    pendencias_lanc_vencidas.append(l)
+                else:
+                    pendencias_lanc_a_pagar.append(l)
+        
+        pendencias_serv_vencidas = []
+        pendencias_serv_a_pagar = []
+        
         for serv in servicos:
             for pag in serv.pagamentos:
                 if (pag.valor_total or 0) > (pag.valor_pago or 0):
-                    pendencias_servicos.append((serv.nome, pag))
+                    if pag.data_vencimento and pag.data_vencimento < hoje:
+                        pendencias_serv_vencidas.append((serv.nome, pag))
+                    else:
+                        pendencias_serv_a_pagar.append((serv.nome, pag))
         
-        total_pendente = 0
+        total_vencido = 0
         
-        if pendencias_lancamentos or pendencias_servicos:
-            data_pendencias = [['Descrição', 'Tipo', 'Valor Pendente']]
+        if pendencias_lanc_vencidas or pendencias_serv_vencidas:
+            data_vencidas = [['Descrição', 'Tipo', 'Valor Pendente']]
             
-            for lanc in pendencias_lancamentos:
+            for lanc in pendencias_lanc_vencidas:
                 valor_pendente = (lanc.valor_total or 0) - (lanc.valor_pago or 0)
-                total_pendente += valor_pendente
-                data_pendencias.append([
+                total_vencido += valor_pendente
+                data_vencidas.append([
                     lanc.descricao[:40],
                     lanc.tipo,
                     formatar_real(valor_pendente)
                 ])
             
-            for serv_nome, pag in pendencias_servicos:
+            for serv_nome, pag in pendencias_serv_vencidas:
                 valor_pendente = (pag.valor_total or 0) - (pag.valor_pago or 0)
-                total_pendente += valor_pendente
-                data_pendencias.append([
-                    f"{serv_nome} - {pag.tipo_pagamento}",
+                total_vencido += valor_pendente
+                tipo_pag_display = pag.tipo_pagamento.replace('_', ' ').title() if pag.tipo_pagamento else 'Serviço'
+                data_vencidas.append([
+                    f"{serv_nome} - {tipo_pag_display}"[:40],
                     "Serviço",
                     formatar_real(valor_pendente)
                 ])
             
-            data_pendencias.append(['', 'TOTAL PENDENTE', formatar_real(total_pendente)])
+            data_vencidas.append(['', 'TOTAL VENCIDO ⚠️', formatar_real(total_vencido)])
             
-            table_pendencias = Table(data_pendencias, colWidths=[9*cm, 3.5*cm, 3.5*cm])
-            table_pendencias.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ef4444')),
+            table_vencidas = Table(data_vencidas, colWidths=[9*cm, 3.5*cm, 3.5*cm])
+            table_vencidas.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#d32f2f')),  # Vermelho escuro
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('BACKGROUND', (0, 1), (-1, -2), colors.HexColor('#ffcdd2')),  # Vermelho claro
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#d32f2f')),  # Linha total em vermelho
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ]))
+            elements.append(table_vencidas)
+        else:
+            elements.append(Paragraph("✓ Nenhuma pendência vencida!", styles['Normal']))
+        
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # === SEÇÃO 4: PENDÊNCIAS A PAGAR ===
+        elements.append(Paragraph("<b>4. PENDÊNCIAS A PAGAR (No Prazo)</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        total_a_pagar = 0
+        
+        if pendencias_lanc_a_pagar or pendencias_serv_a_pagar:
+            data_a_pagar = [['Descrição', 'Tipo', 'Valor Pendente']]
+            
+            for lanc in pendencias_lanc_a_pagar:
+                valor_pendente = (lanc.valor_total or 0) - (lanc.valor_pago or 0)
+                total_a_pagar += valor_pendente
+                data_a_pagar.append([
+                    lanc.descricao[:40],
+                    lanc.tipo,
+                    formatar_real(valor_pendente)
+                ])
+            
+            for serv_nome, pag in pendencias_serv_a_pagar:
+                valor_pendente = (pag.valor_total or 0) - (pag.valor_pago or 0)
+                total_a_pagar += valor_pendente
+                tipo_pag_display = pag.tipo_pagamento.replace('_', ' ').title() if pag.tipo_pagamento else 'Serviço'
+                data_a_pagar.append([
+                    f"{serv_nome} - {tipo_pag_display}"[:40],
+                    "Serviço",
+                    formatar_real(valor_pendente)
+                ])
+            
+            data_a_pagar.append(['', 'TOTAL A PAGAR', formatar_real(total_a_pagar)])
+            
+            table_a_pagar = Table(data_a_pagar, colWidths=[9*cm, 3.5*cm, 3.5*cm])
+            table_a_pagar.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2196f3')),  # Azul
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
@@ -2491,19 +2558,18 @@ def relatorio_resumo_completo(obra_id):
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 9),
                 ('BACKGROUND', (0, 1), (-1, -2), colors.white),
-                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#ef4444')),
-                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f0f0f0')),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
             ]))
-            elements.append(table_pendencias)
+            elements.append(table_a_pagar)
         else:
-            elements.append(Paragraph("✓ Nenhuma pendência encontrada. Todos os pagamentos estão em dia!", styles['Normal']))
+            elements.append(Paragraph("✓ Nenhuma pendência a pagar no momento!", styles['Normal']))
         
         elements.append(Spacer(1, 0.8*cm))
         
-        # === SEÇÃO 4: ORÇAMENTOS ===
-        elements.append(Paragraph("<b>4. ORÇAMENTOS</b>", styles['Heading2']))
+        # === SEÇÃO 5: ORÇAMENTOS ===
+        elements.append(Paragraph("<b>5. ORÇAMENTOS</b>", styles['Heading2']))
         elements.append(Spacer(1, 0.3*cm))
         
         if orcamentos:
@@ -2519,7 +2585,7 @@ def relatorio_resumo_completo(obra_id):
             print(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
             
             if orcamentos_pendentes:
-                elements.append(Paragraph("<b>4.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
+                elements.append(Paragraph("<b>5.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
                 data_orc_pend = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
                 for orc in orcamentos_pendentes:
                     data_orc_pend.append([
@@ -2544,7 +2610,7 @@ def relatorio_resumo_completo(obra_id):
                 elements.append(Spacer(1, 0.5*cm))
             
             if orcamentos_aprovados:
-                elements.append(Paragraph("<b>4.2. Orçamentos Aprovados</b>", styles['Heading3']))
+                elements.append(Paragraph("<b>5.2. Orçamentos Aprovados</b>", styles['Heading3']))
                 data_orc_apr = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
                 for orc in orcamentos_aprovados:
                     data_orc_apr.append([
@@ -2570,7 +2636,7 @@ def relatorio_resumo_completo(obra_id):
             
             # <-- NOVO: Seção de Orçamentos Rejeitados
             if orcamentos_rejeitados:
-                elements.append(Paragraph("<b>4.3. Orçamentos Rejeitados (Histórico)</b>", styles['Heading3']))
+                elements.append(Paragraph("<b>5.3. Orçamentos Rejeitados (Histórico)</b>", styles['Heading3']))
                 data_orc_rej = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
                 for orc in orcamentos_rejeitados:
                     data_orc_rej.append([
@@ -3363,12 +3429,25 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             return jsonify({"erro": "Obra não encontrada"}), 404
         
         # Buscar dados do cronograma
+        hoje = datetime.date.today()
+        
         pagamentos_futuros = PagamentoFuturo.query.filter_by(
             obra_id=obra_id
         ).order_by(PagamentoFuturo.data_vencimento).all()
         
+        # Separar pagamentos em vencidos e previstos
+        pagamentos_vencidos = []
+        pagamentos_previstos = []
+        
+        for pag in pagamentos_futuros:
+            if pag.status == 'Previsto' and pag.data_vencimento < hoje:
+                pagamentos_vencidos.append(pag)
+            elif pag.status == 'Previsto':
+                pagamentos_previstos.append(pag)
+        
         # NOVO: Buscar também pagamentos de serviços pendentes
         pagamentos_servicos_pendentes = []
+        pagamentos_servicos_vencidos = []
         servicos = Servico.query.filter_by(obra_id=obra_id).all()
         for servico in servicos:
             pagamentos_servico = PagamentoServico.query.filter_by(
@@ -3380,13 +3459,22 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             for pag_serv in pagamentos_servico:
                 valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
                 if valor_pendente > 0 and pag_serv.data_vencimento:
-                    pagamentos_servicos_pendentes.append({
-                        'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
+                    # Determinar tipo de pagamento
+                    tipo_pag = pag_serv.tipo_pagamento.replace('_', ' ').title() if pag_serv.tipo_pagamento else '-'
+                    
+                    pag_dict = {
+                        'descricao': f"{servico.nome} - Pagamento {tipo_pag}",
                         'fornecedor': pag_serv.fornecedor,
                         'valor': valor_pendente,
                         'data_vencimento': pag_serv.data_vencimento,
-                        'status': 'Previsto'
-                    })
+                        'tipo_pagamento': tipo_pag,
+                        'status': 'Previsto' if pag_serv.data_vencimento >= hoje else 'Vencido'
+                    }
+                    
+                    if pag_serv.data_vencimento < hoje:
+                        pagamentos_servicos_vencidos.append(pag_dict)
+                    else:
+                        pagamentos_servicos_pendentes.append(pag_dict)
         
         pagamentos_parcelados = PagamentoParcelado.query.filter_by(
             obra_id=obra_id
@@ -3419,35 +3507,83 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         elements.append(Paragraph(info_text, info_style))
         elements.append(Spacer(1, 0.5*cm))
         
-        # Seção: Pagamentos Futuros (incluindo serviços)
-        if pagamentos_futuros or pagamentos_servicos_pendentes:
-            section_title = Paragraph("<b>1. Pagamentos Futuros (Únicos)</b>", styles['Heading2'])
+        # Seção: Pagamentos VENCIDOS
+        if pagamentos_vencidos or pagamentos_servicos_vencidos:
+            section_title = Paragraph("<b>1. Pagamentos VENCIDOS ⚠️</b>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
-            data_futuros = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento', 'Status']]
+            data_vencidos = [['Descrição', 'Fornecedor', 'Tipo', 'Valor', 'Vencimento', 'Status']]
+            
+            # Adicionar pagamentos futuros vencidos
+            for pag in pagamentos_vencidos:
+                data_vencidos.append([
+                    pag.descricao[:25],
+                    pag.fornecedor[:18] if pag.fornecedor else '-',
+                    '-',  # Pagamentos futuros não têm tipo
+                    formatar_real(pag.valor),
+                    pag.data_vencimento.strftime('%d/%m/%Y'),
+                    'Vencido'
+                ])
+            
+            # Adicionar pagamentos de serviços vencidos
+            for pag_serv in pagamentos_servicos_vencidos:
+                data_vencidos.append([
+                    pag_serv['descricao'][:25],
+                    pag_serv['fornecedor'][:18] if pag_serv['fornecedor'] else '-',
+                    pag_serv['tipo_pagamento'][:15],
+                    formatar_real(pag_serv['valor']),
+                    pag_serv['data_vencimento'].strftime('%d/%m/%Y'),
+                    'Vencido'
+                ])
+            
+            table = Table(data_vencidos, colWidths=[5*cm, 3*cm, 2.5*cm, 2.5*cm, 2*cm, 2*cm])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#d32f2f')),  # Vermelho escuro
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#ffcdd2')),  # Fundo vermelho claro
+                ('TEXTCOLOR', (5, 1), (5, -1), colors.HexColor('#d32f2f'))  # Status em vermelho
+            ]))
+            elements.append(table)
+            elements.append(Spacer(1, 0.5*cm))
+        
+        # Seção: Pagamentos Futuros/Previstos (incluindo serviços)
+        if pagamentos_previstos or pagamentos_servicos_pendentes:
+            section_title = Paragraph("<b>2. Pagamentos Futuros (Previstos)</b>", styles['Heading2'])
+            elements.append(section_title)
+            elements.append(Spacer(1, 0.3*cm))
+            
+            data_futuros = [['Descrição', 'Fornecedor', 'Tipo', 'Valor', 'Vencimento', 'Status']]
             
             # Adicionar pagamentos futuros cadastrados
-            for pag in pagamentos_futuros:
+            for pag in pagamentos_previstos:
                 data_futuros.append([
-                    pag.descricao[:30],
-                    pag.fornecedor[:20] if pag.fornecedor else '-',
+                    pag.descricao[:25],
+                    pag.fornecedor[:18] if pag.fornecedor else '-',
+                    '-',  # Pagamentos futuros não têm tipo
                     formatar_real(pag.valor),
                     pag.data_vencimento.strftime('%d/%m/%Y'),
                     pag.status
                 ])
             
-            # NOVO: Adicionar pagamentos de serviços pendentes
+            # Adicionar pagamentos de serviços pendentes
             for pag_serv in pagamentos_servicos_pendentes:
                 data_futuros.append([
-                    pag_serv['descricao'][:30],
-                    pag_serv['fornecedor'][:20] if pag_serv['fornecedor'] else '-',
+                    pag_serv['descricao'][:25],
+                    pag_serv['fornecedor'][:18] if pag_serv['fornecedor'] else '-',
+                    pag_serv['tipo_pagamento'][:15],
                     formatar_real(pag_serv['valor']),
                     pag_serv['data_vencimento'].strftime('%d/%m/%Y'),
                     pag_serv['status']
                 ])
             
-            table = Table(data_futuros, colWidths=[6*cm, 4*cm, 3*cm, 2.5*cm, 2.5*cm])
+            table = Table(data_futuros, colWidths=[5*cm, 3*cm, 2.5*cm, 2.5*cm, 2*cm, 2*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -3464,7 +3600,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Seção: Pagamentos Parcelados
         if pagamentos_parcelados:
-            section_title = Paragraph("<b>2. Pagamentos Parcelados</b>", styles['Heading2'])
+            section_title = Paragraph("<b>3. Pagamentos Parcelados</b>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
@@ -3479,25 +3615,39 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 
                 # Subtítulo do pagamento parcelado - mostra apenas o valor total
                 sub_title = Paragraph(
-                    f"<b>{pag_parcelado.descricao}</b> - Total: {formatar_real(valor_total_parcelas)}",
+                    f"<b>{pag_parcelado.descricao}</b> - Total: {formatar_real(valor_total_parcelas)} | Fornecedor: {pag_parcelado.fornecedor or '-'}",
                     styles['Heading3']
                 )
                 elements.append(sub_title)
                 elements.append(Spacer(1, 0.2*cm))
                 
                 if parcelas:
-                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Pago em']]
+                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'Pago em']]
+                    
+                    # Variável para controlar cores
+                    row_colors = []
+                    
                     for parcela in parcelas:
+                        # Determinar se está vencida
+                        status_display = parcela.status
+                        if parcela.status == 'Previsto' and parcela.data_vencimento < hoje:
+                            status_display = 'Vencido'
+                            row_colors.append(colors.HexColor('#ffcdd2'))  # Vermelho claro
+                        else:
+                            row_colors.append(colors.whitesmoke if len(row_colors) % 2 == 0 else colors.white)
+                        
                         data_parcelas.append([
                             f"{parcela.numero_parcela}/{pag_parcelado.numero_parcelas}",
                             formatar_real(parcela.valor_parcela),
                             parcela.data_vencimento.strftime('%d/%m/%Y'),
-                            parcela.status,
+                            status_display,
+                            pag_parcelado.periodicidade or '-',  # Tipo = Periodicidade
                             parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
                         ])
                     
-                    table_parcelas = Table(data_parcelas, colWidths=[2*cm, 3*cm, 3*cm, 3*cm, 3*cm])
-                    table_parcelas.setStyle(TableStyle([
+                    table_parcelas = Table(data_parcelas, colWidths=[2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm])
+                    
+                    style_list = [
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5cb85c')),
                         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -3506,41 +3656,66 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
                         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                         ('FONTSIZE', (0, 1), (-1, -1), 8),
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white])
-                    ]))
+                    ]
+                    
+                    # Adicionar cores de fundo linha por linha
+                    for i, color in enumerate(row_colors, start=1):
+                        style_list.append(('BACKGROUND', (0, i), (-1, i), color))
+                        if color == colors.HexColor('#ffcdd2'):  # Se for vencida
+                            style_list.append(('TEXTCOLOR', (3, i), (3, i), colors.HexColor('#d32f2f')))  # Status em vermelho
+                    
+                    table_parcelas.setStyle(TableStyle(style_list))
                     elements.append(table_parcelas)
                     elements.append(Spacer(1, 0.3*cm))
         
         # Seção: Resumo Financeiro
-        section_title = Paragraph("<b>3. Resumo Financeiro</b>", styles['Heading2'])
+        section_title = Paragraph("<b>4. Resumo Financeiro</b>", styles['Heading2'])
         elements.append(section_title)
         elements.append(Spacer(1, 0.3*cm))
         
         # Calcular totais
-        total_futuros = sum(pag.valor for pag in pagamentos_futuros if pag.status == 'Previsto')
+        total_futuros = sum(pag.valor for pag in pagamentos_previstos)
+        total_vencidos_unicos = sum(pag.valor for pag in pagamentos_vencidos)
         
-        # NOVO: Adicionar pagamentos de serviços pendentes ao total
+        # Adicionar pagamentos de serviços
         total_servicos_pendentes = sum(pag_serv['valor'] for pag_serv in pagamentos_servicos_pendentes)
+        total_servicos_vencidos = sum(pag_serv['valor'] for pag_serv in pagamentos_servicos_vencidos)
         
+        # Parcelas
         total_parcelados = sum(
-            parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Previsto'
+            parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Previsto' and parcela.data_vencimento >= hoje
+        )
+        total_parcelas_vencidas = sum(
+            parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Previsto' and parcela.data_vencimento < hoje
         )
         total_pago_parcelas = sum(
             parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Pago'
         )
+        
+        total_geral_vencido = total_vencidos_unicos + total_servicos_vencidos + total_parcelas_vencidas
         total_geral_previsto = total_futuros + total_servicos_pendentes + total_parcelados
+        total_geral = total_geral_vencido + total_geral_previsto
         
         resumo_data = [
             ['Descrição', 'Valor'],
             ['Total de Pagamentos Futuros (Previstos)', formatar_real(total_futuros)],
-            ['Total de Pagamentos de Serviços (Pendentes)', formatar_real(total_servicos_pendentes)],
+            ['Total de Pagamentos de Serviços (Previstos)', formatar_real(total_servicos_pendentes)],
             ['Total de Parcelas (Previstas)', formatar_real(total_parcelados)],
-            ['Total de Parcelas Pagas', formatar_real(total_pago_parcelas)],
-            ['TOTAL PREVISTO (A Pagar)', formatar_real(total_geral_previsto)]
+            ['', ''],  # Linha em branco
+            ['Total de Pagamentos VENCIDOS (Únicos)', formatar_real(total_vencidos_unicos)],
+            ['Total de Pagamentos de Serviços VENCIDOS', formatar_real(total_servicos_vencidos)],
+            ['Total de Parcelas VENCIDAS', formatar_real(total_parcelas_vencidas)],
+            ['', ''],  # Linha em branco
+            ['Total de Parcelas PAGAS', formatar_real(total_pago_parcelas)],
+            ['', ''],  # Linha em branco
+            ['TOTAL VENCIDO ⚠️', formatar_real(total_geral_vencido)],
+            ['TOTAL PREVISTO', formatar_real(total_geral_previsto)],
+            ['TOTAL GERAL (A Pagar)', formatar_real(total_geral)]
         ]
         
         table_resumo = Table(resumo_data, colWidths=[12*cm, 5*cm])
-        table_resumo.setStyle(TableStyle([
+        
+        style_list = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff9800')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
@@ -3550,10 +3725,18 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
             ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
-            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#ffc107')),
-            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold')
-        ]))
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+            # Destacar linha TOTAL VENCIDO em vermelho
+            ('BACKGROUND', (0, 11), (-1, 11), colors.HexColor('#ffcdd2')),
+            ('TEXTCOLOR', (0, 11), (-1, 11), colors.HexColor('#d32f2f')),
+            ('FONTNAME', (0, 11), (-1, 11), 'Helvetica-Bold'),
+            # Destacar linha TOTAL GERAL em laranja escuro
+            ('BACKGROUND', (0, 13), (-1, 13), colors.HexColor('#ff9800')),
+            ('TEXTCOLOR', (0, 13), (-1, 13), colors.whitesmoke),
+            ('FONTNAME', (0, 13), (-1, 13), 'Helvetica-Bold'),
+        ]
+        
+        table_resumo.setStyle(TableStyle(style_list))
         elements.append(table_resumo)
         
         # Construir o PDF
