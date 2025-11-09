@@ -4188,11 +4188,13 @@ def inserir_pagamento(obra_id):
             novo_pagamento = PagamentoServico(
                 servico_id=servico_id,
                 tipo_pagamento=tipo_pagamento,
-                descricao=descricao,
                 valor_total=valor_total,
                 valor_pago=valor_pago,
                 data=data,
-                prioridade=prioridade
+                data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
+                status=status,
+                prioridade=prioridade,
+                fornecedor=fornecedor
             )
             db.session.add(novo_pagamento)
             
