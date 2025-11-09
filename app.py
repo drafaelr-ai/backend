@@ -10,11 +10,12 @@ from urllib.parse import quote_plus
 import datetime
 from sqlalchemy import func, case
 import io
+import base64
 import csv
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet
 from sqlalchemy.orm import joinedload 
 
@@ -4773,9 +4774,51 @@ def gerar_relatorio_diario(obra_id):
                 story.append(Paragraph(entrada.observacoes, styles['Normal']))
                 story.append(Spacer(1, 0.3*cm))
             
-            # Imagens (apenas contador)
+            # Imagens
             if entrada.imagens:
                 story.append(Paragraph(f"<b>Imagens:</b> {len(entrada.imagens)} foto(s)", styles['Normal']))
+                story.append(Spacer(1, 0.3*cm))
+                
+                for img_obj in entrada.imagens:
+                    try:
+                        # Decodificar base64
+                        img_data = base64.b64decode(img_obj.base64)
+                        img_buffer = io.BytesIO(img_data)
+                        
+                        # Criar objeto Image do ReportLab
+                        img = Image(img_buffer)
+                        
+                        # Ajustar tamanho (largura máxima: 15cm, altura proporcional)
+                        max_width = 15 * cm
+                        max_height = 12 * cm
+                        
+                        # Calcular dimensões mantendo proporção
+                        aspect = img.imageHeight / img.imageWidth
+                        if img.imageWidth > max_width:
+                            img.drawWidth = max_width
+                            img.drawHeight = max_width * aspect
+                        else:
+                            img.drawWidth = img.imageWidth
+                            img.drawHeight = img.imageHeight
+                        
+                        # Se altura ainda for muito grande, ajustar pela altura
+                        if img.drawHeight > max_height:
+                            img.drawHeight = max_height
+                            img.drawWidth = max_height / aspect
+                        
+                        story.append(img)
+                        
+                        # Legenda/nome do arquivo
+                        if img_obj.nome:
+                            story.append(Paragraph(f"<i>{img_obj.nome}</i>", styles['Normal']))
+                        
+                        story.append(Spacer(1, 0.3*cm))
+                        
+                    except Exception as img_error:
+                        print(f"--- [ERRO] Erro ao processar imagem {img_obj.id}: {str(img_error)} ---")
+                        story.append(Paragraph(f"<i>[Erro ao carregar imagem: {img_obj.nome}]</i>", styles['Normal']))
+                        story.append(Spacer(1, 0.3*cm))
+
             
             # Separador
             story.append(Spacer(1, 0.5*cm))
