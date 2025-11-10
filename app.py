@@ -2911,11 +2911,29 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         if pagamento.status == 'Pago':
             return jsonify({"mensagem": "Pagamento já está marcado como pago"}), 200
         
-        pagamento.status = 'Pago'
+        # Criar Lançamento com os dados do PagamentoFuturo
+        novo_lancamento = Lancamento(
+            obra_id=pagamento.obra_id,
+            tipo='Material',  # Tipo padrão (pode ser ajustado)
+            descricao=pagamento.descricao,
+            valor_total=pagamento.valor,
+            valor_pago=pagamento.valor,  # Marca como totalmente pago
+            data=datetime.date.today(),  # Data do pagamento = hoje
+            data_vencimento=pagamento.data_vencimento,
+            status='Pago',
+            fornecedor=pagamento.fornecedor,
+            pix=None,
+            prioridade=0
+        )
+        db.session.add(novo_lancamento)
+        
+        # Deletar PagamentoFuturo
+        db.session.delete(pagamento)
+        
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento futuro {pagamento_id} marcado como pago na obra {obra_id} ---")
-        return jsonify({"mensagem": "Pagamento marcado como pago com sucesso"}), 200
+        print(f"--- [LOG] PagamentoFuturo {pagamento_id} convertido em Lancamento e deletado ---")
+        return jsonify({"mensagem": "Pagamento registrado com sucesso", "lancamento": novo_lancamento.to_dict()}), 200
     
     except Exception as e:
         db.session.rollback()
@@ -4528,24 +4546,41 @@ def inserir_pagamento(obra_id):
             return jsonify(novo_pagamento.to_dict()), 201
             
         else:
-            # Criar um Lançamento normal (não vinculado a serviço)
-            novo_lancamento = Lancamento(
-                obra_id=obra_id,
-                tipo=tipo,
-                descricao=descricao,
-                valor_total=valor_total,
-                valor_pago=valor_pago,
-                data=data,
-                data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
-                status=status,
-                pix=pix,
-                prioridade=prioridade,
-                fornecedor=fornecedor
-            )
-            db.session.add(novo_lancamento)
-            db.session.commit()
-            print(f"--- [LOG] Lançamento inserido sem vínculo a serviço ---")
-            return jsonify(novo_lancamento.to_dict()), 201
+            # Se status é 'A Pagar', criar PagamentoFuturo
+            if status == 'A Pagar':
+                novo_futuro = PagamentoFuturo(
+                    obra_id=obra_id,
+                    descricao=descricao,
+                    valor=valor_total,
+                    data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else data,
+                    fornecedor=fornecedor,
+                    observacoes=None,
+                    status='Previsto'
+                )
+                db.session.add(novo_futuro)
+                db.session.commit()
+                print(f"--- [LOG] PagamentoFuturo criado (A Pagar convertido) ---")
+                return jsonify({"tipo": "futuro", "data": novo_futuro.to_dict()}), 201
+            
+            # Se status é 'Pago', criar Lançamento normal
+            else:
+                novo_lancamento = Lancamento(
+                    obra_id=obra_id,
+                    tipo=tipo,
+                    descricao=descricao,
+                    valor_total=valor_total,
+                    valor_pago=valor_pago,
+                    data=data,
+                    data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
+                    status=status,
+                    pix=pix,
+                    prioridade=prioridade,
+                    fornecedor=fornecedor
+                )
+                db.session.add(novo_lancamento)
+                db.session.commit()
+                print(f"--- [LOG] Lançamento inserido (status Pago) ---")
+                return jsonify({"tipo": "lancamento", "data": novo_lancamento.to_dict()}), 201
     
     except Exception as e:
         db.session.rollback()
