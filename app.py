@@ -2813,7 +2813,7 @@ def listar_pagamentos_futuros(obra_id):
             for pag_serv in pagamentos_servico:
                 valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
                 if valor_pendente > 0 and pag_serv.data_vencimento:
-                    # Adicionar como item não-editável
+                    # Adicionar como item EDITÁVEL
                     resultado.append({
                         'id': f'servico-{pag_serv.id}',  # ID composto para identificação
                         'pagamento_servico_id': pag_serv.id,  # ID real do pagamento de serviço
@@ -2821,11 +2821,13 @@ def listar_pagamentos_futuros(obra_id):
                         'servico_nome': servico.nome,
                         'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
                         'fornecedor': pag_serv.fornecedor,
+                        'pix': pag_serv.pix if pag_serv.pix else (servico.pix if servico.pix else None),  # PIX do pagamento ou serviço
                         'valor': valor_pendente,
                         'data_vencimento': pag_serv.data_vencimento.isoformat(),
                         'status': 'Previsto',
                         'periodicidade': None,
-                        'editavel': False,  # ⚠️ NÃO PODE EDITAR
+                        'prioridade': pag_serv.prioridade,
+                        'editavel': True,  # ✅ PODE EDITAR
                         'tipo_origem': 'servico'  # Flag para identificar origem
                     })
         
@@ -2880,10 +2882,10 @@ def criar_pagamento_futuro(obra_id):
         print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<pagamento_id>', methods=['PUT'])
 @jwt_required()
 def editar_pagamento_futuro(obra_id, pagamento_id):
-    """Edita um pagamento futuro existente"""
+    """Edita um pagamento futuro OU pagamento de serviço"""
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
@@ -2891,33 +2893,85 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
-        pagamento = db.session.get(PagamentoFuturo, pagamento_id)
-        if not pagamento or pagamento.obra_id != obra_id:
-            return jsonify({"erro": "Pagamento não encontrado"}), 404
-        
         data = request.get_json()
         print(f"--- [DEBUG] Dados recebidos: {data} ---")
         
-        if 'descricao' in data:
-            pagamento.descricao = data['descricao']
-        if 'valor' in data:
-            pagamento.valor = float(data['valor'])
-        if 'data_vencimento' in data:
-            pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
-        if 'fornecedor' in data:
-            pagamento.fornecedor = data['fornecedor']
-        if 'pix' in data:
-            print(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
-            pagamento.pix = data['pix']
-        if 'observacoes' in data:
-            pagamento.observacoes = data['observacoes']
-        if 'status' in data:
-            pagamento.status = data['status']
-        
-        print(f"--- [DEBUG] Tentando commit no banco... ---")
-        db.session.commit()
-        
-        print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso na obra {obra_id} ---")
+        # Verificar se é um pagamento de serviço (ID composto: "servico-123")
+        if isinstance(pagamento_id, str) and pagamento_id.startswith('servico-'):
+            # É um pagamento de serviço
+            servico_pag_id = int(pagamento_id.replace('servico-', ''))
+            print(f"--- [DEBUG] Detectado pagamento de serviço: ID real = {servico_pag_id} ---")
+            
+            # Buscar o pagamento de serviço
+            pagamento = db.session.get(PagamentoServico, servico_pag_id)
+            if not pagamento:
+                return jsonify({"erro": "Pagamento de serviço não encontrado"}), 404
+            
+            # Verificar se o serviço pertence à obra
+            servico = db.session.get(Servico, pagamento.servico_id)
+            if not servico or servico.obra_id != obra_id:
+                return jsonify({"erro": "Serviço não pertence a esta obra"}), 403
+            
+            # Atualizar campos do pagamento de serviço
+            if 'fornecedor' in data:
+                pagamento.fornecedor = data['fornecedor']
+            if 'pix' in data:
+                print(f"--- [DEBUG] Salvando PIX no PagamentoServico: {data['pix']} ---")
+                pagamento.pix = data['pix']
+            if 'data_vencimento' in data:
+                pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+            if 'prioridade' in data:
+                pagamento.prioridade = int(data.get('prioridade', 0))
+            
+            db.session.commit()
+            
+            print(f"--- [LOG] ✅ Pagamento de serviço {servico_pag_id} editado com sucesso ---")
+            
+            # Retornar dados atualizados no formato esperado
+            valor_pendente = pagamento.valor_total - pagamento.valor_pago
+            return jsonify({
+                'id': f'servico-{pagamento.id}',
+                'pagamento_servico_id': pagamento.id,
+                'servico_id': servico.id,
+                'servico_nome': servico.nome,
+                'descricao': f"{servico.nome} - {pagamento.tipo_pagamento.replace('_', ' ').title()}",
+                'fornecedor': pagamento.fornecedor,
+                'valor': valor_pendente,
+                'data_vencimento': pagamento.data_vencimento.isoformat() if pagamento.data_vencimento else None,
+                'status': 'Previsto',
+                'pix': pagamento.pix,
+                'prioridade': pagamento.prioridade,
+                'editavel': True,
+                'tipo_origem': 'servico'
+            }), 200
+            
+        else:
+            # É um pagamento futuro normal
+            pagamento_id_int = int(pagamento_id)
+            pagamento = db.session.get(PagamentoFuturo, pagamento_id_int)
+            if not pagamento or pagamento.obra_id != obra_id:
+                return jsonify({"erro": "Pagamento não encontrado"}), 404
+            
+            # Atualizar campos do pagamento futuro
+            if 'descricao' in data:
+                pagamento.descricao = data['descricao']
+            if 'valor' in data:
+                pagamento.valor = float(data['valor'])
+            if 'data_vencimento' in data:
+                pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+            if 'fornecedor' in data:
+                pagamento.fornecedor = data['fornecedor']
+            if 'pix' in data:
+                print(f"--- [DEBUG] Salvando PIX no PagamentoFuturo: {data['pix']} ---")
+                pagamento.pix = data['pix']
+            if 'observacoes' in data:
+                pagamento.observacoes = data['observacoes']
+            if 'status' in data:
+                pagamento.status = data['status']
+            
+            db.session.commit()
+            
+            print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id_int} editado com sucesso na obra {obra_id} ---")
         return jsonify(pagamento.to_dict()), 200
     
     except Exception as e:
@@ -3580,8 +3634,8 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     # Determinar forma de pagamento (PIX, Boleto, TED, etc)
                     forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else None
                     
-                    # Determinar PIX (usa forma_pagamento do pagamento ou PIX do serviço)
-                    pix_display = forma_pag if forma_pag else (servico.pix if servico.pix else '-')
+                    # Determinar PIX (prioridade: PIX do pagamento > PIX do serviço)
+                    pix_display = pag_serv.pix if pag_serv.pix else (servico.pix if servico.pix else '-')
                     
                     # Montar descrição (removemos a forma da descrição já que terá coluna própria)
                     descricao_completa = f"{servico.nome} - {tipo_desc}"
