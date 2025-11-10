@@ -4,7 +4,7 @@ import traceback  # Importado para log de erros detalhado
 import re  # Importado para o CORS com regex
 import zipfile  # Importado para criar ZIP de notas fiscais
 from flask import Flask, jsonify, request, make_response, send_file
-from flask_cors import CORS
+# from flask_cors import CORS  # REMOVIDO - Agora usando middlewares customizados
 from flask_sqlalchemy import SQLAlchemy
 from urllib.parse import quote_plus
 import datetime
@@ -28,18 +28,11 @@ print("--- [LOG] Iniciando app.py (VERSÃO com Novos KPIs v3) ---")
 
 app = Flask(__name__)
 
-# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
-CORS(app, 
-     resources={
-         r"/*": {
-             "origins": "*",
-             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-             "allow_headers": ["Content-Type", "Authorization"],
-             "supports_credentials": False  # False quando origins='*'
-         }
-     })
-print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: GET, POST, PUT, DELETE, OPTIONS ---")
-# -----------------------------------------------------------------
+# --- CORS GERENCIADO POR MIDDLEWARES (@app.before_request e @app.after_request) ---
+# O Flask-CORS foi REMOVIDO para evitar conflitos com o middleware customizado
+# que intercepta OPTIONS antes do JWT. Veja os middlewares após o JWT Manager.
+print("--- [LOG] CORS será gerenciado por middlewares customizados ---")
+# ---------------------------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
 app.config["JWT_SECRET_KEY"] = os.environ.get('JWT_SECRET_KEY', 'sua-chave-secreta-muito-forte-aqui-mude-depois')
