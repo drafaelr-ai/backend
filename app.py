@@ -29,16 +29,23 @@ print("--- [LOG] Iniciando app.py (VERSÃO com Novos KPIs v3) ---")
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
-CORS(app, 
-     resources={
-         r"/*": {
-             "origins": "*",
-             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-             "allow_headers": ["Content-Type", "Authorization"],
-             "supports_credentials": True
-         }
-     })
-print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: GET, POST, PUT, DELETE, OPTIONS ---")
+CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+# --- CORS hardening: allow preflight and custom headers globally ---
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = response.headers.get('Access-Control-Allow-Origin', '*')
+    response.headers['Access-Control-Allow-Credentials'] = 'false'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+    return response
+
+# Handle global OPTIONS preflight for unknown routes gracefully
+@app.route('/<path:any_path>', methods=['OPTIONS'])
+def global_options(any_path):
+    return ('', 200)
+
+print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS ('*') ---")
 # -----------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
@@ -304,7 +311,6 @@ class PagamentoFuturo(db.Model):
     data_vencimento = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto/Pago/Cancelado
     fornecedor = db.Column(db.String(150), nullable=True)
-    pix = db.Column(db.String(100), nullable=True)  # Chave PIX para pagamento
     observacoes = db.Column(db.Text, nullable=True)
     
     def to_dict(self):
@@ -316,7 +322,6 @@ class PagamentoFuturo(db.Model):
             "data_vencimento": self.data_vencimento.isoformat(),
             "status": self.status,
             "fornecedor": self.fornecedor,
-            "pix": self.pix,
             "observacoes": self.observacoes
         }
 
@@ -368,7 +373,6 @@ class ParcelaIndividual(db.Model):
     data_vencimento = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto, Pago
     data_pagamento = db.Column(db.Date, nullable=True)
-    forma_pagamento = db.Column(db.String(50), nullable=True)  # PIX, Boleto, TED, Dinheiro, etc
     observacao = db.Column(db.String(255), nullable=True)
     
     pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
@@ -382,7 +386,6 @@ class ParcelaIndividual(db.Model):
             "data_vencimento": self.data_vencimento.isoformat(),
             "status": self.status,
             "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
-            "forma_pagamento": self.forma_pagamento,
             "observacao": self.observacao
         }
 
@@ -788,8 +791,7 @@ def get_obra_detalhes(obra_id):
             func.sum(Lancamento.valor_total - Lancamento.valor_pago).label('total_pendente')
         ).filter(
             Lancamento.obra_id == obra_id,
-            Lancamento.valor_total > Lancamento.valor_pago,
-            Lancamento.status != 'A Pagar'  # NOVO: Exclui 'A Pagar' (agora usa PagamentoFuturo)
+            Lancamento.valor_total > Lancamento.valor_pago
         ).first()
         
         # Pagamentos de Serviço com saldo pendente (valor_total - valor_pago > 0)
@@ -2761,6 +2763,9 @@ def relatorio_resumo_completo(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_futuros(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Lista todos os pagamentos futuros de uma obra, incluindo pagamentos de serviços pendentes"""
     try:
         current_user = get_current_user()
@@ -2814,19 +2819,16 @@ def listar_pagamentos_futuros(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST'])
 @jwt_required()
 def criar_pagamento_futuro(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Cria um novo pagamento futuro"""
     try:
-        print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
-        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         data = request.get_json()
-        print(f"--- [DEBUG] Dados recebidos: {data} ---")
-        
-        pix_value = data.get('pix')
-        print(f"--- [DEBUG] Campo PIX recebido: '{pix_value}' (tipo: {type(pix_value)}) ---")
         
         novo_pagamento = PagamentoFuturo(
             obra_id=obra_id,
@@ -2834,31 +2836,30 @@ def criar_pagamento_futuro(obra_id):
             valor=float(data.get('valor', 0)),
             data_vencimento=datetime.datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             fornecedor=data.get('fornecedor'),
-            pix=pix_value,
             observacoes=data.get('observacoes'),
             status='Previsto'
         )
         
-        print(f"--- [DEBUG] Objeto criado, tentando adicionar ao banco... ---")
         db.session.add(novo_pagamento)
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com PIX: {novo_pagamento.pix} ---")
+        print(f"--- [LOG] Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
 @jwt_required()
 def editar_pagamento_futuro(obra_id, pagamento_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Edita um pagamento futuro existente"""
     try:
-        print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
-        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
@@ -2868,7 +2869,6 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         data = request.get_json()
-        print(f"--- [DEBUG] Dados recebidos: {data} ---")
         
         if 'descricao' in data:
             pagamento.descricao = data['descricao']
@@ -2878,29 +2878,28 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
         if 'fornecedor' in data:
             pagamento.fornecedor = data['fornecedor']
-        if 'pix' in data:
-            print(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
-            pagamento.pix = data['pix']
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
         if 'status' in data:
             pagamento.status = data['status']
         
-        print(f"--- [DEBUG] Tentando commit no banco... ---")
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso na obra {obra_id} ---")
+        print(f"--- [LOG] Pagamento futuro {pagamento_id} editado na obra {obra_id} ---")
         return jsonify(pagamento.to_dict()), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] ❌ PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
 def deletar_pagamento_futuro(obra_id, pagamento_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Deleta um pagamento futuro"""
     try:
         current_user = get_current_user()
@@ -2926,6 +2925,9 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST'])
 @jwt_required()
 def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Marca um pagamento futuro como pago"""
     try:
         current_user = get_current_user()
@@ -2955,10 +2957,16 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_parcelados(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Lista todos os pagamentos parcelados de uma obra"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         pagamentos = PagamentoParcelado.query.filter_by(obra_id=obra_id).order_by(PagamentoParcelado.data_primeira_parcela).all()
@@ -3014,6 +3022,9 @@ def criar_pagamento_parcelado(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['PUT'])
 @jwt_required()
 def editar_pagamento_parcelado(obra_id, pagamento_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Edita um pagamento parcelado existente"""
     try:
         current_user = get_current_user()
@@ -3065,10 +3076,16 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
 def deletar_pagamento_parcelado(obra_id, pagamento_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Deleta um pagamento parcelado"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         pagamento = db.session.get(PagamentoParcelado, pagamento_id)
@@ -3146,6 +3163,9 @@ def calcular_previsoes(obra_id):
         
         previsoes_lista = []
         for mes_chave in sorted(previsoes_por_mes.keys()):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
             ano, mes = mes_chave.split('-')
             meses_pt = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
             mes_nome = meses_pt[int(mes)]
@@ -3230,6 +3250,9 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT'])
 @jwt_required()
 def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Edita uma parcela individual (valor, data, observação)"""
     try:
         current_user = get_current_user()
@@ -3290,6 +3313,9 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
 @jwt_required()
 def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """Marca uma parcela individual como paga"""
     try:
         current_user = get_current_user()
@@ -3311,7 +3337,6 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
             data.get('data_pagamento', datetime.date.today().isoformat()), 
             '%Y-%m-%d'
         ).date()
-        parcela.forma_pagamento = data.get('forma_pagamento', None)
         
         db.session.commit()
         
@@ -3346,6 +3371,9 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET'])
 @jwt_required()
 def obter_alertas_vencimento(obra_id):
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message':'OPTIONS allowed'}), 200)
+
     """
     Retorna um resumo dos pagamentos por categoria de vencimento:
     - Vencidos (atrasados)
@@ -3552,19 +3580,17 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     # Determinar forma de pagamento (PIX, Boleto, TED, etc)
                     forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else None
                     
-                    # Determinar PIX (usa forma_pagamento do pagamento ou PIX do serviço)
-                    pix_display = forma_pag if forma_pag else (servico.pix if servico.pix else '-')
-                    
-                    # Montar descrição (removemos a forma da descrição já que terá coluna própria)
+                    # Montar descrição incluindo forma de pagamento se existir
                     descricao_completa = f"{servico.nome} - {tipo_desc}"
+                    if forma_pag:
+                        descricao_completa += f" (via {forma_pag})"
                     
                     pag_dict = {
                         'descricao': descricao_completa,
                         'fornecedor': pag_serv.fornecedor,
-                        'pix': pix_display,  # Incluir PIX/forma de pagamento
                         'valor': valor_pendente,
                         'data_vencimento': pag_serv.data_vencimento,
-                        'tipo_pagamento': '-',
+                        'tipo_pagamento': '-',  # Deixa vazio, forma de pagamento está na descrição
                         'status': 'Previsto' if pag_serv.data_vencimento >= hoje else 'Vencido'
                     }
                     
@@ -3590,7 +3616,6 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
         elements = []
         styles = getSampleStyleSheet()
-        secao_numero = 0  # Contador para numeração dinâmica das seções
         
         # Título
         title_style = styles['Title']
@@ -3618,7 +3643,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             pagamentos_resumo.append({
                 'descricao': pag.descricao,
                 'fornecedor': pag.fornecedor if pag.fornecedor else '-',
-                'pix': pag.pix if pag.pix else '-',  # Chave PIX do pagamento
+                'forma_pagamento': '-',  # Pagamentos futuros únicos não têm forma
                 'valor': pag.valor,
                 'vencimento': pag.data_vencimento,
                 'status': 'Vencido',
@@ -3630,7 +3655,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             pagamentos_resumo.append({
                 'descricao': pag_serv['descricao'],
                 'fornecedor': pag_serv['fornecedor'] if pag_serv['fornecedor'] else '-',
-                'pix': pag_serv['pix'],  # PIX já está no dicionário
+                'forma_pagamento': pag_serv['tipo_pagamento'],  # Já tem forma na descrição
                 'valor': pag_serv['valor'],
                 'vencimento': pag_serv['data_vencimento'],
                 'status': 'Vencido',
@@ -3643,7 +3668,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 pagamentos_resumo.append({
                     'descricao': pag.descricao,
                     'fornecedor': pag.fornecedor if pag.fornecedor else '-',
-                    'pix': pag.pix if pag.pix else '-',  # Chave PIX do pagamento
+                    'forma_pagamento': '-',
                     'valor': pag.valor,
                     'vencimento': pag.data_vencimento,
                     'status': 'Próximos 7 dias',
@@ -3665,7 +3690,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 pagamentos_resumo.append({
                     'descricao': pag_serv['descricao'],
                     'fornecedor': pag_serv['fornecedor'] if pag_serv['fornecedor'] else '-',
-                    'pix': pag_serv['pix'],  # PIX já está no dicionário
+                    'forma_pagamento': pag_serv['tipo_pagamento'],
                     'valor': pag_serv['valor'],
                     'vencimento': pag_serv['data_vencimento'],
                     'status': 'Próximos 7 dias',
@@ -3686,28 +3711,26 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Mostrar seção RESUMO se houver pagamentos urgentes
         if pagamentos_resumo:
-            secao_numero += 1
-            section_title = Paragraph(f"<b>{secao_numero}. RESUMO - Atenção Urgente ⚠️</b><br/><font size=9>(Vencidos e próximos 7 dias)</font>", styles['Heading2'])
+            section_title = Paragraph("<b>1. RESUMO - Atenção Urgente ⚠️</b><br/><font size=9>(Vencidos e próximos 7 dias)</font>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
-            data_resumo = [['Descrição', 'Fornecedor', 'PIX', 'Valor', 'Vencimento', 'Status']]
+            data_resumo = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento', 'Status']]
             
             for pag in pagamentos_resumo:
                 # Definir cor do status
                 status_text = pag['status']
                 
                 data_resumo.append([
-                    pag['descricao'][:25],
-                    pag['fornecedor'][:15],
-                    pag['pix'][:20] if pag['pix'] != '-' else '-',  # Coluna PIX adicionada
+                    pag['descricao'][:30],
+                    pag['fornecedor'][:18],
                     formatar_real(pag['valor']),
                     pag['vencimento'].strftime('%d/%m/%Y'),
                     status_text
                 ])
             
-            # Ajustar larguras das colunas (agora são 6 colunas)
-            table = Table(data_resumo, colWidths=[4.5*cm, 2.5*cm, 3*cm, 2.5*cm, 2.5*cm, 2*cm])
+            # Ajustar larguras das colunas sem a coluna Tipo
+            table = Table(data_resumo, colWidths=[6*cm, 3*cm, 2.5*cm, 2.5*cm, 3*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff6f00')),  # Laranja escuro
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -3724,8 +3747,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Seção: Pagamentos Futuros (Após 7 dias)
         if pagamentos_futuros_normais:
-            secao_numero += 1
-            section_title = Paragraph(f"<b>{secao_numero}. Pagamentos Futuros</b><br/><font size=9>(Após 7 dias)</font>", styles['Heading2'])
+            section_title = Paragraph("<b>2. Pagamentos Futuros</b><br/><font size=9>(Após 7 dias)</font>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
@@ -3758,8 +3780,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Seção: Pagamentos Parcelados
         if pagamentos_parcelados:
-            secao_numero += 1
-            section_title = Paragraph(f"<b>{secao_numero}. Pagamentos Parcelados</b>", styles['Heading2'])
+            section_title = Paragraph("<b>3. Pagamentos Parcelados</b>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
@@ -3781,7 +3802,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 elements.append(Spacer(1, 0.2*cm))
                 
                 if parcelas:
-                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'Forma Pgto.', 'Pago em']]
+                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'Pago em']]
                     
                     # Variável para controlar cores
                     row_colors = []
@@ -3795,23 +3816,16 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         else:
                             row_colors.append(colors.whitesmoke if len(row_colors) % 2 == 0 else colors.white)
                         
-                        # Determinar valor da coluna "Forma Pgto."
-                        forma_pagamento_display = parcela.forma_pagamento if parcela.forma_pagamento else '-'
-                        
-                        # Determinar valor da coluna "Pago em"
-                        pago_em_display = parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
-                        
                         data_parcelas.append([
                             f"{parcela.numero_parcela}/{pag_parcelado.numero_parcelas}",
                             formatar_real(parcela.valor_parcela),
                             parcela.data_vencimento.strftime('%d/%m/%Y'),
                             status_display,
                             pag_parcelado.periodicidade or '-',  # Tipo = Periodicidade
-                            forma_pagamento_display,  # Nova coluna
-                            pago_em_display
+                            parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
                         ])
                     
-                    table_parcelas = Table(data_parcelas, colWidths=[1.8*cm, 2.2*cm, 2.2*cm, 2*cm, 2*cm, 2.2*cm, 2.2*cm])
+                    table_parcelas = Table(data_parcelas, colWidths=[2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm])
                     
                     style_list = [
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5cb85c')),
@@ -3835,8 +3849,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     elements.append(Spacer(1, 0.3*cm))
         
         # Seção: Resumo Financeiro
-        secao_numero += 1
-        section_title = Paragraph(f"<b>{secao_numero}. Resumo Financeiro</b>", styles['Heading2'])
+        section_title = Paragraph("<b>4. Resumo Financeiro</b>", styles['Heading2'])
         elements.append(section_title)
         elements.append(Spacer(1, 0.3*cm))
         
@@ -5191,64 +5204,6 @@ def gerar_relatorio_diario(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"--- [ERRO] GET /obras/{obra_id}/diario/relatorio: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
-
-# --- MIGRAÇÃO DE DADOS ---
-@app.route('/admin/migrar-lancamentos-para-futuros/<int:obra_id>', methods=['POST'])
-@jwt_required()
-def migrar_lancamentos_para_futuros(obra_id):
-    """
-    Converte Lançamentos com status='A Pagar' em PagamentoFuturo.
-    Isso limpa os "fantasmas" que aparecem no KPI "Liberado p/ Pagamento".
-    """
-    try:
-        current_user = get_current_user()
-        if not user_has_access_to_obra(current_user, obra_id):
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        # Buscar todos os Lançamentos com status='A Pagar'
-        lancamentos_a_pagar = Lancamento.query.filter_by(
-            obra_id=obra_id,
-            status='A Pagar',
-            servico_id=None  # Apenas lançamentos gerais, não vinculados a serviço
-        ).all()
-        
-        if not lancamentos_a_pagar:
-            return jsonify({"mensagem": "Nenhum lançamento 'A Pagar' encontrado"}), 200
-        
-        migrados = []
-        for lanc in lancamentos_a_pagar:
-            # Criar PagamentoFuturo
-            novo_futuro = PagamentoFuturo(
-                obra_id=lanc.obra_id,
-                descricao=lanc.descricao,
-                valor=lanc.valor_total - lanc.valor_pago,  # Saldo pendente
-                data_vencimento=lanc.data_vencimento or lanc.data,
-                fornecedor=lanc.fornecedor,
-                status='Previsto'
-            )
-            db.session.add(novo_futuro)
-            
-            # Deletar o Lançamento antigo
-            db.session.delete(lanc)
-            
-            migrados.append({
-                "descricao": lanc.descricao,
-                "valor": lanc.valor_total - lanc.valor_pago
-            })
-        
-        db.session.commit()
-        
-        print(f"--- [LOG] {len(migrados)} lançamentos migrados para PagamentoFuturo na obra {obra_id} ---")
-        return jsonify({
-            "mensagem": f"{len(migrados)} lançamentos migrados com sucesso",
-            "migrados": migrados
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST /admin/migrar-lancamentos-para-futuros/{obra_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- FIM DAS ROTAS DO DIÁRIO DE OBRAS ---
