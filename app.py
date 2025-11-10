@@ -2811,15 +2811,16 @@ def listar_pagamentos_futuros(obra_id):
         print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+# Rota OPTIONS separada - SEM JWT, totalmente livre para preflight CORS
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['OPTIONS'])
+def criar_pagamento_futuro_options(obra_id):
+    """Responde ao preflight OPTIONS sem validação JWT"""
+    return '', 200
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST'])
+@jwt_required()
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
-    # OPTIONS é permitido sem JWT
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    # POST requer JWT
     try:
         print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
@@ -2857,15 +2858,16 @@ def criar_pagamento_futuro(obra_id):
         print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
-@jwt_required(optional=True)
+# Rota OPTIONS separada - SEM JWT, totalmente livre para preflight CORS
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['OPTIONS'])
+def editar_pagamento_futuro_options(obra_id, pagamento_id):
+    """Responde ao preflight OPTIONS sem validação JWT"""
+    return '', 200
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
+@jwt_required()
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
-    # OPTIONS é permitido sem JWT
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    # PUT requer JWT
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
