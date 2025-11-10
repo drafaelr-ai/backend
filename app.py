@@ -296,6 +296,7 @@ class PagamentoFuturo(db.Model):
     data_vencimento = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto/Pago/Cancelado
     fornecedor = db.Column(db.String(150), nullable=True)
+    pix = db.Column(db.String(100), nullable=True)  # Chave PIX para pagamento
     observacoes = db.Column(db.Text, nullable=True)
     
     def to_dict(self):
@@ -307,6 +308,7 @@ class PagamentoFuturo(db.Model):
             "data_vencimento": self.data_vencimento.isoformat(),
             "status": self.status,
             "fornecedor": self.fornecedor,
+            "pix": self.pix,
             "observacoes": self.observacoes
         }
 
@@ -3527,17 +3529,19 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     # Determinar forma de pagamento (PIX, Boleto, TED, etc)
                     forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else None
                     
-                    # Montar descrição incluindo forma de pagamento se existir
+                    # Determinar PIX (usa forma_pagamento do pagamento ou PIX do serviço)
+                    pix_display = forma_pag if forma_pag else (servico.pix if servico.pix else '-')
+                    
+                    # Montar descrição (removemos a forma da descrição já que terá coluna própria)
                     descricao_completa = f"{servico.nome} - {tipo_desc}"
-                    if forma_pag:
-                        descricao_completa += f" (via {forma_pag})"
                     
                     pag_dict = {
                         'descricao': descricao_completa,
                         'fornecedor': pag_serv.fornecedor,
+                        'pix': pix_display,  # Incluir PIX/forma de pagamento
                         'valor': valor_pendente,
                         'data_vencimento': pag_serv.data_vencimento,
-                        'tipo_pagamento': '-',  # Deixa vazio, forma de pagamento está na descrição
+                        'tipo_pagamento': '-',
                         'status': 'Previsto' if pag_serv.data_vencimento >= hoje else 'Vencido'
                     }
                     
@@ -3591,7 +3595,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             pagamentos_resumo.append({
                 'descricao': pag.descricao,
                 'fornecedor': pag.fornecedor if pag.fornecedor else '-',
-                'forma_pagamento': '-',  # Pagamentos futuros únicos não têm forma
+                'pix': pag.pix if pag.pix else '-',  # Chave PIX do pagamento
                 'valor': pag.valor,
                 'vencimento': pag.data_vencimento,
                 'status': 'Vencido',
@@ -3603,7 +3607,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             pagamentos_resumo.append({
                 'descricao': pag_serv['descricao'],
                 'fornecedor': pag_serv['fornecedor'] if pag_serv['fornecedor'] else '-',
-                'forma_pagamento': pag_serv['tipo_pagamento'],  # Já tem forma na descrição
+                'pix': pag_serv['pix'],  # PIX já está no dicionário
                 'valor': pag_serv['valor'],
                 'vencimento': pag_serv['data_vencimento'],
                 'status': 'Vencido',
@@ -3616,7 +3620,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 pagamentos_resumo.append({
                     'descricao': pag.descricao,
                     'fornecedor': pag.fornecedor if pag.fornecedor else '-',
-                    'forma_pagamento': '-',
+                    'pix': pag.pix if pag.pix else '-',  # Chave PIX do pagamento
                     'valor': pag.valor,
                     'vencimento': pag.data_vencimento,
                     'status': 'Próximos 7 dias',
@@ -3638,7 +3642,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 pagamentos_resumo.append({
                     'descricao': pag_serv['descricao'],
                     'fornecedor': pag_serv['fornecedor'] if pag_serv['fornecedor'] else '-',
-                    'forma_pagamento': pag_serv['tipo_pagamento'],
+                    'pix': pag_serv['pix'],  # PIX já está no dicionário
                     'valor': pag_serv['valor'],
                     'vencimento': pag_serv['data_vencimento'],
                     'status': 'Próximos 7 dias',
@@ -3664,22 +3668,23 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
-            data_resumo = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento', 'Status']]
+            data_resumo = [['Descrição', 'Fornecedor', 'PIX', 'Valor', 'Vencimento', 'Status']]
             
             for pag in pagamentos_resumo:
                 # Definir cor do status
                 status_text = pag['status']
                 
                 data_resumo.append([
-                    pag['descricao'][:30],
-                    pag['fornecedor'][:18],
+                    pag['descricao'][:25],
+                    pag['fornecedor'][:15],
+                    pag['pix'][:20] if pag['pix'] != '-' else '-',  # Coluna PIX adicionada
                     formatar_real(pag['valor']),
                     pag['vencimento'].strftime('%d/%m/%Y'),
                     status_text
                 ])
             
-            # Ajustar larguras das colunas sem a coluna Tipo
-            table = Table(data_resumo, colWidths=[6*cm, 3*cm, 2.5*cm, 2.5*cm, 3*cm])
+            # Ajustar larguras das colunas (agora são 6 colunas)
+            table = Table(data_resumo, colWidths=[4.5*cm, 2.5*cm, 3*cm, 2.5*cm, 2.5*cm, 2*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff6f00')),  # Laranja escuro
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
