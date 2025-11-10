@@ -29,8 +29,16 @@ print("--- [LOG] Iniciando app.py (VERSÃO com Novos KPIs v3) ---")
 app = Flask(__name__)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
-CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
-print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS ('*') ---")
+CORS(app, 
+     resources={
+         r"/*": {
+             "origins": "*",
+             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+             "allow_headers": ["Content-Type", "Authorization"],
+             "supports_credentials": True
+         }
+     })
+print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: GET, POST, PUT, DELETE, OPTIONS ---")
 # -----------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
@@ -2808,11 +2816,17 @@ def listar_pagamentos_futuros(obra_id):
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
     try:
+        print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         data = request.get_json()
+        print(f"--- [DEBUG] Dados recebidos: {data} ---")
+        
+        pix_value = data.get('pix')
+        print(f"--- [DEBUG] Campo PIX recebido: '{pix_value}' (tipo: {type(pix_value)}) ---")
         
         novo_pagamento = PagamentoFuturo(
             obra_id=obra_id,
@@ -2820,21 +2834,22 @@ def criar_pagamento_futuro(obra_id):
             valor=float(data.get('valor', 0)),
             data_vencimento=datetime.datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             fornecedor=data.get('fornecedor'),
-            pix=data.get('pix'),
+            pix=pix_value,
             observacoes=data.get('observacoes'),
             status='Previsto'
         )
         
+        print(f"--- [DEBUG] Objeto criado, tentando adicionar ao banco... ---")
         db.session.add(novo_pagamento)
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} ---")
+        print(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com PIX: {novo_pagamento.pix} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
@@ -2842,6 +2857,8 @@ def criar_pagamento_futuro(obra_id):
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
     try:
+        print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
@@ -2851,6 +2868,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         data = request.get_json()
+        print(f"--- [DEBUG] Dados recebidos: {data} ---")
         
         if 'descricao' in data:
             pagamento.descricao = data['descricao']
@@ -2861,21 +2879,23 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if 'fornecedor' in data:
             pagamento.fornecedor = data['fornecedor']
         if 'pix' in data:
+            print(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
             pagamento.pix = data['pix']
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
         if 'status' in data:
             pagamento.status = data['status']
         
+        print(f"--- [DEBUG] Tentando commit no banco... ---")
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento futuro {pagamento_id} editado na obra {obra_id} ---")
+        print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso na obra {obra_id} ---")
         return jsonify(pagamento.to_dict()), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO] ❌ PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE'])
