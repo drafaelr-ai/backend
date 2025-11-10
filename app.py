@@ -1243,6 +1243,61 @@ def editar_pagamento_servico_prioridade(pagamento_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /servicos/pagamentos/.../prioridade (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/servicos/pagamentos/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master'])
+def editar_pagamento_servico(pagamento_id):
+    """Edita um pagamento de serviço completo"""
+    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id} (PUT) acessada ---")
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        user = get_current_user()
+        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+        servico = Servico.query.get(pagamento.servico_id)
+        
+        if not user_has_access_to_obra(user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json
+        
+        # Atualizar campos se fornecidos
+        if 'data' in dados:
+            pagamento.data = datetime.date.fromisoformat(dados['data'])
+        if 'data_vencimento' in dados:
+            pagamento.data_vencimento = datetime.date.fromisoformat(dados['data_vencimento']) if dados['data_vencimento'] else None
+        if 'valor' in dados:
+            pagamento.valor_total = float(dados['valor'])
+            # Se status = Pago, atualizar valor_pago também
+            if pagamento.status == 'Pago':
+                pagamento.valor_pago = pagamento.valor_total
+        if 'tipo_pagamento' in dados:
+            if dados['tipo_pagamento'] not in ['mao_de_obra', 'material']:
+                return jsonify({"erro": "tipo_pagamento deve ser 'mao_de_obra' ou 'material'"}), 400
+            pagamento.tipo_pagamento = dados['tipo_pagamento']
+        if 'forma_pagamento' in dados:
+            pagamento.forma_pagamento = dados['forma_pagamento']
+        if 'fornecedor' in dados:
+            pagamento.fornecedor = dados['fornecedor']
+        if 'prioridade' in dados:
+            pagamento.prioridade = int(dados['prioridade'])
+        if 'status' in dados:
+            pagamento.status = dados['status']
+            # Ajustar valor_pago conforme status
+            if dados['status'] == 'Pago':
+                pagamento.valor_pago = pagamento.valor_total
+            elif dados['status'] == 'A Pagar':
+                pagamento.valor_pago = 0.0
+        
+        db.session.commit()
+        return jsonify(pagamento.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] PUT /servicos/pagamentos/{pagamento_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
 # ---------------------------------------------------
 
 
