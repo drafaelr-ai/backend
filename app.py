@@ -35,21 +35,10 @@ CORS(app,
              "origins": "*",
              "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization"],
-             "supports_credentials": True
+             "supports_credentials": False  # False quando origins='*'
          }
      })
 print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: GET, POST, PUT, DELETE, OPTIONS ---")
-
-# CAMADA EXTRA DE CORS - Força headers em TODAS as respostas
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    return response
-
-print(f"--- [LOG] CORS EXTRA configurado via @app.after_request ---")
 # -----------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
@@ -2823,15 +2812,14 @@ def listar_pagamentos_futuros(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
-    # Handler para preflight OPTIONS (SEM JWT)
+    # OPTIONS é permitido sem JWT
     if request.method == 'OPTIONS':
         return '', 200
     
-    # JWT apenas para POST
-    verify_jwt_in_request()
-    
+    # POST requer JWT
     try:
         print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
@@ -2870,15 +2858,14 @@ def criar_pagamento_futuro(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
-    # Handler para preflight OPTIONS (SEM JWT)
+    # OPTIONS é permitido sem JWT
     if request.method == 'OPTIONS':
         return '', 200
     
-    # JWT apenas para PUT
-    verify_jwt_in_request()
-    
+    # PUT requer JWT
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
