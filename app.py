@@ -5182,7 +5182,7 @@ def gerar_relatorio_diario(obra_id):
                 for img_obj in entrada.imagens:
                     try:
                         # Decodificar base64
-                        img_data = base64.b64decode(img_obj.base64)
+                        img_data = base64.b64decode(img_obj.arquivo_base64)
                         img_buffer = io.BytesIO(img_data)
                         
                         # Criar objeto Image do ReportLab
@@ -5209,14 +5209,14 @@ def gerar_relatorio_diario(obra_id):
                         story.append(img)
                         
                         # Legenda/nome do arquivo
-                        if img_obj.nome:
-                            story.append(Paragraph(f"<i>{img_obj.nome}</i>", styles['Normal']))
+                        if img_obj.arquivo_nome:
+                            story.append(Paragraph(f"<i>{img_obj.arquivo_nome}</i>", styles['Normal']))
                         
                         story.append(Spacer(1, 0.3*cm))
                         
                     except Exception as img_error:
                         print(f"--- [ERRO] Erro ao processar imagem {img_obj.id}: {str(img_error)} ---")
-                        story.append(Paragraph(f"<i>[Erro ao carregar imagem: {img_obj.nome}]</i>", styles['Normal']))
+                        story.append(Paragraph(f"<i>[Erro ao carregar imagem: {img_obj.arquivo_nome}]</i>", styles['Normal']))
                         story.append(Spacer(1, 0.3*cm))
 
             
