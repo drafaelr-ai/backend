@@ -2782,18 +2782,55 @@ def relatorio_resumo_completo(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_futuros(obra_id):
-    """Lista APENAS os pagamentos futuros cadastrados (não inclui pagamentos de serviços pendentes)"""
+    """Lista pagamentos futuros + pagamentos de serviços pendentes (com flag editavel)"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
-        # Pagamentos Futuros únicos (cadastrados manualmente)
+        resultado = []
+        
+        # 1. Pagamentos Futuros (cadastrados manualmente) - EDITÁVEIS
         pagamentos_futuros = PagamentoFuturo.query.filter_by(
             obra_id=obra_id
         ).order_by(PagamentoFuturo.data_vencimento).all()
         
-        resultado = [p.to_dict() for p in pagamentos_futuros]
+        for p in pagamentos_futuros:
+            item = p.to_dict()
+            item['editavel'] = True  # Flag para indicar que pode editar
+            item['tipo_origem'] = 'futuro'
+            resultado.append(item)
+        
+        # 2. Pagamentos de Serviços com saldo pendente - NÃO-EDITÁVEIS
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        for servico in servicos:
+            pagamentos_servico = PagamentoServico.query.filter_by(
+                servico_id=servico.id
+            ).filter(
+                PagamentoServico.valor_pago < PagamentoServico.valor_total
+            ).all()
+            
+            for pag_serv in pagamentos_servico:
+                valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
+                if valor_pendente > 0 and pag_serv.data_vencimento:
+                    # Adicionar como item não-editável
+                    resultado.append({
+                        'id': f'servico-{pag_serv.id}',  # ID composto para identificação
+                        'pagamento_servico_id': pag_serv.id,  # ID real do pagamento de serviço
+                        'servico_id': servico.id,
+                        'servico_nome': servico.nome,
+                        'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
+                        'fornecedor': pag_serv.fornecedor,
+                        'valor': valor_pendente,
+                        'data_vencimento': pag_serv.data_vencimento.isoformat(),
+                        'status': 'Previsto',
+                        'periodicidade': None,
+                        'editavel': False,  # ⚠️ NÃO PODE EDITAR
+                        'tipo_origem': 'servico'  # Flag para identificar origem
+                    })
+        
+        # Ordenar todos por data de vencimento
+        resultado.sort(key=lambda x: x.get('data_vencimento', '9999-12-31'))
         
         return jsonify(resultado), 200
     
