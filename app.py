@@ -358,6 +358,7 @@ class ParcelaIndividual(db.Model):
     data_vencimento = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto, Pago
     data_pagamento = db.Column(db.Date, nullable=True)
+    forma_pagamento = db.Column(db.String(50), nullable=True)  # PIX, Boleto, TED, Dinheiro, etc
     observacao = db.Column(db.String(255), nullable=True)
     
     pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
@@ -371,6 +372,7 @@ class ParcelaIndividual(db.Model):
             "data_vencimento": self.data_vencimento.isoformat(),
             "status": self.status,
             "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
+            "forma_pagamento": self.forma_pagamento,
             "observacao": self.observacao
         }
 
@@ -3284,6 +3286,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
             data.get('data_pagamento', datetime.date.today().isoformat()), 
             '%Y-%m-%d'
         ).date()
+        parcela.forma_pagamento = data.get('forma_pagamento', None)
         
         db.session.commit()
         
@@ -3560,6 +3563,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
         elements = []
         styles = getSampleStyleSheet()
+        secao_numero = 0  # Contador para numeração dinâmica das seções
         
         # Título
         title_style = styles['Title']
@@ -3655,7 +3659,8 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Mostrar seção RESUMO se houver pagamentos urgentes
         if pagamentos_resumo:
-            section_title = Paragraph("<b>1. RESUMO - Atenção Urgente ⚠️</b><br/><font size=9>(Vencidos e próximos 7 dias)</font>", styles['Heading2'])
+            secao_numero += 1
+            section_title = Paragraph(f"<b>{secao_numero}. RESUMO - Atenção Urgente ⚠️</b><br/><font size=9>(Vencidos e próximos 7 dias)</font>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
@@ -3691,7 +3696,8 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Seção: Pagamentos Futuros (Após 7 dias)
         if pagamentos_futuros_normais:
-            section_title = Paragraph("<b>2. Pagamentos Futuros</b><br/><font size=9>(Após 7 dias)</font>", styles['Heading2'])
+            secao_numero += 1
+            section_title = Paragraph(f"<b>{secao_numero}. Pagamentos Futuros</b><br/><font size=9>(Após 7 dias)</font>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
@@ -3724,7 +3730,8 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Seção: Pagamentos Parcelados
         if pagamentos_parcelados:
-            section_title = Paragraph("<b>3. Pagamentos Parcelados</b>", styles['Heading2'])
+            secao_numero += 1
+            section_title = Paragraph(f"<b>{secao_numero}. Pagamentos Parcelados</b>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
@@ -3746,7 +3753,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 elements.append(Spacer(1, 0.2*cm))
                 
                 if parcelas:
-                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'Pago em']]
+                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'Forma Pgto.', 'Pago em']]
                     
                     # Variável para controlar cores
                     row_colors = []
@@ -3760,16 +3767,23 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         else:
                             row_colors.append(colors.whitesmoke if len(row_colors) % 2 == 0 else colors.white)
                         
+                        # Determinar valor da coluna "Forma Pgto."
+                        forma_pagamento_display = parcela.forma_pagamento if parcela.forma_pagamento else '-'
+                        
+                        # Determinar valor da coluna "Pago em"
+                        pago_em_display = parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
+                        
                         data_parcelas.append([
                             f"{parcela.numero_parcela}/{pag_parcelado.numero_parcelas}",
                             formatar_real(parcela.valor_parcela),
                             parcela.data_vencimento.strftime('%d/%m/%Y'),
                             status_display,
                             pag_parcelado.periodicidade or '-',  # Tipo = Periodicidade
-                            parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
+                            forma_pagamento_display,  # Nova coluna
+                            pago_em_display
                         ])
                     
-                    table_parcelas = Table(data_parcelas, colWidths=[2*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.5*cm])
+                    table_parcelas = Table(data_parcelas, colWidths=[1.8*cm, 2.2*cm, 2.2*cm, 2*cm, 2*cm, 2.2*cm, 2.2*cm])
                     
                     style_list = [
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5cb85c')),
@@ -3793,7 +3807,8 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     elements.append(Spacer(1, 0.3*cm))
         
         # Seção: Resumo Financeiro
-        section_title = Paragraph("<b>4. Resumo Financeiro</b>", styles['Heading2'])
+        secao_numero += 1
+        section_title = Paragraph(f"<b>{secao_numero}. Resumo Financeiro</b>", styles['Heading2'])
         elements.append(section_title)
         elements.append(Spacer(1, 0.3*cm))
         
