@@ -28,6 +28,13 @@ print("--- [LOG] Iniciando app.py (VERSÃO com Novos KPIs v3) ---")
 
 app = Flask(__name__)
 
+
+# --- Preflight dedicado para todas as rotas do SID (/sid/...) ---
+@app.route('/sid/<path:any_path>', methods=['OPTIONS'])
+def sid_global_options(any_path):
+    # Retorna 200 sem exigir autenticação para habilitar CORS no preflight
+    return ('', 200)
+
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
 CORS(app, 
      resources={
@@ -2758,10 +2765,13 @@ def relatorio_resumo_completo(obra_id):
 # ===========================
 
 # --- PAGAMENTOS FUTUROS (Únicos) ---
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def listar_pagamentos_futuros(obra_id):
-    """Lista todos os pagamentos futuros de uma obra, incluindo pagamentos de serviços pendentes"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Lista todos os pagamentos futuros de uma obra, incluindo pagamentos de serviços pendentes"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -2811,16 +2821,15 @@ def listar_pagamentos_futuros(obra_id):
         print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# Rota OPTIONS separada - SEM JWT, totalmente livre para preflight CORS
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['OPTIONS'])
-def criar_pagamento_futuro_options(obra_id):
-    """Responde ao preflight OPTIONS sem validação JWT"""
-    return '', 200
-
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST'])
-@jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
+    # OPTIONS é permitido sem JWT
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    # POST requer JWT
     try:
         print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
@@ -2858,16 +2867,15 @@ def criar_pagamento_futuro(obra_id):
         print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# Rota OPTIONS separada - SEM JWT, totalmente livre para preflight CORS
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['OPTIONS'])
-def editar_pagamento_futuro_options(obra_id, pagamento_id):
-    """Responde ao preflight OPTIONS sem validação JWT"""
-    return '', 200
-
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
-@jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
+    # OPTIONS é permitido sem JWT
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    # PUT requer JWT
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
@@ -2910,10 +2918,13 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         print(f"--- [ERRO] ❌ PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_pagamento_futuro(obra_id, pagamento_id):
-    """Deleta um pagamento futuro"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Deleta um pagamento futuro"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -2935,10 +2946,13 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
         print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST', 'OPTIONS'])
 @jwt_required()
 def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
-    """Marca um pagamento futuro como pago"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Marca um pagamento futuro como pago"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -2964,10 +2978,13 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- PAGAMENTOS PARCELADOS ---
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def listar_pagamentos_parcelados(obra_id):
-    """Lista todos os pagamentos parcelados de uma obra"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Lista todos os pagamentos parcelados de uma obra"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -2981,10 +2998,13 @@ def listar_pagamentos_parcelados(obra_id):
         print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST', 'OPTIONS'])
 @jwt_required()
 def criar_pagamento_parcelado(obra_id):
-    """Cria um novo pagamento parcelado"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Cria um novo pagamento parcelado"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3023,10 +3043,13 @@ def criar_pagamento_parcelado(obra_id):
         print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['PUT'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
 @jwt_required()
 def editar_pagamento_parcelado(obra_id, pagamento_id):
-    """Edita um pagamento parcelado existente"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Edita um pagamento parcelado existente"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3074,10 +3097,13 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         print(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_pagamento_parcelado(obra_id, pagamento_id):
-    """Deleta um pagamento parcelado"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Deleta um pagamento parcelado"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3100,10 +3126,13 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- TABELA DE PREVISÕES (CÁLCULO) ---
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/previsoes', methods=['GET'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/previsoes', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def calcular_previsoes(obra_id):
-    """Calcula a tabela de previsões mensais usando parcelas individuais e pagamentos de serviços"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Calcula a tabela de previsões mensais usando parcelas individuais e pagamentos de serviços"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3180,10 +3209,13 @@ def calcular_previsoes(obra_id):
 # ENDPOINTS: PARCELAS INDIVIDUAIS (NOVO!)
 # ========================================
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas', methods=['GET'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def listar_parcelas_individuais(obra_id, pagamento_id):
-    """Lista todas as parcelas individuais de um pagamento parcelado"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Lista todas as parcelas individuais de um pagamento parcelado"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3239,10 +3271,13 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT', 'OPTIONS'])
 @jwt_required()
 def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
-    """Edita uma parcela individual (valor, data, observação)"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Edita uma parcela individual (valor, data, observação)"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3299,10 +3334,13 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST', 'OPTIONS'])
 @jwt_required()
 def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
-    """Marca uma parcela individual como paga"""
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""Marca uma parcela individual como paga"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3355,10 +3393,13 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def obter_alertas_vencimento(obra_id):
-    """
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({'message': 'OPTIONS allowed'}), 200)
+"""
     Retorna um resumo dos pagamentos por categoria de vencimento:
     - Vencidos (atrasados)
     - Vence Hoje
