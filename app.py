@@ -47,6 +47,34 @@ jwt = JWTManager(app)
 print("--- [LOG] JWT Manager inicializado ---")
 # ------------------------------------------------
 
+# --- MIDDLEWARE PARA INTERCEPTAR OPTIONS ANTES DO JWT ---
+@app.before_request
+def handle_preflight():
+    """
+    Intercepta TODAS as requisições OPTIONS ANTES de qualquer processamento.
+    Isso garante que o preflight CORS nunca chegue nas validações JWT.
+    CRÍTICO: Resolve o problema quando PIX contém @ (email).
+    """
+    if request.method == 'OPTIONS':
+        print(f"--- [PREFLIGHT INTERCEPTADO] {request.path} ---")
+        response = make_response('', 200)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Max-Age'] = '3600'
+        return response
+    return None
+
+@app.after_request
+def add_cors_headers(response):
+    """Adiciona headers CORS em TODAS as respostas"""
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
+print("--- [LOG] Middleware CORS/OPTIONS configurado ---")
+# --------------------------------------------------------
 
 # --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
@@ -2811,16 +2839,15 @@ def listar_pagamentos_futuros(obra_id):
         print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# Rota OPTIONS separada - SEM JWT, totalmente livre para preflight CORS
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['OPTIONS'])
-def criar_pagamento_futuro_options(obra_id):
-    """Responde ao preflight OPTIONS sem validação JWT"""
-    return '', 200
-
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST'])
-@jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
+    # OPTIONS é permitido sem JWT
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    # POST requer JWT
     try:
         print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
@@ -2858,16 +2885,15 @@ def criar_pagamento_futuro(obra_id):
         print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-# Rota OPTIONS separada - SEM JWT, totalmente livre para preflight CORS
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['OPTIONS'])
-def editar_pagamento_futuro_options(obra_id, pagamento_id):
-    """Responde ao preflight OPTIONS sem validação JWT"""
-    return '', 200
-
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
-@jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
+    # OPTIONS é permitido sem JWT
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    # PUT requer JWT
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
