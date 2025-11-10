@@ -3573,39 +3573,109 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         elements.append(Paragraph(info_text, info_style))
         elements.append(Spacer(1, 0.5*cm))
         
-        # Seção: Pagamentos VENCIDOS
-        if pagamentos_vencidos or pagamentos_servicos_vencidos:
-            section_title = Paragraph("<b>1. Pagamentos VENCIDOS ⚠️</b>", styles['Heading2'])
+        # Seção: RESUMO - Atenção Urgente (Vencidos + Próximos 7 dias)
+        hoje = datetime.date.today()
+        limite_7_dias = hoje + datetime.timedelta(days=7)
+        
+        # Separar pagamentos por urgência
+        pagamentos_resumo = []  # Vencidos + próximos 7 dias
+        pagamentos_futuros_normais = []  # Após 7 dias
+        
+        # Adicionar vencidos ao resumo
+        for pag in pagamentos_vencidos:
+            pagamentos_resumo.append({
+                'descricao': pag.descricao,
+                'fornecedor': pag.fornecedor if pag.fornecedor else '-',
+                'forma_pagamento': '-',  # Pagamentos futuros únicos não têm forma
+                'valor': pag.valor,
+                'vencimento': pag.data_vencimento,
+                'status': 'Vencido',
+                'urgente': True
+            })
+        
+        # Adicionar serviços vencidos ao resumo
+        for pag_serv in pagamentos_servicos_vencidos:
+            pagamentos_resumo.append({
+                'descricao': pag_serv['descricao'],
+                'fornecedor': pag_serv['fornecedor'] if pag_serv['fornecedor'] else '-',
+                'forma_pagamento': pag_serv['tipo_pagamento'],  # Já tem forma na descrição
+                'valor': pag_serv['valor'],
+                'vencimento': pag_serv['data_vencimento'],
+                'status': 'Vencido',
+                'urgente': True
+            })
+        
+        # Classificar pagamentos previstos (únicos)
+        for pag in pagamentos_previstos:
+            if pag.data_vencimento <= limite_7_dias:
+                pagamentos_resumo.append({
+                    'descricao': pag.descricao,
+                    'fornecedor': pag.fornecedor if pag.fornecedor else '-',
+                    'forma_pagamento': '-',
+                    'valor': pag.valor,
+                    'vencimento': pag.data_vencimento,
+                    'status': 'Próximos 7 dias',
+                    'urgente': True
+                })
+            else:
+                pagamentos_futuros_normais.append({
+                    'descricao': pag.descricao,
+                    'fornecedor': pag.fornecedor if pag.fornecedor else '-',
+                    'tipo_pagamento': '-',
+                    'valor': pag.valor,
+                    'vencimento': pag.data_vencimento,
+                    'status': pag.status
+                })
+        
+        # Classificar pagamentos de serviços pendentes
+        for pag_serv in pagamentos_servicos_pendentes:
+            if pag_serv['data_vencimento'] <= limite_7_dias:
+                pagamentos_resumo.append({
+                    'descricao': pag_serv['descricao'],
+                    'fornecedor': pag_serv['fornecedor'] if pag_serv['fornecedor'] else '-',
+                    'forma_pagamento': pag_serv['tipo_pagamento'],
+                    'valor': pag_serv['valor'],
+                    'vencimento': pag_serv['data_vencimento'],
+                    'status': 'Próximos 7 dias',
+                    'urgente': True
+                })
+            else:
+                pagamentos_futuros_normais.append({
+                    'descricao': pag_serv['descricao'],
+                    'fornecedor': pag_serv['fornecedor'] if pag_serv['fornecedor'] else '-',
+                    'tipo_pagamento': pag_serv['tipo_pagamento'],
+                    'valor': pag_serv['valor'],
+                    'vencimento': pag_serv['data_vencimento'],
+                    'status': pag_serv['status']
+                })
+        
+        # Ordenar resumo por data (mais antigos primeiro)
+        pagamentos_resumo.sort(key=lambda x: x['vencimento'])
+        
+        # Mostrar seção RESUMO se houver pagamentos urgentes
+        if pagamentos_resumo:
+            section_title = Paragraph("<b>1. RESUMO - Atenção Urgente ⚠️</b><br/><font size=9>(Vencidos e próximos 7 dias)</font>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
-            data_vencidos = [['Descrição', 'Fornecedor', 'Tipo', 'Valor', 'Vencimento', 'Status']]
+            data_resumo = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento', 'Status']]
             
-            # Adicionar pagamentos futuros vencidos
-            for pag in pagamentos_vencidos:
-                data_vencidos.append([
-                    pag.descricao[:25],
-                    pag.fornecedor[:18] if pag.fornecedor else '-',
-                    '-',  # Pagamentos futuros não têm tipo
-                    formatar_real(pag.valor),
-                    pag.data_vencimento.strftime('%d/%m/%Y'),
-                    'Vencido'
+            for pag in pagamentos_resumo:
+                # Definir cor do status
+                status_text = pag['status']
+                
+                data_resumo.append([
+                    pag['descricao'][:30],
+                    pag['fornecedor'][:18],
+                    formatar_real(pag['valor']),
+                    pag['vencimento'].strftime('%d/%m/%Y'),
+                    status_text
                 ])
             
-            # Adicionar pagamentos de serviços vencidos
-            for pag_serv in pagamentos_servicos_vencidos:
-                data_vencidos.append([
-                    pag_serv['descricao'][:25],
-                    pag_serv['fornecedor'][:18] if pag_serv['fornecedor'] else '-',
-                    pag_serv['tipo_pagamento'][:15],
-                    formatar_real(pag_serv['valor']),
-                    pag_serv['data_vencimento'].strftime('%d/%m/%Y'),
-                    'Vencido'
-                ])
-            
-            table = Table(data_vencidos, colWidths=[5*cm, 3*cm, 2.5*cm, 2.5*cm, 2*cm, 2*cm])
+            # Ajustar larguras das colunas sem a coluna Tipo
+            table = Table(data_resumo, colWidths=[6*cm, 3*cm, 2.5*cm, 2.5*cm, 3*cm])
             table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#d32f2f')),  # Vermelho escuro
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff6f00')),  # Laranja escuro
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
@@ -3613,43 +3683,30 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#ffcdd2')),  # Fundo vermelho claro
-                ('TEXTCOLOR', (5, 1), (5, -1), colors.HexColor('#d32f2f'))  # Status em vermelho
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#fff3e0')),  # Fundo laranja claro
             ]))
             elements.append(table)
             elements.append(Spacer(1, 0.5*cm))
         
-        # Seção: Pagamentos Futuros/Previstos (incluindo serviços)
-        if pagamentos_previstos or pagamentos_servicos_pendentes:
-            section_title = Paragraph("<b>2. Pagamentos Futuros (Previstos)</b>", styles['Heading2'])
+        # Seção: Pagamentos Futuros (Após 7 dias)
+        if pagamentos_futuros_normais:
+            section_title = Paragraph("<b>2. Pagamentos Futuros</b><br/><font size=9>(Após 7 dias)</font>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
-            data_futuros = [['Descrição', 'Fornecedor', 'Tipo', 'Valor', 'Vencimento', 'Status']]
+            data_futuros = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento']]
             
-            # Adicionar pagamentos futuros cadastrados
-            for pag in pagamentos_previstos:
+            # Adicionar pagamentos futuros (após 7 dias)
+            for pag in pagamentos_futuros_normais:
                 data_futuros.append([
-                    pag.descricao[:25],
-                    pag.fornecedor[:18] if pag.fornecedor else '-',
-                    '-',  # Pagamentos futuros não têm tipo
-                    formatar_real(pag.valor),
-                    pag.data_vencimento.strftime('%d/%m/%Y'),
-                    pag.status
+                    pag['descricao'][:30],
+                    pag['fornecedor'][:18],
+                    formatar_real(pag['valor']),
+                    pag['vencimento'].strftime('%d/%m/%Y')
                 ])
             
-            # Adicionar pagamentos de serviços pendentes
-            for pag_serv in pagamentos_servicos_pendentes:
-                data_futuros.append([
-                    pag_serv['descricao'][:25],
-                    pag_serv['fornecedor'][:18] if pag_serv['fornecedor'] else '-',
-                    pag_serv['tipo_pagamento'][:15],
-                    formatar_real(pag_serv['valor']),
-                    pag_serv['data_vencimento'].strftime('%d/%m/%Y'),
-                    pag_serv['status']
-                ])
-            
-            table = Table(data_futuros, colWidths=[5*cm, 3*cm, 2.5*cm, 2.5*cm, 2*cm, 2*cm])
+            # Ajustar larguras sem coluna Tipo e Status
+            table = Table(data_futuros, colWidths=[7*cm, 4*cm, 3*cm, 3*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
