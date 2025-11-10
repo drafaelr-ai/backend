@@ -3466,14 +3466,19 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     tipo_desc = pag_serv.tipo_pagamento.replace('_', ' ').title() if pag_serv.tipo_pagamento else ''
                     
                     # Determinar forma de pagamento (PIX, Boleto, TED, etc)
-                    forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else '-'
+                    forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else None
+                    
+                    # Montar descrição incluindo forma de pagamento se existir
+                    descricao_completa = f"{servico.nome} - {tipo_desc}"
+                    if forma_pag:
+                        descricao_completa += f" (via {forma_pag})"
                     
                     pag_dict = {
-                        'descricao': f"{servico.nome} - {tipo_desc}",
+                        'descricao': descricao_completa,
                         'fornecedor': pag_serv.fornecedor,
                         'valor': valor_pendente,
                         'data_vencimento': pag_serv.data_vencimento,
-                        'tipo_pagamento': forma_pag,
+                        'tipo_pagamento': '-',  # Deixa vazio, forma de pagamento está na descrição
                         'status': 'Previsto' if pag_serv.data_vencimento >= hoje else 'Vencido'
                     }
                     
