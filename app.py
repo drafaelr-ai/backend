@@ -776,7 +776,8 @@ def get_obra_detalhes(obra_id):
             func.sum(Lancamento.valor_total - Lancamento.valor_pago).label('total_pendente')
         ).filter(
             Lancamento.obra_id == obra_id,
-            Lancamento.valor_total > Lancamento.valor_pago
+            Lancamento.valor_total > Lancamento.valor_pago,
+            Lancamento.status != 'A Pagar'  # NOVO: Exclui 'A Pagar' (agora usa PagamentoFuturo)
         ).first()
         
         # Pagamentos de Serviço com saldo pendente (valor_total - valor_pago > 0)
@@ -2911,29 +2912,11 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         if pagamento.status == 'Pago':
             return jsonify({"mensagem": "Pagamento já está marcado como pago"}), 200
         
-        # Criar Lançamento com os dados do PagamentoFuturo
-        novo_lancamento = Lancamento(
-            obra_id=pagamento.obra_id,
-            tipo='Material',  # Tipo padrão (pode ser ajustado)
-            descricao=pagamento.descricao,
-            valor_total=pagamento.valor,
-            valor_pago=pagamento.valor,  # Marca como totalmente pago
-            data=datetime.date.today(),  # Data do pagamento = hoje
-            data_vencimento=pagamento.data_vencimento,
-            status='Pago',
-            fornecedor=pagamento.fornecedor,
-            pix=None,
-            prioridade=0
-        )
-        db.session.add(novo_lancamento)
-        
-        # Deletar PagamentoFuturo
-        db.session.delete(pagamento)
-        
+        pagamento.status = 'Pago'
         db.session.commit()
         
-        print(f"--- [LOG] PagamentoFuturo {pagamento_id} convertido em Lancamento e deletado ---")
-        return jsonify({"mensagem": "Pagamento registrado com sucesso", "lancamento": novo_lancamento.to_dict()}), 200
+        print(f"--- [LOG] Pagamento futuro {pagamento_id} marcado como pago na obra {obra_id} ---")
+        return jsonify({"mensagem": "Pagamento marcado como pago com sucesso"}), 200
     
     except Exception as e:
         db.session.rollback()
@@ -4546,41 +4529,24 @@ def inserir_pagamento(obra_id):
             return jsonify(novo_pagamento.to_dict()), 201
             
         else:
-            # Se status é 'A Pagar', criar PagamentoFuturo
-            if status == 'A Pagar':
-                novo_futuro = PagamentoFuturo(
-                    obra_id=obra_id,
-                    descricao=descricao,
-                    valor=valor_total,
-                    data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else data,
-                    fornecedor=fornecedor,
-                    observacoes=None,
-                    status='Previsto'
-                )
-                db.session.add(novo_futuro)
-                db.session.commit()
-                print(f"--- [LOG] PagamentoFuturo criado (A Pagar convertido) ---")
-                return jsonify({"tipo": "futuro", "data": novo_futuro.to_dict()}), 201
-            
-            # Se status é 'Pago', criar Lançamento normal
-            else:
-                novo_lancamento = Lancamento(
-                    obra_id=obra_id,
-                    tipo=tipo,
-                    descricao=descricao,
-                    valor_total=valor_total,
-                    valor_pago=valor_pago,
-                    data=data,
-                    data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
-                    status=status,
-                    pix=pix,
-                    prioridade=prioridade,
-                    fornecedor=fornecedor
-                )
-                db.session.add(novo_lancamento)
-                db.session.commit()
-                print(f"--- [LOG] Lançamento inserido (status Pago) ---")
-                return jsonify({"tipo": "lancamento", "data": novo_lancamento.to_dict()}), 201
+            # Criar um Lançamento normal (não vinculado a serviço)
+            novo_lancamento = Lancamento(
+                obra_id=obra_id,
+                tipo=tipo,
+                descricao=descricao,
+                valor_total=valor_total,
+                valor_pago=valor_pago,
+                data=data,
+                data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
+                status=status,
+                pix=pix,
+                prioridade=prioridade,
+                fornecedor=fornecedor
+            )
+            db.session.add(novo_lancamento)
+            db.session.commit()
+            print(f"--- [LOG] Lançamento inserido sem vínculo a serviço ---")
+            return jsonify(novo_lancamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
@@ -5182,6 +5148,64 @@ def gerar_relatorio_diario(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"--- [ERRO] GET /obras/{obra_id}/diario/relatorio: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# --- MIGRAÇÃO DE DADOS ---
+@app.route('/admin/migrar-lancamentos-para-futuros/<int:obra_id>', methods=['POST'])
+@jwt_required()
+def migrar_lancamentos_para_futuros(obra_id):
+    """
+    Converte Lançamentos com status='A Pagar' em PagamentoFuturo.
+    Isso limpa os "fantasmas" que aparecem no KPI "Liberado p/ Pagamento".
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Buscar todos os Lançamentos com status='A Pagar'
+        lancamentos_a_pagar = Lancamento.query.filter_by(
+            obra_id=obra_id,
+            status='A Pagar',
+            servico_id=None  # Apenas lançamentos gerais, não vinculados a serviço
+        ).all()
+        
+        if not lancamentos_a_pagar:
+            return jsonify({"mensagem": "Nenhum lançamento 'A Pagar' encontrado"}), 200
+        
+        migrados = []
+        for lanc in lancamentos_a_pagar:
+            # Criar PagamentoFuturo
+            novo_futuro = PagamentoFuturo(
+                obra_id=lanc.obra_id,
+                descricao=lanc.descricao,
+                valor=lanc.valor_total - lanc.valor_pago,  # Saldo pendente
+                data_vencimento=lanc.data_vencimento or lanc.data,
+                fornecedor=lanc.fornecedor,
+                status='Previsto'
+            )
+            db.session.add(novo_futuro)
+            
+            # Deletar o Lançamento antigo
+            db.session.delete(lanc)
+            
+            migrados.append({
+                "descricao": lanc.descricao,
+                "valor": lanc.valor_total - lanc.valor_pago
+            })
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] {len(migrados)} lançamentos migrados para PagamentoFuturo na obra {obra_id} ---")
+        return jsonify({
+            "mensagem": f"{len(migrados)} lançamentos migrados com sucesso",
+            "migrados": migrados
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] POST /admin/migrar-lancamentos-para-futuros/{obra_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- FIM DAS ROTAS DO DIÁRIO DE OBRAS ---
