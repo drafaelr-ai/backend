@@ -1309,7 +1309,11 @@ def editar_pagamento_servico(pagamento_id):
             pagamento.fornecedor = dados['fornecedor']
         if 'pix' in dados:  # NOVO: Suporte para editar PIX
             print(f"--- [DEBUG] Atualizando PIX do pagamento: {dados['pix']} ---")
-            pagamento.pix = dados['pix']
+            # Verifica se o modelo tem o atributo pix antes de atribuir
+            if hasattr(pagamento, 'pix'):
+                pagamento.pix = dados['pix']
+            else:
+                print(f"--- [AVISO] Coluna 'pix' não existe em PagamentoServico. Ignorando. ---")
         if 'prioridade' in dados:
             pagamento.prioridade = int(dados['prioridade'])
         if 'status' in dados:
@@ -3580,7 +3584,9 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else None
                     
                     # Determinar PIX (prioridade: PIX do pagamento > PIX do serviço)
-                    pix_display = pag_serv.pix if pag_serv.pix else (servico.pix if servico.pix else '-')
+                    # Usa getattr para evitar erro se coluna pix não existir
+                    pix_pagamento = getattr(pag_serv, 'pix', None)
+                    pix_display = pix_pagamento if pix_pagamento else (servico.pix if servico.pix else '-')
                     
                     # Montar descrição (removemos a forma da descrição já que terá coluna própria)
                     descricao_completa = f"{servico.nome} - {tipo_desc}"
