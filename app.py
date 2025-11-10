@@ -4,7 +4,7 @@ import traceback  # Importado para log de erros detalhado
 import re  # Importado para o CORS com regex
 import zipfile  # Importado para criar ZIP de notas fiscais
 from flask import Flask, jsonify, request, make_response, send_file
-# from flask_cors import CORS  # REMOVIDO - Agora usando middlewares customizados
+# Flask-CORS removido - usando middleware customizado
 from flask_sqlalchemy import SQLAlchemy
 from urllib.parse import quote_plus
 import datetime
@@ -28,11 +28,8 @@ print("--- [LOG] Iniciando app.py (VERSÃO com Novos KPIs v3) ---")
 
 app = Flask(__name__)
 
-# --- CORS GERENCIADO POR MIDDLEWARES (@app.before_request e @app.after_request) ---
-# O Flask-CORS foi REMOVIDO para evitar conflitos com o middleware customizado
-# que intercepta OPTIONS antes do JWT. Veja os middlewares após o JWT Manager.
+# CORS gerenciado por middlewares (ver após JWT Manager)
 print("--- [LOG] CORS será gerenciado por middlewares customizados ---")
-# ---------------------------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
 app.config["JWT_SECRET_KEY"] = os.environ.get('JWT_SECRET_KEY', 'sua-chave-secreta-muito-forte-aqui-mude-depois')
@@ -40,16 +37,11 @@ jwt = JWTManager(app)
 print("--- [LOG] JWT Manager inicializado ---")
 # ------------------------------------------------
 
-# --- MIDDLEWARE PARA INTERCEPTAR OPTIONS ANTES DO JWT ---
+# --- MIDDLEWARE CORS ---
 @app.before_request
 def handle_preflight():
-    """
-    Intercepta TODAS as requisições OPTIONS ANTES de qualquer processamento.
-    Isso garante que o preflight CORS nunca chegue nas validações JWT.
-    CRÍTICO: Resolve o problema quando PIX contém @ (email).
-    """
+    """Intercepta OPTIONS antes de qualquer processamento"""
     if request.method == 'OPTIONS':
-        print(f"--- [PREFLIGHT INTERCEPTADO] {request.path} ---")
         response = make_response('', 200)
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
@@ -60,14 +52,15 @@ def handle_preflight():
 
 @app.after_request
 def add_cors_headers(response):
-    """Adiciona headers CORS em TODAS as respostas"""
+    """Adiciona headers CORS em todas as respostas"""
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
     return response
 
-print("--- [LOG] Middleware CORS/OPTIONS configurado ---")
-# --------------------------------------------------------
+print("--- [LOG] Middleware CORS configurado ---")
+# --------------------------
+
 
 # --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
 DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
@@ -1314,6 +1307,9 @@ def editar_pagamento_servico(pagamento_id):
             pagamento.forma_pagamento = dados['forma_pagamento']
         if 'fornecedor' in dados:
             pagamento.fornecedor = dados['fornecedor']
+        if 'pix' in dados:  # NOVO: Suporte para editar PIX
+            print(f"--- [DEBUG] Atualizando PIX do pagamento: {dados['pix']} ---")
+            pagamento.pix = dados['pix']
         if 'prioridade' in dados:
             pagamento.prioridade = int(dados['prioridade'])
         if 'status' in dados:
@@ -2782,7 +2778,7 @@ def relatorio_resumo_completo(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_futuros(obra_id):
-    """Lista pagamentos futuros + pagamentos de serviços pendentes (com flag editavel)"""
+    """Lista todos os pagamentos futuros de uma obra, incluindo pagamentos de serviços pendentes"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -2790,18 +2786,12 @@ def listar_pagamentos_futuros(obra_id):
         
         resultado = []
         
-        # 1. Pagamentos Futuros (cadastrados manualmente) - EDITÁVEIS
-        pagamentos_futuros = PagamentoFuturo.query.filter_by(
-            obra_id=obra_id
-        ).order_by(PagamentoFuturo.data_vencimento).all()
-        
+        # 1. Pagamentos Futuros (cadastrados pelo botão azul)
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id).order_by(PagamentoFuturo.data_vencimento).all()
         for p in pagamentos_futuros:
-            item = p.to_dict()
-            item['editavel'] = True  # Flag para indicar que pode editar
-            item['tipo_origem'] = 'futuro'
-            resultado.append(item)
+            resultado.append(p.to_dict())
         
-        # 2. Pagamentos de Serviços com saldo pendente - NÃO-EDITÁVEIS
+        # 2. NOVO: Pagamentos de Serviços com saldo pendente
         servicos = Servico.query.filter_by(obra_id=obra_id).all()
         for servico in servicos:
             pagamentos_servico = PagamentoServico.query.filter_by(
@@ -2813,22 +2803,19 @@ def listar_pagamentos_futuros(obra_id):
             for pag_serv in pagamentos_servico:
                 valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
                 if valor_pendente > 0 and pag_serv.data_vencimento:
-                    # Adicionar como item EDITÁVEL
+                    # Adicionar como se fosse um pagamento futuro
                     resultado.append({
-                        'id': f'servico-{pag_serv.id}',  # ID composto para identificação
-                        'pagamento_servico_id': pag_serv.id,  # ID real do pagamento de serviço
+                        'id': f'servico-{pag_serv.id}',  # ID especial para distinguir
+                        'tipo_origem': 'servico',  # Flag para identificar origem
+                        'pagamento_servico_id': pag_serv.id,
                         'servico_id': servico.id,
                         'servico_nome': servico.nome,
                         'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
                         'fornecedor': pag_serv.fornecedor,
-                        'pix': pag_serv.pix if pag_serv.pix else (servico.pix if servico.pix else None),  # PIX do pagamento ou serviço
                         'valor': valor_pendente,
                         'data_vencimento': pag_serv.data_vencimento.isoformat(),
                         'status': 'Previsto',
-                        'periodicidade': None,
-                        'prioridade': pag_serv.prioridade,
-                        'editavel': True,  # ✅ PODE EDITAR
-                        'tipo_origem': 'servico'  # Flag para identificar origem
+                        'periodicidade': None
                     })
         
         # Ordenar todos por data de vencimento
@@ -2841,10 +2828,15 @@ def listar_pagamentos_futuros(obra_id):
         print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST'])
-@jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
+    # OPTIONS é permitido sem JWT
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    # POST requer JWT
     try:
         print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
@@ -2882,10 +2874,15 @@ def criar_pagamento_futuro(obra_id):
         print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<pagamento_id>', methods=['PUT'])
-@jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
 def editar_pagamento_futuro(obra_id, pagamento_id):
-    """Edita um pagamento futuro OU pagamento de serviço"""
+    """Edita um pagamento futuro existente"""
+    # OPTIONS é permitido sem JWT
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    # PUT requer JWT
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
@@ -2893,85 +2890,33 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
+        pagamento = db.session.get(PagamentoFuturo, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
         data = request.get_json()
         print(f"--- [DEBUG] Dados recebidos: {data} ---")
         
-        # Verificar se é um pagamento de serviço (ID composto: "servico-123")
-        if isinstance(pagamento_id, str) and pagamento_id.startswith('servico-'):
-            # É um pagamento de serviço
-            servico_pag_id = int(pagamento_id.replace('servico-', ''))
-            print(f"--- [DEBUG] Detectado pagamento de serviço: ID real = {servico_pag_id} ---")
-            
-            # Buscar o pagamento de serviço
-            pagamento = db.session.get(PagamentoServico, servico_pag_id)
-            if not pagamento:
-                return jsonify({"erro": "Pagamento de serviço não encontrado"}), 404
-            
-            # Verificar se o serviço pertence à obra
-            servico = db.session.get(Servico, pagamento.servico_id)
-            if not servico or servico.obra_id != obra_id:
-                return jsonify({"erro": "Serviço não pertence a esta obra"}), 403
-            
-            # Atualizar campos do pagamento de serviço
-            if 'fornecedor' in data:
-                pagamento.fornecedor = data['fornecedor']
-            if 'pix' in data:
-                print(f"--- [DEBUG] Salvando PIX no PagamentoServico: {data['pix']} ---")
-                pagamento.pix = data['pix']
-            if 'data_vencimento' in data:
-                pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
-            if 'prioridade' in data:
-                pagamento.prioridade = int(data.get('prioridade', 0))
-            
-            db.session.commit()
-            
-            print(f"--- [LOG] ✅ Pagamento de serviço {servico_pag_id} editado com sucesso ---")
-            
-            # Retornar dados atualizados no formato esperado
-            valor_pendente = pagamento.valor_total - pagamento.valor_pago
-            return jsonify({
-                'id': f'servico-{pagamento.id}',
-                'pagamento_servico_id': pagamento.id,
-                'servico_id': servico.id,
-                'servico_nome': servico.nome,
-                'descricao': f"{servico.nome} - {pagamento.tipo_pagamento.replace('_', ' ').title()}",
-                'fornecedor': pagamento.fornecedor,
-                'valor': valor_pendente,
-                'data_vencimento': pagamento.data_vencimento.isoformat() if pagamento.data_vencimento else None,
-                'status': 'Previsto',
-                'pix': pagamento.pix,
-                'prioridade': pagamento.prioridade,
-                'editavel': True,
-                'tipo_origem': 'servico'
-            }), 200
-            
-        else:
-            # É um pagamento futuro normal
-            pagamento_id_int = int(pagamento_id)
-            pagamento = db.session.get(PagamentoFuturo, pagamento_id_int)
-            if not pagamento or pagamento.obra_id != obra_id:
-                return jsonify({"erro": "Pagamento não encontrado"}), 404
-            
-            # Atualizar campos do pagamento futuro
-            if 'descricao' in data:
-                pagamento.descricao = data['descricao']
-            if 'valor' in data:
-                pagamento.valor = float(data['valor'])
-            if 'data_vencimento' in data:
-                pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
-            if 'fornecedor' in data:
-                pagamento.fornecedor = data['fornecedor']
-            if 'pix' in data:
-                print(f"--- [DEBUG] Salvando PIX no PagamentoFuturo: {data['pix']} ---")
-                pagamento.pix = data['pix']
-            if 'observacoes' in data:
-                pagamento.observacoes = data['observacoes']
-            if 'status' in data:
-                pagamento.status = data['status']
-            
-            db.session.commit()
-            
-            print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id_int} editado com sucesso na obra {obra_id} ---")
+        if 'descricao' in data:
+            pagamento.descricao = data['descricao']
+        if 'valor' in data:
+            pagamento.valor = float(data['valor'])
+        if 'data_vencimento' in data:
+            pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        if 'fornecedor' in data:
+            pagamento.fornecedor = data['fornecedor']
+        if 'pix' in data:
+            print(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
+            pagamento.pix = data['pix']
+        if 'observacoes' in data:
+            pagamento.observacoes = data['observacoes']
+        if 'status' in data:
+            pagamento.status = data['status']
+        
+        print(f"--- [DEBUG] Tentando commit no banco... ---")
+        db.session.commit()
+        
+        print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso na obra {obra_id} ---")
         return jsonify(pagamento.to_dict()), 200
     
     except Exception as e:
