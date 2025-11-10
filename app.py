@@ -194,6 +194,7 @@ class PagamentoServico(db.Model):
     
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False)
+    forma_pagamento = db.Column(db.String(20), nullable=True)
     prioridade = db.Column(db.Integer, nullable=False, default=0)
     fornecedor = db.Column(db.String(150), nullable=True)
 
@@ -205,6 +206,7 @@ class PagamentoServico(db.Model):
             "valor_pago": self.valor_pago, 
             "status": self.status,
             "tipo_pagamento": self.tipo_pagamento,
+            "forma_pagamento": self.forma_pagamento,
             "prioridade": self.prioridade,
             "fornecedor": self.fornecedor, 
             "pagamento_id": self.id 
@@ -1146,6 +1148,7 @@ def add_pagamento_servico(servico_id):
             valor_pago=valor_pago, 
             status=status,
             tipo_pagamento=tipo_pagamento,
+            forma_pagamento=dados.get('forma_pagamento'),
             prioridade=int(dados.get('prioridade', 0)),
             fornecedor=dados.get('fornecedor') 
         )
@@ -3459,15 +3462,18 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             for pag_serv in pagamentos_servico:
                 valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
                 if valor_pendente > 0 and pag_serv.data_vencimento:
-                    # Determinar tipo de pagamento
-                    tipo_pag = pag_serv.tipo_pagamento.replace('_', ' ').title() if pag_serv.tipo_pagamento else '-'
+                    # Determinar descrição do tipo (mão de obra ou material)
+                    tipo_desc = pag_serv.tipo_pagamento.replace('_', ' ').title() if pag_serv.tipo_pagamento else ''
+                    
+                    # Determinar forma de pagamento (PIX, Boleto, TED, etc)
+                    forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else '-'
                     
                     pag_dict = {
-                        'descricao': f"{servico.nome} - Pagamento {tipo_pag}",
+                        'descricao': f"{servico.nome} - {tipo_desc}",
                         'fornecedor': pag_serv.fornecedor,
                         'valor': valor_pendente,
                         'data_vencimento': pag_serv.data_vencimento,
-                        'tipo_pagamento': tipo_pag,
+                        'tipo_pagamento': forma_pag,
                         'status': 'Previsto' if pag_serv.data_vencimento >= hoje else 'Vencido'
                     }
                     
