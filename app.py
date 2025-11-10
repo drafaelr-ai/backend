@@ -2782,48 +2782,18 @@ def relatorio_resumo_completo(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_futuros(obra_id):
-    """Lista todos os pagamentos futuros de uma obra, incluindo pagamentos de serviços pendentes"""
+    """Lista APENAS os pagamentos futuros cadastrados (não inclui pagamentos de serviços pendentes)"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
-        resultado = []
+        # Pagamentos Futuros únicos (cadastrados manualmente)
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(
+            obra_id=obra_id
+        ).order_by(PagamentoFuturo.data_vencimento).all()
         
-        # 1. Pagamentos Futuros (cadastrados pelo botão azul)
-        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id).order_by(PagamentoFuturo.data_vencimento).all()
-        for p in pagamentos_futuros:
-            resultado.append(p.to_dict())
-        
-        # 2. NOVO: Pagamentos de Serviços com saldo pendente
-        servicos = Servico.query.filter_by(obra_id=obra_id).all()
-        for servico in servicos:
-            pagamentos_servico = PagamentoServico.query.filter_by(
-                servico_id=servico.id
-            ).filter(
-                PagamentoServico.valor_pago < PagamentoServico.valor_total
-            ).all()
-            
-            for pag_serv in pagamentos_servico:
-                valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
-                if valor_pendente > 0 and pag_serv.data_vencimento:
-                    # Adicionar como se fosse um pagamento futuro
-                    resultado.append({
-                        'id': f'servico-{pag_serv.id}',  # ID especial para distinguir
-                        'tipo_origem': 'servico',  # Flag para identificar origem
-                        'pagamento_servico_id': pag_serv.id,
-                        'servico_id': servico.id,
-                        'servico_nome': servico.nome,
-                        'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
-                        'fornecedor': pag_serv.fornecedor,
-                        'valor': valor_pendente,
-                        'data_vencimento': pag_serv.data_vencimento.isoformat(),
-                        'status': 'Previsto',
-                        'periodicidade': None
-                    })
-        
-        # Ordenar todos por data de vencimento
-        resultado.sort(key=lambda x: x.get('data_vencimento', '9999-12-31'))
+        resultado = [p.to_dict() for p in pagamentos_futuros]
         
         return jsonify(resultado), 200
     
@@ -2832,15 +2802,10 @@ def listar_pagamentos_futuros(obra_id):
         print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST'])
+@jwt_required()
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
-    # OPTIONS é permitido sem JWT
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    # POST requer JWT
     try:
         print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
@@ -2878,15 +2843,10 @@ def criar_pagamento_futuro(obra_id):
         print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
-@jwt_required(optional=True)
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT'])
+@jwt_required()
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
-    # OPTIONS é permitido sem JWT
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    # PUT requer JWT
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
