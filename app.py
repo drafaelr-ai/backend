@@ -2820,6 +2820,7 @@ def criar_pagamento_futuro(obra_id):
             valor=float(data.get('valor', 0)),
             data_vencimento=datetime.datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             fornecedor=data.get('fornecedor'),
+            pix=data.get('pix'),
             observacoes=data.get('observacoes'),
             status='Previsto'
         )
@@ -2859,6 +2860,8 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
         if 'fornecedor' in data:
             pagamento.fornecedor = data['fornecedor']
+        if 'pix' in data:
+            pagamento.pix = data['pix']
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
         if 'status' in data:
