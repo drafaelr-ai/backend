@@ -2823,12 +2823,14 @@ def listar_pagamentos_futuros(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
-@jwt_required()
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
-    # Handler para preflight OPTIONS
+    # Handler para preflight OPTIONS (SEM JWT)
     if request.method == 'OPTIONS':
         return '', 200
+    
+    # JWT apenas para POST
+    verify_jwt_in_request()
     
     try:
         print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
@@ -2868,12 +2870,14 @@ def criar_pagamento_futuro(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
-@jwt_required()
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
-    # Handler para preflight OPTIONS
+    # Handler para preflight OPTIONS (SEM JWT)
     if request.method == 'OPTIONS':
         return '', 200
+    
+    # JWT apenas para PUT
+    verify_jwt_in_request()
     
     try:
         print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
