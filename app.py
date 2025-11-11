@@ -1225,11 +1225,16 @@ def toggle_pagamento_servico_status(pagamento_id):
         if pagamento.status == 'Pago':
             pagamento.status = 'A Pagar'
             pagamento.valor_pago = 0.0
+            pagamento.data = None  # Remove a data de pagamento
+            print(f"--- [LOG] Pagamento {pagamento_id} desmarcado como pago ---")
         else:
             pagamento.status = 'Pago'
             pagamento.valor_pago = pagamento.valor_total
+            pagamento.data = datetime.datetime.now().date()  # Registra a data de pagamento
+            print(f"--- [LOG] Pagamento {pagamento_id} marcado como pago em {pagamento.data} ---")
             
         db.session.commit()
+        print(f"--- [LOG] Status atualizado com sucesso. Novo status: {pagamento.status}, Valor pago: {pagamento.valor_pago} ---")
         return jsonify(pagamento.to_dict()), 200
         
     except Exception as e:
