@@ -1225,16 +1225,11 @@ def toggle_pagamento_servico_status(pagamento_id):
         if pagamento.status == 'Pago':
             pagamento.status = 'A Pagar'
             pagamento.valor_pago = 0.0
-            pagamento.data = None  # Remove a data de pagamento
-            print(f"--- [LOG] Pagamento {pagamento_id} desmarcado como pago ---")
         else:
             pagamento.status = 'Pago'
             pagamento.valor_pago = pagamento.valor_total
-            pagamento.data = datetime.datetime.now().date()  # Registra a data de pagamento
-            print(f"--- [LOG] Pagamento {pagamento_id} marcado como pago em {pagamento.data} ---")
             
         db.session.commit()
-        print(f"--- [LOG] Status atualizado com sucesso. Novo status: {pagamento.status}, Valor pago: {pagamento.valor_pago} ---")
         return jsonify(pagamento.to_dict()), 200
         
     except Exception as e:
@@ -4756,6 +4751,8 @@ def marcar_multiplos_como_pago(obra_id):
                         if servico and servico.obra_id == obra_id:
                             # Marcar como totalmente pago
                             pagamento_servico.valor_pago = pagamento_servico.valor_total
+                            pagamento_servico.status = 'Pago'  # ← CORRIGIDO: Atualiza o status
+                            pagamento_servico.data = data_pagamento  # ← CORRIGIDO: Registra a data
                             
                             # Atualizar percentuais do serviço
                             pagamentos = PagamentoServico.query.filter_by(servico_id=servico.id).all()
@@ -4772,6 +4769,8 @@ def marcar_multiplos_como_pago(obra_id):
                             if servico.valor_global_material > 0:
                                 total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
                                 servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                            
+                            print(f"--- [LOG] Pagamento de serviço {item_id} marcado como pago em {data_pagamento}. Status: {pagamento_servico.status} ---")
                             
                             resultados.append({
                                 "tipo": "servico",
