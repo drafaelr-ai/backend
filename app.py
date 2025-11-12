@@ -357,6 +357,26 @@ class PagamentoParcelado(db.Model):
     observacoes = db.Column(db.Text, nullable=True)
     
     def to_dict(self):
+        # Calcular a próxima parcela pendente
+        proxima_parcela_numero = self.parcelas_pagas + 1
+        
+        # Calcular a data da próxima parcela
+        if proxima_parcela_numero <= self.numero_parcelas:
+            # Calcular quantos dias/meses desde a primeira parcela
+            if self.periodicidade == 'Semanal':
+                from datetime import timedelta
+                dias_incremento = (proxima_parcela_numero - 1) * 7
+                proxima_data = self.data_primeira_parcela + timedelta(days=dias_incremento)
+                proxima_parcela_vencimento = proxima_data.isoformat()
+            else:  # Mensal
+                # Para periodicidade mensal, calcular meses
+                from dateutil.relativedelta import relativedelta
+                proxima_data = self.data_primeira_parcela + relativedelta(months=(proxima_parcela_numero - 1))
+                proxima_parcela_vencimento = proxima_data.isoformat()
+        else:
+            # Todas as parcelas já foram pagas
+            proxima_parcela_vencimento = None
+        
         return {
             "id": self.id,
             "obra_id": self.obra_id,
@@ -369,7 +389,10 @@ class PagamentoParcelado(db.Model):
             "periodicidade": self.periodicidade,
             "parcelas_pagas": self.parcelas_pagas,
             "status": self.status,
-            "observacoes": self.observacoes
+            "observacoes": self.observacoes,
+            # Informações da próxima parcela pendente
+            "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero <= self.numero_parcelas else None,
+            "proxima_parcela_vencimento": proxima_parcela_vencimento
         }
     
 # ----------------------------------------------------
