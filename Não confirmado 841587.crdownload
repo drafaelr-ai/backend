@@ -1,0 +1,47 @@
+# --- CORREÇÃO INCLUÍDA ---
+# Trecho adicionado após a criação de um novo pagamento no app.py
+# Esse bloco garante que todo pagamento criado com status 'A Pagar' ou 'Previsto'
+# também será registrado automaticamente no cronograma financeiro (PagamentoFuturo).
+
+from models import db, PagamentoFuturo  # Certifique-se de ter esse import no início do arquivo
+
+@app.route('/pagamentos', methods=['POST'])
+@jwt_required()
+def criar_pagamento():
+    try:
+        dados = request.json
+
+        novo_pagamento = PagamentoServico(
+            servico_id=dados.get('servico_id'),
+            data=datetime.date.fromisoformat(dados.get('data')),
+            data_vencimento=datetime.date.fromisoformat(dados.get('data_vencimento')) if dados.get('data_vencimento') else None,
+            valor_total=dados.get('valor_total'),
+            valor_pago=dados.get('valor_pago', 0.0),
+            status=dados.get('status', 'A Pagar'),
+            tipo_pagamento=dados.get('tipo_pagamento', 'geral'),
+            fornecedor=dados.get('fornecedor'),
+            prioridade=dados.get('prioridade', 0)
+        )
+
+        db.session.add(novo_pagamento)
+        db.session.commit()
+
+        # --- ADIÇÃO AUTOMÁTICA NO CRONOGRAMA FINANCEIRO ---
+        if novo_pagamento.status.lower() in ['a pagar', 'previsto']:
+            novo_cronograma = PagamentoFuturo(
+                obra_id=novo_pagamento.servico.obra_id if novo_pagamento.servico else dados.get('obra_id'),
+                descricao=dados.get('descricao', 'Pagamento planejado'),
+                valor=dados.get('valor_total'),
+                data_vencimento=novo_pagamento.data_vencimento or novo_pagamento.data,
+                status='Previsto',
+                fornecedor=dados.get('fornecedor'),
+                pix=dados.get('pix')
+            )
+            db.session.add(novo_cronograma)
+            db.session.commit()
+
+        return jsonify({"sucesso": True, "mensagem": "Pagamento criado e adicionado ao cronograma."}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
