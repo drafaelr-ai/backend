@@ -3031,7 +3031,7 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST'])
 @jwt_required()
 def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
-    """Marca um pagamento futuro como pago"""
+    """Marca um pagamento futuro como pago e move para o histórico"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3044,11 +3044,35 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         if pagamento.status == 'Pago':
             return jsonify({"mensagem": "Pagamento já está marcado como pago"}), 200
         
-        pagamento.status = 'Pago'
+        # ===== NOVA LÓGICA: Move para o Histórico =====
+        # 1. CRIAR o Lançamento no Histórico
+        novo_lancamento = Lancamento(
+            obra_id=pagamento.obra_id,
+            tipo='Despesa',
+            descricao=pagamento.descricao,
+            valor_total=pagamento.valor,
+            valor_pago=pagamento.valor,
+            data=datetime.date.today(),
+            data_vencimento=pagamento.data_vencimento,
+            status='Pago',
+            pix=pagamento.pix,
+            prioridade=0,
+            fornecedor=pagamento.fornecedor,
+            servico_id=None
+        )
+        db.session.add(novo_lancamento)
+        
+        # 2. DELETE o PagamentoFuturo (remove do cronograma)
+        db.session.delete(pagamento)
+        
+        # 3. Commit das alterações
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento futuro {pagamento_id} marcado como pago na obra {obra_id} ---")
-        return jsonify({"mensagem": "Pagamento marcado como pago com sucesso"}), 200
+        print(f"--- [LOG] Pagamento futuro {pagamento_id} movido para o histórico (lancamento_id={novo_lancamento.id}) na obra {obra_id} ---")
+        return jsonify({
+            "mensagem": "Pagamento marcado como pago e movido para o histórico com sucesso",
+            "lancamento_id": novo_lancamento.id
+        }), 200
     
     except Exception as e:
         db.session.rollback()
@@ -4781,16 +4805,35 @@ def marcar_multiplos_como_pago(obra_id):
             
             try:
                 if tipo_item == 'futuro':
-                    # Marcar pagamento futuro como pago
+                    # ===== NOVA LÓGICA: Move pagamento futuro para o Histórico =====
                     pagamento = PagamentoFuturo.query.get(item_id)
                     if pagamento and pagamento.obra_id == obra_id:
-                        pagamento.status = 'Pago'
-                        pagamento.data_pagamento = data_pagamento
+                        # 1. CRIAR Lançamento no Histórico
+                        novo_lancamento = Lancamento(
+                            obra_id=pagamento.obra_id,
+                            tipo='Despesa',
+                            descricao=pagamento.descricao,
+                            valor_total=pagamento.valor,
+                            valor_pago=pagamento.valor,
+                            data=data_pagamento,
+                            data_vencimento=pagamento.data_vencimento,
+                            status='Pago',
+                            pix=pagamento.pix,
+                            prioridade=0,
+                            fornecedor=pagamento.fornecedor,
+                            servico_id=None
+                        )
+                        db.session.add(novo_lancamento)
+                        
+                        # 2. DELETE o PagamentoFuturo (remove do cronograma)
+                        db.session.delete(pagamento)
+                        
                         resultados.append({
                             "tipo": "futuro",
                             "id": item_id,
                             "status": "success",
-                            "mensagem": f"Pagamento futuro '{pagamento.descricao}' marcado como pago"
+                            "mensagem": f"Pagamento futuro '{pagamento.descricao}' movido para o histórico",
+                            "lancamento_id": novo_lancamento.id
                         })
                     else:
                         resultados.append({
