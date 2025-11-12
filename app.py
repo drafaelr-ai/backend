@@ -689,8 +689,8 @@ def get_obras():
         resultados = []
         for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas in obras_com_totais:
             
-            # KPI 1: Orçamento Total
-            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
+            # KPI 1: Orçamento Total (INCLUINDO Cronograma Financeiro)
+            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + float(futuro_previsto) + float(parcelas_previstas)
             
             # KPI 2: Total Pago (Valores Efetivados)
             total_pago = float(lanc_pago) + float(pag_pago)
@@ -789,8 +789,28 @@ def get_obra_detalhes(obra_id):
         ).first()
         total_pago_servicos = float(pagamentos_servico_valor_pago.valor_pago_serv or 0.0)
         
-        # KPI 1: ORÇAMENTO TOTAL (tudo que foi orçado em serviços + lançamentos)
-        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat
+        # CORREÇÃO: Calcular totais de Pagamentos Futuros e Parcelas ANTES do KPI
+        # Pagamentos Futuros com status='Previsto'
+        pagamentos_futuros_previstos = db.session.query(
+            func.sum(PagamentoFuturo.valor).label('total_futuro')
+        ).filter(
+            PagamentoFuturo.obra_id == obra_id,
+            PagamentoFuturo.status == 'Previsto'
+        ).first()
+        
+        # Parcelas Individuais com status='Previsto'
+        parcelas_previstas = db.session.query(
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas')
+        ).join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Previsto'
+        ).first()
+        
+        total_futuros = float(pagamentos_futuros_previstos.total_futuro or 0.0)
+        total_parcelas_previstas = float(parcelas_previstas.total_parcelas or 0.0)
+        
+        # KPI 1: ORÇAMENTO TOTAL (INCLUINDO Cronograma Financeiro)
+        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat + total_futuros + total_parcelas_previstas
         
         # KPI 2: VALORES EFETIVADOS/PAGOS (valor_pago de lançamentos + valor_pago de serviços)
         kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos
@@ -816,28 +836,12 @@ def get_obra_detalhes(obra_id):
             PagamentoServico.valor_total > PagamentoServico.valor_pago
         ).first()
         
-        # CORREÇÃO: Incluir Pagamentos Futuros e Parcelas do Cronograma Financeiro
-        # Pagamentos Futuros com status='Previsto'
-        pagamentos_futuros_previstos = db.session.query(
-            func.sum(PagamentoFuturo.valor).label('total_futuro')
-        ).filter(
-            PagamentoFuturo.obra_id == obra_id,
-            PagamentoFuturo.status == 'Previsto'
-        ).first()
-        
-        # Parcelas Individuais com status='Previsto'
-        parcelas_previstas = db.session.query(
-            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas')
-        ).join(PagamentoParcelado).filter(
-            PagamentoParcelado.obra_id == obra_id,
-            ParcelaIndividual.status == 'Previsto'
-        ).first()
-        
+        # Usar valores já calculados de Pagamentos Futuros e Parcelas
         kpi_liberado_pagamento = (
             float(lancamentos_pendentes.total_pendente or 0.0) + 
             float(pagamentos_servico_pendentes.total_pendente or 0.0) +
-            float(pagamentos_futuros_previstos.total_futuro or 0.0) +
-            float(parcelas_previstas.total_parcelas or 0.0)
+            total_futuros +
+            total_parcelas_previstas
         )
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
@@ -2455,6 +2459,15 @@ def relatorio_resumo_completo(obra_id):
         servicos = Servico.query.filter_by(obra_id=obra_id).options(joinedload(Servico.pagamentos)).all()
         orcamentos = Orcamento.query.filter_by(obra_id=obra_id).all()
         
+        # CORREÇÃO: Buscar também PagamentoFuturo e Parcelas
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id, status='Previsto').all()
+        parcelas_previstas = db.session.query(ParcelaIndividual).join(
+            PagamentoParcelado
+        ).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Previsto'
+        ).all()
+        
         # Calcular sumários
         orcamento_total_lancamentos = sum((l.valor_total or 0) for l in lancamentos)
         
@@ -2463,7 +2476,11 @@ def relatorio_resumo_completo(obra_id):
             for s in servicos
         )
         
-        orcamento_total = orcamento_total_lancamentos + orcamento_total_servicos
+        # CORREÇÃO: Incluir pagamentos futuros e parcelas no orçamento total
+        orcamento_total_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros)
+        orcamento_total_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas)
+        
+        orcamento_total = orcamento_total_lancamentos + orcamento_total_servicos + orcamento_total_futuros + orcamento_total_parcelas
         
         valores_pagos_lancamentos = sum((l.valor_pago or 0) for l in lancamentos)
         valores_pagos_servicos = sum(
