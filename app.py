@@ -5457,6 +5457,143 @@ def migrar_lancamentos_para_futuros(obra_id):
 
 # --- FIM DAS ROTAS DO DIÁRIO DE OBRAS ---
 
+# ==============================================================================
+# ROTA TEMPORÁRIA PARA MIGRAÇÃO DE PAGAMENTOS ANTIGOS
+# ==============================================================================
+@app.route('/admin/migrar-pagamentos-antigos', methods=['POST'])
+@jwt_required()
+def migrar_pagamentos_antigos():
+    """
+    ROTA TEMPORÁRIA: Migra pagamentos com status 'Pago' do cronograma para o histórico.
+    
+    Esta rota deve ser executada UMA VEZ após o deploy da correção.
+    Depois de executar, você pode remover esta rota do código.
+    """
+    try:
+        # Verificar se é administrador
+        current_user = get_current_user()
+        if current_user.nivel_acesso != 'administrador':
+            return jsonify({"erro": "Acesso negado. Apenas administradores podem executar esta migração."}), 403
+        
+        print("=" * 80)
+        print("🔄 INICIANDO MIGRAÇÃO DE PAGAMENTOS ANTIGOS")
+        print("=" * 80)
+        
+        # 1. Buscar todos os pagamentos com status "Pago"
+        pagamentos_pagos = PagamentoFuturo.query.filter(
+            PagamentoFuturo.status == 'Pago'
+        ).all()
+        
+        total = len(pagamentos_pagos)
+        print(f"📊 Total de pagamentos encontrados com status 'Pago': {total}")
+        
+        if total == 0:
+            return jsonify({
+                "mensagem": "Nenhum pagamento para migrar!",
+                "total": 0,
+                "migrados": 0,
+                "erros": 0
+            }), 200
+        
+        # 2. Preparar lista de pagamentos
+        lista_pagamentos = []
+        for p in pagamentos_pagos:
+            lista_pagamentos.append({
+                "id": p.id,
+                "obra_id": p.obra_id,
+                "descricao": p.descricao,
+                "valor": p.valor,
+                "fornecedor": p.fornecedor
+            })
+        
+        print(f"📋 Pagamentos a serem migrados:")
+        for p in lista_pagamentos:
+            print(f"  • ID: {p['id']} | Obra: {p['obra_id']} | {p['descricao']} | R$ {p['valor']:,.2f}")
+        
+        # 3. Executar migração
+        migrados = 0
+        erros = []
+        lancamentos_criados = []
+        
+        for pagamento in pagamentos_pagos:
+            try:
+                # Criar lançamento no histórico
+                novo_lancamento = Lancamento(
+                    obra_id=pagamento.obra_id,
+                    tipo='Despesa',
+                    descricao=pagamento.descricao,
+                    valor_total=pagamento.valor,
+                    valor_pago=pagamento.valor,
+                    data=datetime.date.today(),
+                    data_vencimento=pagamento.data_vencimento,
+                    status='Pago',
+                    pix=pagamento.pix,
+                    prioridade=0,
+                    fornecedor=pagamento.fornecedor,
+                    servico_id=None
+                )
+                db.session.add(novo_lancamento)
+                db.session.flush()  # Gera o ID
+                
+                # Guardar informação
+                lancamentos_criados.append({
+                    "pagamento_id": pagamento.id,
+                    "lancamento_id": novo_lancamento.id,
+                    "descricao": pagamento.descricao,
+                    "valor": pagamento.valor
+                })
+                
+                # Deletar do cronograma
+                db.session.delete(pagamento)
+                
+                migrados += 1
+                print(f"  ✅ Migrado: {pagamento.descricao} (Pagamento ID: {pagamento.id} → Lançamento ID: {novo_lancamento.id})")
+                
+            except Exception as e:
+                db.session.rollback()
+                erro_msg = f"Erro ao migrar ID {pagamento.id}: {str(e)}"
+                print(f"  ❌ {erro_msg}")
+                erros.append({
+                    "pagamento_id": pagamento.id,
+                    "descricao": pagamento.descricao,
+                    "erro": str(e)
+                })
+                continue
+        
+        # 4. Commit final
+        if migrados > 0:
+            db.session.commit()
+            print(f"\n✅ Commit realizado: {migrados} pagamentos migrados com sucesso!")
+        
+        # 5. Relatório
+        print("\n" + "=" * 80)
+        print("📊 RELATÓRIO DA MIGRAÇÃO")
+        print("=" * 80)
+        print(f"✅ Pagamentos migrados com sucesso: {migrados}")
+        print(f"❌ Erros durante a migração: {len(erros)}")
+        print(f"📈 Total processado: {migrados + len(erros)}/{total}")
+        print("=" * 80)
+        
+        return jsonify({
+            "mensagem": "Migração concluída!",
+            "total": total,
+            "migrados": migrados,
+            "erros_count": len(erros),
+            "pagamentos_migrados": lancamentos_criados,
+            "erros": erros
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"❌ ERRO CRÍTICO na migração: {str(e)}\n{error_details}")
+        return jsonify({
+            "erro": str(e),
+            "details": error_details
+        }), 500
+
+# ==============================================================================
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
