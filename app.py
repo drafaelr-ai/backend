@@ -5460,8 +5460,8 @@ def migrar_lancamentos_para_futuros(obra_id):
 # ==============================================================================
 # ROTA TEMPORÁRIA PARA MIGRAÇÃO DE PAGAMENTOS ANTIGOS
 # ==============================================================================
-@app.route('/admin/migrar-pagamentos-antigos', methods=['POST'])
-@jwt_required()
+@app.route('/admin/migrar-pagamentos-antigos', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def migrar_pagamentos_antigos():
     """
     ROTA TEMPORÁRIA: Migra pagamentos com status 'Pago' do cronograma para o histórico.
@@ -5469,9 +5469,19 @@ def migrar_pagamentos_antigos():
     Esta rota deve ser executada UMA VEZ após o deploy da correção.
     Depois de executar, você pode remover esta rota do código.
     """
+    # Tratar preflight OPTIONS
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
     try:
+        # Garantir que está autenticado
+        verify_jwt_in_request()
+        
         # Verificar se é administrador
         current_user = get_current_user()
+        if not current_user:
+            return jsonify({"erro": "Autenticação necessária."}), 401
+            
         if current_user.nivel_acesso != 'administrador':
             return jsonify({"erro": "Acesso negado. Apenas administradores podem executar esta migração."}), 403
         
