@@ -3433,6 +3433,8 @@ def obter_alertas_vencimento(obra_id):
     - Futuros (mais de 7 dias)
     """
     try:
+        print(f"--- [DEBUG] Iniciando obter_alertas_vencimento para obra {obra_id} ---")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
@@ -3441,12 +3443,14 @@ def obter_alertas_vencimento(obra_id):
         amanha = hoje + datetime.timedelta(days=1)
         em_7_dias = hoje + datetime.timedelta(days=7)
         
+        print(f"--- [DEBUG] Hoje: {hoje}, Amanhã: {amanha}, Em 7 dias: {em_7_dias} ---")
+        
         alertas = {
             "vencidos": {"quantidade": 0, "valor_total": 0, "itens": []},
             "vence_hoje": {"quantidade": 0, "valor_total": 0, "itens": []},
             "vence_amanha": {"quantidade": 0, "valor_total": 0, "itens": []},
             "vence_7_dias": {"quantidade": 0, "valor_total": 0, "itens": []},
-            "futuros": {"quantidade": 0, "valor_total": 0}
+            "futuros": {"quantidade": 0, "valor_total": 0, "itens": []}  # CORREÇÃO: Adicionado array "itens"
         }
         
         # 1. PAGAMENTOS FUTUROS
@@ -3456,7 +3460,11 @@ def obter_alertas_vencimento(obra_id):
             PagamentoFuturo.status == 'Previsto'
         ).all()
         
+        print(f"--- [DEBUG] Encontrados {len(pagamentos_futuros)} PagamentoFuturo com status 'Previsto' ---")
+        
         for pag in pagamentos_futuros:
+            print(f"--- [DEBUG] PagamentoFuturo ID {pag.id}: {pag.descricao}, Valor: {pag.valor}, Vencimento: {pag.data_vencimento} ---")
+            
             item = {
                 "tipo": "Pagamento Futuro",
                 "descricao": pag.descricao,
@@ -3467,24 +3475,30 @@ def obter_alertas_vencimento(obra_id):
             }
             
             if pag.data_vencimento < hoje:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCIDO ---")
                 alertas["vencidos"]["quantidade"] += 1
                 alertas["vencidos"]["valor_total"] += pag.valor
                 alertas["vencidos"]["itens"].append(item)
             elif pag.data_vencimento == hoje:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE HOJE ---")
                 alertas["vence_hoje"]["quantidade"] += 1
                 alertas["vence_hoje"]["valor_total"] += pag.valor
                 alertas["vence_hoje"]["itens"].append(item)
             elif pag.data_vencimento == amanha:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE AMANHÃ ---")
                 alertas["vence_amanha"]["quantidade"] += 1
                 alertas["vence_amanha"]["valor_total"] += pag.valor
                 alertas["vence_amanha"]["itens"].append(item)
             elif pag.data_vencimento <= em_7_dias:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE EM 7 DIAS ---")
                 alertas["vence_7_dias"]["quantidade"] += 1
                 alertas["vence_7_dias"]["valor_total"] += pag.valor
                 alertas["vence_7_dias"]["itens"].append(item)
             else:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → FUTURO (>7 dias) ---")
                 alertas["futuros"]["quantidade"] += 1
                 alertas["futuros"]["valor_total"] += pag.valor
+                alertas["futuros"]["itens"].append(item)
         
         # 2. PARCELAS INDIVIDUAIS DE PAGAMENTOS PARCELADOS
         parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
@@ -3523,6 +3537,7 @@ def obter_alertas_vencimento(obra_id):
             else:
                 alertas["futuros"]["quantidade"] += 1
                 alertas["futuros"]["valor_total"] += parcela.valor_parcela
+                alertas["futuros"]["itens"].append(item)
         
         # 3. NOVO: PAGAMENTOS DE SERVIÇOS COM SALDO PENDENTE
         servicos = Servico.query.filter_by(obra_id=obra_id).all()
@@ -3565,12 +3580,19 @@ def obter_alertas_vencimento(obra_id):
                     else:
                         alertas["futuros"]["quantidade"] += 1
                         alertas["futuros"]["valor_total"] += valor_pendente
+                        alertas["futuros"]["itens"].append(item)
         
         # Arredonda os valores
         for categoria in alertas.values():
             if 'valor_total' in categoria:
                 categoria['valor_total'] = round(categoria['valor_total'], 2)
         
+        print(f"--- [DEBUG] RESULTADO FINAL DOS ALERTAS ---")
+        print(f"  Vencidos: {alertas['vencidos']['quantidade']} itens, Total: R$ {alertas['vencidos']['valor_total']}")
+        print(f"  Vence Hoje: {alertas['vence_hoje']['quantidade']} itens, Total: R$ {alertas['vence_hoje']['valor_total']}")
+        print(f"  Vence Amanhã: {alertas['vence_amanha']['quantidade']} itens, Total: R$ {alertas['vence_amanha']['valor_total']}")
+        print(f"  Vence em 7 dias: {alertas['vence_7_dias']['quantidade']} itens, Total: R$ {alertas['vence_7_dias']['valor_total']}")
+        print(f"  Futuros (>7 dias): {alertas['futuros']['quantidade']} itens, Total: R$ {alertas['futuros']['valor_total']}")
         print(f"--- [LOG] Alertas de vencimento calculados para obra {obra_id} ---")
         return jsonify(alertas), 200
     
