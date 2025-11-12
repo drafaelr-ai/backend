@@ -906,15 +906,15 @@ def get_obra_detalhes(obra_id):
             historico_unificado.append({
                 "id": f"fut-pag-{pag_futuro.id}",
                 "tipo_registro": "pagamento_futuro",
-                "data": pag_futuro.data_pagamento,
+                "data": pag_futuro.data_vencimento,  # Usa data_vencimento como referência
                 "data_vencimento": pag_futuro.data_vencimento,
                 "descricao": pag_futuro.descricao or "Pagamento futuro",
-                "tipo": pag_futuro.tipo or "Geral",
-                "valor_total": float(pag_futuro.valor_total or 0.0),
-                "valor_pago": float(pag_futuro.valor_total or 0.0),
+                "tipo": "Geral",  # Não existe campo tipo
+                "valor_total": float(pag_futuro.valor or 0.0),  # Campo correto é 'valor'
+                "valor_pago": float(pag_futuro.valor or 0.0),  # Campo correto é 'valor'
                 "status": "Pago",
                 "pix": pag_futuro.pix,
-                "prioridade": pag_futuro.prioridade,
+                "prioridade": 0,  # Não existe campo prioridade
                 "fornecedor": pag_futuro.fornecedor
             })
         
@@ -933,11 +933,11 @@ def get_obra_detalhes(obra_id):
                     "data": parcela.data_pagamento,
                     "data_vencimento": parcela.data_vencimento,
                     "descricao": f"{pag_parcelado.descricao} - Parcela {parcela.numero_parcela}/{pag_parcelado.numero_parcelas}",
-                    "tipo": pag_parcelado.tipo or "Geral",
+                    "tipo": "Geral",  # Não existe campo tipo
                     "valor_total": float(parcela.valor_parcela or 0.0),
                     "valor_pago": float(parcela.valor_parcela or 0.0),
                     "status": "Pago",
-                    "pix": pag_parcelado.pix,
+                    "pix": None,  # Não existe campo pix
                     "prioridade": 0,
                     "fornecedor": pag_parcelado.fornecedor
                 })
@@ -3017,10 +3017,9 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
             return jsonify({"mensagem": "Pagamento já está marcado como pago"}), 200
         
         pagamento.status = 'Pago'
-        pagamento.data_pagamento = datetime.datetime.now().date()  # ← CORRIGIDO: Registra a data
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento futuro {pagamento_id} marcado como pago em {pagamento.data_pagamento} na obra {obra_id} ---")
+        print(f"--- [LOG] Pagamento futuro {pagamento_id} marcado como pago na obra {obra_id} ---")
         return jsonify({"mensagem": "Pagamento marcado como pago com sucesso"}), 200
     
     except Exception as e:
