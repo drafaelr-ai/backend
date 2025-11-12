@@ -5347,12 +5347,14 @@ def gerar_relatorio_diario(obra_id):
 def migrar_lancamentos_para_futuros(obra_id):
     """
     Converte Lançamentos com status='A Pagar' em PagamentoFuturo.
-    Isso limpa os "fantasmas" que aparecem no KPI "Liberado p/ Pagamento".
+    Isso faz os pagamentos antigos aparecerem no Cronograma Financeiro.
     """
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado"}), 403
+        
+        print(f"--- [DEBUG MIGRAÇÃO] Buscando Lançamentos com status='A Pagar' na obra {obra_id} ---")
         
         # Buscar todos os Lançamentos com status='A Pagar'
         lancamentos_a_pagar = Lancamento.query.filter_by(
@@ -5361,33 +5363,44 @@ def migrar_lancamentos_para_futuros(obra_id):
             servico_id=None  # Apenas lançamentos gerais, não vinculados a serviço
         ).all()
         
+        print(f"--- [DEBUG MIGRAÇÃO] Encontrados {len(lancamentos_a_pagar)} lançamentos para migrar ---")
+        
         if not lancamentos_a_pagar:
             return jsonify({"mensagem": "Nenhum lançamento 'A Pagar' encontrado"}), 200
         
         migrados = []
         for lanc in lancamentos_a_pagar:
-            # Criar PagamentoFuturo
+            print(f"--- [DEBUG MIGRAÇÃO] Migrando: {lanc.descricao}, Valor: R$ {lanc.valor_total:.2f} ---")
+            
+            # Criar PagamentoFuturo com TODOS os campos
             novo_futuro = PagamentoFuturo(
                 obra_id=lanc.obra_id,
                 descricao=lanc.descricao,
                 valor=lanc.valor_total - lanc.valor_pago,  # Saldo pendente
                 data_vencimento=lanc.data_vencimento or lanc.data,
                 fornecedor=lanc.fornecedor,
+                pix=lanc.pix,  # Copiar PIX
+                observacoes=f"Migrado de Lançamento ID {lanc.id}",
                 status='Previsto'
             )
             db.session.add(novo_futuro)
+            db.session.flush()  # Para obter o ID
+            
+            print(f"--- [DEBUG MIGRAÇÃO] ✅ Criado PagamentoFuturo ID {novo_futuro.id} ---")
             
             # Deletar o Lançamento antigo
             db.session.delete(lanc)
             
             migrados.append({
+                "lancamento_id": lanc.id,
                 "descricao": lanc.descricao,
-                "valor": lanc.valor_total - lanc.valor_pago
+                "valor": lanc.valor_total - lanc.valor_pago,
+                "novo_pagamento_futuro_id": novo_futuro.id
             })
         
         db.session.commit()
         
-        print(f"--- [LOG] {len(migrados)} lançamentos migrados para PagamentoFuturo na obra {obra_id} ---")
+        print(f"--- [LOG] ✅ {len(migrados)} lançamentos migrados para PagamentoFuturo na obra {obra_id} ---")
         return jsonify({
             "mensagem": f"{len(migrados)} lançamentos migrados com sucesso",
             "migrados": migrados
