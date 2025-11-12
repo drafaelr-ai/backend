@@ -896,52 +896,56 @@ def get_obra_detalhes(obra_id):
                     "fornecedor": pag.fornecedor 
                 })
         
-        # NOVO: Incluir pagamentos futuros pagos no histórico
-        pagamentos_futuros_pagos = PagamentoFuturo.query.filter_by(
-            obra_id=obra_id,
-            status='Pago'
-        ).all()
         
-        for pag_futuro in pagamentos_futuros_pagos:
-            historico_unificado.append({
-                "id": f"fut-pag-{pag_futuro.id}",
-                "tipo_registro": "pagamento_futuro",
-                "data": pag_futuro.data_pagamento,
-                "data_vencimento": pag_futuro.data_vencimento,
-                "descricao": pag_futuro.descricao or "Pagamento futuro",
-                "tipo": pag_futuro.tipo or "Geral",
-                "valor_total": float(pag_futuro.valor_total or 0.0),
-                "valor_pago": float(pag_futuro.valor_total or 0.0),  # Pagamento futuro pago = valor total
-                "status": "Pago",
-                "pix": pag_futuro.pix,
-                "prioridade": pag_futuro.prioridade,
-                "fornecedor": pag_futuro.fornecedor
-            })
+# --- INCLUIR PAGAMENTOS FUTUROS MARCADOS COMO 'Pago' NO HISTÓRICO ---
+pagamentos_futuros_pagos = PagamentoFuturo.query.filter_by(
+    obra_id=obra_id,
+    status='Pago'
+).all()
+
+for pf in pagamentos_futuros_pagos:
+    historico_unificado.append({
+        "id": f"pf-{pf.id}",
+        "tipo_registro": "pagamento_futuro",
+        "data": pf.data_vencimento,  # sem campo data_pagamento no modelo; usamos vencimento
+        "data_vencimento": pf.data_vencimento,
+        "descricao": pf.descricao or "Pagamento futuro",
+        "tipo": "Outros",
+        "valor_total": float(pf.valor or 0.0),
+        "valor_pago": float(pf.valor or 0.0),  # pago = valor total
+        "status": "Pago",
+        "pix": pf.pix,
+        "servico_id": None,
+        "pagamento_id": pf.id,
+        "prioridade": None,
+        "fornecedor": pf.fornecedor
+    })
+
         
-        # NOVO: Incluir parcelas pagas no histórico
-        pagamentos_parcelados = PagamentoParcelado.query.filter_by(obra_id=obra_id).all()
-        for pag_parcelado in pagamentos_parcelados:
-            parcelas_pagas = ParcelaIndividual.query.filter_by(
-                pagamento_parcelado_id=pag_parcelado.id,
-                status='Pago'
-            ).all()
-            
-            for parcela in parcelas_pagas:
-                historico_unificado.append({
-                    "id": f"parcela-{parcela.id}",
-                    "tipo_registro": "parcela",
-                    "data": parcela.data_pagamento,
-                    "data_vencimento": parcela.data_vencimento,
-                    "descricao": f"{pag_parcelado.descricao} - Parcela {parcela.numero_parcela}/{pag_parcelado.numero_parcelas}",
-                    "tipo": pag_parcelado.tipo or "Geral",
-                    "valor_total": float(parcela.valor_parcela or 0.0),
-                    "valor_pago": float(parcela.valor_parcela or 0.0),  # Parcela paga = valor total da parcela
-                    "status": "Pago",
-                    "pix": pag_parcelado.pix,
-                    "prioridade": 0,
-                    "fornecedor": pag_parcelado.fornecedor
-                })
-        
+# --- INCLUIR PARCELAS PAGAS NO HISTÓRICO ---
+pagamentos_parcelados = PagamentoParcelado.query.filter_by(obra_id=obra_id).all()
+for pag_parcelado in pagamentos_parcelados:
+    parcelas_pagas = ParcelaIndividual.query.filter_by(
+        pagamento_parcelado_id=pag_parcelado.id,
+        status='Pago'
+    ).all()
+
+    for parcela in parcelas_pagas:
+        historico_unificado.append({
+            "id": f"parcela-{parcela.id}",
+            "tipo_registro": "parcela",
+            "data": parcela.data_pagamento,
+            "data_vencimento": parcela.data_vencimento,
+            "descricao": f"{pag_parcelado.descricao} - Parcela {parcela.numero_parcela}/{pag_parcelado.numero_parcelas}",
+            "tipo": "Parcelado",
+            "valor_total": float(parcela.valor_parcela or 0.0),
+            "valor_pago": float(parcela.valor_parcela or 0.0),  # parcela paga = valor total da parcela
+            "status": "Pago",
+            "pix": None,
+            "prioridade": 0,
+            "fornecedor": pag_parcelado.fornecedor
+        })
+
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
         for item in historico_unificado:
             if item['data']:
