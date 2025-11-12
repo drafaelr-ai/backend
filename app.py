@@ -219,6 +219,7 @@ class PagamentoServico(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False)
     forma_pagamento = db.Column(db.String(20), nullable=True)
+    pix = db.Column(db.String(100), nullable=True)  # Chave PIX do pagamento
     prioridade = db.Column(db.Integer, nullable=False, default=0)
     fornecedor = db.Column(db.String(150), nullable=True)
 
@@ -231,6 +232,7 @@ class PagamentoServico(db.Model):
             "status": self.status,
             "tipo_pagamento": self.tipo_pagamento,
             "forma_pagamento": self.forma_pagamento,
+            "pix": self.pix,
             "prioridade": self.prioridade,
             "fornecedor": self.fornecedor, 
             "pagamento_id": self.id 
@@ -1249,6 +1251,7 @@ def add_pagamento_servico(servico_id):
             status=status,
             tipo_pagamento=tipo_pagamento,
             forma_pagamento=dados.get('forma_pagamento'),
+            pix=dados.get('pix'),  # Chave PIX do pagamento
             prioridade=int(dados.get('prioridade', 0)),
             fornecedor=dados.get('fornecedor') 
         )
@@ -1378,6 +1381,8 @@ def editar_pagamento_servico(pagamento_id):
             pagamento.tipo_pagamento = dados['tipo_pagamento']
         if 'forma_pagamento' in dados:
             pagamento.forma_pagamento = dados['forma_pagamento']
+        if 'pix' in dados:
+            pagamento.pix = dados['pix']
         if 'fornecedor' in dados:
             pagamento.fornecedor = dados['fornecedor']
         if 'prioridade' in dados:
@@ -1912,7 +1917,7 @@ def export_pdf_pendentes_DESATIVADO(obra_id):
                 "data": pag.data, "tipo": "Serviço", 
                 "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
                 "valor": pag.valor_total - pag.valor_pago,
-                "pix": pag.servico.pix,
+                "pix": pag.pix if pag.pix else '-',  # Usar PIX do pagamento
                 "prioridade": pag.prioridade 
             })
             
@@ -2066,7 +2071,7 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
                     "tipo": "Serviço", 
                     "descricao": f"Pag. {desc_tipo}: {pag.servico.nome}",
                     "valor": pag.valor_total - pag.valor_pago,
-                    "pix": pag.servico.pix,
+                    "pix": pag.pix if pag.pix else '-',  # Usar PIX do pagamento
                     "prioridade": pag.prioridade
                 })
             
@@ -3726,8 +3731,8 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     # Determinar forma de pagamento (PIX, Boleto, TED, etc)
                     forma_pag = pag_serv.forma_pagamento if pag_serv.forma_pagamento else None
                     
-                    # Determinar PIX (usa forma_pagamento do pagamento ou PIX do serviço)
-                    pix_display = forma_pag if forma_pag else (servico.pix if servico.pix else '-')
+                    # Determinar PIX - agora o pagamento tem seu próprio campo PIX
+                    pix_display = pag_serv.pix if pag_serv.pix else '-'
                     
                     # Montar descrição (removemos a forma da descrição já que terá coluna própria)
                     descricao_completa = f"{servico.nome} - {tipo_desc}"
