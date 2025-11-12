@@ -5461,7 +5461,6 @@ def migrar_lancamentos_para_futuros(obra_id):
 # ROTA TEMPORÁRIA PARA MIGRAÇÃO DE PAGAMENTOS ANTIGOS
 # ==============================================================================
 @app.route('/admin/migrar-pagamentos-antigos', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
 def migrar_pagamentos_antigos():
     """
     ROTA TEMPORÁRIA: Migra pagamentos com status 'Pago' do cronograma para o histórico.
@@ -5469,9 +5468,14 @@ def migrar_pagamentos_antigos():
     Esta rota deve ser executada UMA VEZ após o deploy da correção.
     Depois de executar, você pode remover esta rota do código.
     """
-    # Tratar preflight OPTIONS
+    # Tratar preflight OPTIONS com headers CORS explícitos
     if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+        response = make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+        response.headers['Access-Control-Max-Age'] = '3600'
+        return response
     
     try:
         # Garantir que está autenticado
