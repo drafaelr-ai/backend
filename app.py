@@ -18,7 +18,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet
 from sqlalchemy.orm import joinedload 
-
+from datetime import datetime
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
@@ -428,35 +428,34 @@ class ParcelaIndividual(db.Model):
         }
 
 # ===== MODELOS DO DIÁRIO DE OBRAS =====
+# ==============================================================================
+# MODELO DIARIOOBRA CORRETO - SUBSTITUA NO SEU app.py (linha ~431)
+# ==============================================================================
+# Encontre "class DiarioObra(db.Model):" no seu app.py
+# Apague TODO o modelo (até antes do próximo @app.route ou próxima class)
+# Cole este código no lugar
+
 class DiarioObra(db.Model):
-    """Diário de obras - registro diário de atividades"""
     __tablename__ = 'diario_obra'
     
     id = db.Column(db.Integer, primary_key=True)
-    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obras.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
     titulo = db.Column(db.String(200), nullable=False)
-    descricao = db.Column(db.Text)
-    
-    # Condições do dia
-    clima = db.Column(db.String(50))  # Ensolarado, Chuvoso, etc
-    temperatura = db.Column(db.String(20))
-    
-    # Informações da obra
-    equipe_presente = db.Column(db.Text)
-    atividades_realizadas = db.Column(db.Text)
-    materiais_utilizados = db.Column(db.Text)
-    equipamentos_utilizados = db.Column(db.Text)
-    observacoes = db.Column(db.Text)
-    
-    # Controle
-    criado_por = db.Column(db.Integer, db.ForeignKey('user.id'))
-    criado_em = db.Column(db.DateTime, default=datetime.datetime.utcnow)
-    atualizado_em = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    descricao = db.Column(db.Text, nullable=True)
+    clima = db.Column(db.String(50), nullable=True)
+    temperatura = db.Column(db.String(50), nullable=True)
+    equipe_presente = db.Column(db.Text, nullable=True)
+    atividades_realizadas = db.Column(db.Text, nullable=True)
+    materiais_utilizados = db.Column(db.Text, nullable=True)
+    observacoes = db.Column(db.Text, nullable=True)
+    criado_por = db.Column(db.Integer, nullable=True)
+    criado_em = db.Column(db.DateTime, default=func.now())
+    atualizado_em = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
     
     # Relacionamentos
     imagens = db.relationship('DiarioImagem', backref='entrada', lazy=True, cascade='all, delete-orphan')
-    criador = db.relationship('User', backref='entradas_diario', foreign_keys=[criado_por])
+    # criador = db.relationship('User', backref='entradas_diario', foreign_keys=[criado_por])
     
     def to_dict(self):
         return {
@@ -470,12 +469,11 @@ class DiarioObra(db.Model):
             'equipe_presente': self.equipe_presente,
             'atividades_realizadas': self.atividades_realizadas,
             'materiais_utilizados': self.materiais_utilizados,
-            'equipamentos_utilizados': self.equipamentos_utilizados,
             'observacoes': self.observacoes,
             'criado_por': self.criado_por,
-            'criado_em': self.criado_em.strftime('%Y-%m-%d %H:%M:%S') if self.criado_em else None,
-            'atualizado_em': self.atualizado_em.strftime('%Y-%m-%d %H:%M:%S') if self.atualizado_em else None,
-            'imagens': [img.to_dict() for img in self.imagens] if self.imagens else []
+            'criado_em': self.criado_em.isoformat() if self.criado_em else None,
+            'atualizado_em': self.atualizado_em.isoformat() if self.atualizado_em else None,
+            'imagens': [img.to_dict() for img in self.imagens]
         }
 
 class DiarioImagem(db.Model):
@@ -488,7 +486,7 @@ class DiarioImagem(db.Model):
     arquivo_base64 = db.Column(db.Text, nullable=False)  # Armazena imagem em base64
     legenda = db.Column(db.String(500))
     ordem = db.Column(db.Integer, default=0)
-    criado_em = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
     
     def to_dict(self):
         return {
@@ -5378,14 +5376,14 @@ def gerar_relatorio_diario(obra_id):
                         story.append(img)
                         
                         # Legenda/nome do arquivo
-                        if img_obj.nome:
-                            story.append(Paragraph(f"<i>{img_obj.nome}</i>", styles['Normal']))
+                        if img_obj.arquivo_nome:
+                            story.append(Paragraph(f"<i>{img_obj.arquivo_nome}</i>", styles['Normal']))
                         
                         story.append(Spacer(1, 0.3*cm))
                         
                     except Exception as img_error:
                         print(f"--- [ERRO] Erro ao processar imagem {img_obj.id}: {str(img_error)} ---")
-                        story.append(Paragraph(f"<i>[Erro ao carregar imagem: {img_obj.nome}]</i>", styles['Normal']))
+                        story.append(Paragraph(f"<i>[Erro ao carregar imagem: {img_obj.arquivo_nome}]</i>", styles['Normal']))
                         story.append(Spacer(1, 0.3*cm))
 
             
@@ -5633,6 +5631,261 @@ def migrar_pagamentos_antigos():
             "erro": str(e),
             "details": error_details
         }), 500
+
+# ==============================================================================
+
+# ==============================================================================
+# CRONOGRAMA DA OBRA - MODELO E ROTAS
+# ==============================================================================
+
+# ======================================================================
+# CRONOGRAMA DA OBRA - MODELO
+# ======================================================================
+
+class CronogramaObra(db.Model):
+    __tablename__ = 'cronograma_obra'
+
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+
+    servico_nome = db.Column(db.String(200), nullable=False)
+    ordem = db.Column(db.Integer, nullable=False, default=1)
+    
+    # ===== PLANEJAMENTO (o que você DEFINE) =====
+    data_inicio = db.Column(db.Date, nullable=False)  # Data de início PREVISTA
+    data_fim_prevista = db.Column(db.Date, nullable=False)  # Data de término PREVISTA
+    
+    # ===== EXECUÇÃO REAL (o que você ATUALIZA MANUALMENTE) =====
+    data_inicio_real = db.Column(db.Date, nullable=True)  # Quando começou DE FATO
+    data_fim_real = db.Column(db.Date, nullable=True)  # Quando terminou DE FATO
+    percentual_conclusao = db.Column(db.Float, nullable=False, default=0.0)  # Avanço físico REAL (você informa manualmente)
+    
+    observacoes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=func.now())
+    updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
+
+    obra = db.relationship('Obra', backref=db.backref('cronograma_items', lazy=True))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'obra_id': self.obra_id,
+            'servico_nome': self.servico_nome,
+            'ordem': self.ordem,
+            # PLANEJAMENTO
+            'data_inicio': self.data_inicio.isoformat() if self.data_inicio else None,
+            'data_fim_prevista': self.data_fim_prevista.isoformat() if self.data_fim_prevista else None,
+            # EXECUÇÃO REAL
+            'data_inicio_real': self.data_inicio_real.isoformat() if self.data_inicio_real else None,
+            'data_fim_real': self.data_fim_real.isoformat() if self.data_fim_real else None,
+            'percentual_conclusao': float(self.percentual_conclusao),
+            'observacoes': self.observacoes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+
+@app.route('/obras/<int:obra_id>/servicos', methods=['GET'])
+@jwt_required()
+def get_servicos_obra(obra_id):
+    """Busca todos os serviços de uma obra"""
+    try:
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({'error': 'Obra não encontrada'}), 404
+        
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        return jsonify([{
+            'id': s.id,
+            'nome': s.nome,
+            'responsavel': s.responsavel,
+            'valor_global_mao_de_obra': s.valor_global_mao_de_obra,
+            'valor_global_material': s.valor_global_material
+        } for s in servicos]), 200
+    except Exception as e:
+        print(f"[ERRO] get_servicos_obra: {str(e)}")
+        return jsonify({'error': 'Erro ao buscar serviços'}), 500
+
+
+@app.route('/obras/<int:obra_id>/cronograma', methods=['GET'])
+@jwt_required()
+def get_cronograma_obra(obra_id):
+    try:
+        # Simplificar: só verificar se obra existe
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({'error': 'Obra não encontrada'}), 404
+        
+        cronograma_items = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
+        return jsonify([item.to_dict() for item in cronograma_items]), 200
+    except Exception as e:
+        print(f"[ERRO] get_cronograma_obra: {str(e)}")
+        return jsonify({'error': 'Erro ao buscar cronograma'}), 500
+
+
+@app.route('/cronograma', methods=['POST'])
+@jwt_required()
+def create_cronograma():
+    try:
+        current_user_id = get_jwt_identity()
+        data = request.json
+        required_fields = ['obra_id', 'servico_nome', 'data_inicio', 'data_fim_prevista']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({'error': f'Campo obrigatório ausente: {field}'}), 400
+        
+        obra = Obra.query.get(data['obra_id'])
+        if not obra:
+            return jsonify({'error': 'Obra não encontrada'}), 404
+        
+        try:
+            data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+            data_fim_prevista = datetime.strptime(data['data_fim_prevista'], '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'error': 'Formato de data inválido. Use YYYY-MM-DD'}), 400
+        
+        if data_fim_prevista < data_inicio:
+            return jsonify({'error': 'Data de término não pode ser anterior à data de início'}), 400
+        
+        # Processar datas reais opcionais
+        data_inicio_real = None
+        data_fim_real = None
+        
+        if 'data_inicio_real' in data and data['data_inicio_real']:
+            try:
+                data_inicio_real = datetime.strptime(data['data_inicio_real'], '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'error': 'Formato de data_inicio_real inválido'}), 400
+        
+        if 'data_fim_real' in data and data['data_fim_real']:
+            try:
+                data_fim_real = datetime.strptime(data['data_fim_real'], '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'error': 'Formato de data_fim_real inválido'}), 400
+        
+        novo_item = CronogramaObra(
+            obra_id=data['obra_id'],
+            servico_nome=data['servico_nome'],
+            ordem=data.get('ordem', 1),
+            data_inicio=data_inicio,
+            data_fim_prevista=data_fim_prevista,
+            data_inicio_real=data_inicio_real,
+            data_fim_real=data_fim_real,
+            percentual_conclusao=float(data.get('percentual_conclusao', 0)),
+            observacoes=data.get('observacoes')
+        )
+        
+        db.session.add(novo_item)
+        db.session.commit()
+        
+        print(f"[LOG] Cronograma criado: ID={novo_item.id}, Serviço={novo_item.servico_nome}")
+        return jsonify(novo_item.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] create_cronograma: {str(e)}")
+        return jsonify({'error': 'Erro ao criar etapa do cronograma'}), 500
+
+
+@app.route('/cronograma/<int:cronograma_id>', methods=['PUT'])
+@jwt_required()
+def update_cronograma(cronograma_id):
+    try:
+        current_user_id = get_jwt_identity()
+        data = request.json
+        
+        item = CronogramaObra.query.get(cronograma_id)
+        if not item:
+            return jsonify({'error': 'Etapa não encontrada'}), 404
+        
+        obra = Obra.query.get(item.obra_id)
+        if not obra:
+            return jsonify({'error': 'Não autorizado'}), 403
+        
+        if 'servico_nome' in data:
+            item.servico_nome = data['servico_nome']
+        if 'ordem' in data:
+            item.ordem = int(data['ordem'])
+        
+        # PLANEJAMENTO (datas previstas)
+        if 'data_inicio' in data:
+            try:
+                item.data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'error': 'Formato de data_inicio inválido'}), 400
+        if 'data_fim_prevista' in data:
+            try:
+                item.data_fim_prevista = datetime.strptime(data['data_fim_prevista'], '%Y-%m-%d').date()
+            except ValueError:
+                return jsonify({'error': 'Formato de data_fim_prevista inválido'}), 400
+        
+        # EXECUÇÃO REAL (datas reais e percentual)
+        if 'data_inicio_real' in data:
+            if data['data_inicio_real']:
+                try:
+                    item.data_inicio_real = datetime.strptime(data['data_inicio_real'], '%Y-%m-%d').date()
+                except ValueError:
+                    return jsonify({'error': 'Formato de data_inicio_real inválido'}), 400
+            else:
+                item.data_inicio_real = None
+        
+        if 'data_fim_real' in data:
+            if data['data_fim_real']:
+                try:
+                    item.data_fim_real = datetime.strptime(data['data_fim_real'], '%Y-%m-%d').date()
+                except ValueError:
+                    return jsonify({'error': 'Formato de data_fim_real inválido'}), 400
+            else:
+                item.data_fim_real = None
+        
+        if 'percentual_conclusao' in data:
+            percentual = float(data['percentual_conclusao'])
+            item.percentual_conclusao = max(0, min(100, percentual))
+            # Auto-preencher data_fim_real quando atingir 100%
+            if item.percentual_conclusao >= 100 and not item.data_fim_real:
+                item.data_fim_real = datetime.now().date()
+        
+        if 'observacoes' in data:
+            item.observacoes = data['observacoes']
+        
+        if item.data_fim_prevista < item.data_inicio:
+            return jsonify({'error': 'Data de término não pode ser anterior à data de início'}), 400
+        
+        item.updated_at = datetime.utcnow()
+        db.session.commit()
+        
+        print(f"[LOG] Cronograma atualizado: ID={item.id}, %={item.percentual_conclusao}")
+        return jsonify(item.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] update_cronograma: {str(e)}")
+        return jsonify({'error': 'Erro ao atualizar cronograma'}), 500
+
+
+@app.route('/cronograma/<int:cronograma_id>', methods=['DELETE'])
+@jwt_required()
+def delete_cronograma(cronograma_id):
+    try:
+        current_user_id = get_jwt_identity()
+        
+        item = CronogramaObra.query.get(cronograma_id)
+        if not item:
+            return jsonify({'error': 'Etapa não encontrada'}), 404
+        
+        obra = Obra.query.get(item.obra_id)
+        if not obra:
+            return jsonify({'error': 'Não autorizado'}), 403
+        
+        servico_nome = item.servico_nome
+        db.session.delete(item)
+        db.session.commit()
+        
+        print(f"[LOG] Cronograma excluído: ID={cronograma_id}, Serviço={servico_nome}")
+        return jsonify({'message': 'Etapa excluída com sucesso'}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] delete_cronograma: {str(e)}")
+        return jsonify({'error': 'Erro ao excluir etapa'}), 500
 
 # ==============================================================================
 
