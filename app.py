@@ -438,7 +438,7 @@ class DiarioObra(db.Model):
     __tablename__ = 'diario_obra'
     
     id = db.Column(db.Integer, primary_key=True)
-    obra_id = db.Column(db.Integer, db.ForeignKey('obras.id'), nullable=False)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     data = db.Column(db.Date, nullable=False)
     titulo = db.Column(db.String(200), nullable=False)
     descricao = db.Column(db.Text, nullable=True)
