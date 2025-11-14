@@ -17,7 +17,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet
 from sqlalchemy.orm import joinedload 
-from datetime import datetime
+from datetime import datetime, date
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
@@ -1619,7 +1619,7 @@ def aprovar_orcamento(orcamento_id):
             descricao=desc_lancamento,
             valor_total=orcamento.valor,
             valor_pago=0.0,
-            data=datetime.date.today(), 
+            data=date.today(), 
             status='A Pagar',
             pix=orcamento.dados_pagamento,
             prioridade=0,
@@ -1690,7 +1690,7 @@ def converter_orcamento_para_servico(orcamento_id):
                 descricao=orcamento.descricao,
                 valor_total=orcamento.valor,
                 valor_pago=0.0,
-                data=datetime.date.today(),
+                data=date.today(),
                 status='A Pagar',
                 pix=orcamento.dados_pagamento,
                 prioridade=0,
@@ -2622,7 +2622,7 @@ def relatorio_resumo_completo(obra_id):
         elements.append(Paragraph("<b>3. PENDÊNCIAS VENCIDAS ⚠️</b>", styles['Heading2']))
         elements.append(Spacer(1, 0.3*cm))
         
-        hoje = datetime.date.today()
+        hoje = date.today()
         
         pendencias_lanc_vencidas = []
         pendencias_lanc_a_pagar = []
@@ -3077,7 +3077,7 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
             descricao=pagamento.descricao,
             valor_total=pagamento.valor,
             valor_pago=pagamento.valor,
-            data=datetime.date.today(),
+            data=date.today(),
             data_vencimento=pagamento.data_vencimento,
             status='Pago',
             pix=pagamento.pix,
@@ -3462,7 +3462,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         
         parcela.status = 'Pago'
         parcela.data_pagamento = datetime.strptime(
-            data.get('data_pagamento', datetime.date.today().isoformat()), 
+            data.get('data_pagamento', date.today().isoformat()), 
             '%Y-%m-%d'
         ).date()
         parcela.forma_pagamento = data.get('forma_pagamento', None)
@@ -3515,7 +3515,7 @@ def obter_alertas_vencimento(obra_id):
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
-        hoje = datetime.date.today()
+        hoje = date.today()
         amanha = hoje + datetime.timedelta(days=1)
         em_7_dias = hoje + datetime.timedelta(days=7)
         
@@ -3692,7 +3692,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             return jsonify({"erro": "Obra não encontrada"}), 404
         
         # Buscar dados do cronograma
-        hoje = datetime.date.today()
+        hoje = date.today()
         
         pagamentos_futuros = PagamentoFuturo.query.filter_by(
             obra_id=obra_id
@@ -3777,12 +3777,12 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         # Informações da obra
         info_style = styles['Normal']
         info_text = f"<b>Cliente:</b> {obra.cliente or 'N/A'}<br/>"
-        info_text += f"<b>Data do Relatório:</b> {datetime.date.today().strftime('%d/%m/%Y')}"
+        info_text += f"<b>Data do Relatório:</b> {date.today().strftime('%d/%m/%Y')}"
         elements.append(Paragraph(info_text, info_style))
         elements.append(Spacer(1, 0.5*cm))
         
         # Seção: RESUMO - Atenção Urgente (Vencidos + Próximos 7 dias)
-        hoje = datetime.date.today()
+        hoje = date.today()
         limite_7_dias = hoje + datetime.timedelta(days=7)
         
         # Separar pagamentos por urgência
@@ -4091,7 +4091,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         return send_file(
             buffer,
             as_attachment=True,
-            download_name=f"Cronograma_{obra.nome.replace(' ', '_')}_{datetime.date.today()}.pdf",
+            download_name=f"Cronograma_{obra.nome.replace(' ', '_')}_{date.today()}.pdf",
             mimetype='application/pdf'
         )
     
@@ -4820,7 +4820,7 @@ def marcar_multiplos_como_pago(obra_id):
         if data_pagamento:
             data_pagamento = datetime.date.fromisoformat(data_pagamento)
         else:
-            data_pagamento = datetime.date.today()
+            data_pagamento = date.today()
         
         resultados = []
         
@@ -5342,7 +5342,7 @@ def gerar_relatorio_diario(obra_id):
                 for img_obj in entrada.imagens:
                     try:
                         # Decodificar base64
-                        img_data = base64.b64decode(img_obj.base64)
+                        img_data = base64.b64decode(img_obj.arquivo_base64)
                         img_buffer = io.BytesIO(img_data)
                         
                         # Criar objeto Image do ReportLab
@@ -5557,7 +5557,7 @@ def migrar_pagamentos_antigos():
                     descricao=pagamento.descricao,
                     valor_total=pagamento.valor,
                     valor_pago=pagamento.valor,
-                    data=datetime.date.today(),
+                    data=date.today(),
                     data_vencimento=pagamento.data_vencimento,
                     status='Pago',
                     pix=pagamento.pix,
