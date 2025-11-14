@@ -5328,12 +5328,6 @@ def gerar_relatorio_diario(obra_id):
                 story.append(Paragraph(entrada.materiais_utilizados, styles['Normal']))
                 story.append(Spacer(1, 0.3*cm))
             
-            # Equipamentos
-            if entrada.equipamentos_utilizados:
-                story.append(Paragraph("<b>Equipamentos Utilizados:</b>", styles['Normal']))
-                story.append(Paragraph(entrada.equipamentos_utilizados, styles['Normal']))
-                story.append(Spacer(1, 0.3*cm))
-            
             # Observações
             if entrada.observacoes:
                 story.append(Paragraph("<b>Observações:</b>", styles['Normal']))
