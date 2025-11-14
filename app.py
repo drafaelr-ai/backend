@@ -7,7 +7,6 @@ from flask import Flask, jsonify, request, make_response, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from urllib.parse import quote_plus
-import datetime
 from sqlalchemy import func, case
 import io
 import base64
@@ -1967,7 +1966,7 @@ def export_pdf_pendentes_DESATIVADO(obra_id):
             elements.append(table)
         
         elements.append(Spacer(1, 1*cm))
-        data_geracao = f"Gerado em: {datetime.datetime.now().strftime('%d/%m/%Y as %H:%M')}"
+        data_geracao = f"Gerado em: {datetime.now().strftime('%d/%m/%Y as %H:%M')}"
         elements.append(Paragraph(data_geracao, styles['Normal']))
         
         doc.build(elements)
@@ -2165,7 +2164,7 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
         elements.append(total_geral_para)
         
         elements.append(Spacer(1, 0.5*cm))
-        data_geracao = f"Gerado em: {datetime.datetime.now().strftime('%d/%m/%Y às %H:%M')}"
+        data_geracao = f"Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}"
         elements.append(Paragraph(data_geracao, styles['Normal']))
         
         doc.build(elements)
@@ -2537,7 +2536,7 @@ def relatorio_resumo_completo(obra_id):
         
         # Informações da Obra
         info_text = f"<b>Cliente:</b> {obra.cliente or 'N/A'}<br/>"
-        info_text += f"<b>Data de Geração:</b> {datetime.datetime.now().strftime('%d/%m/%Y às %H:%M')}"
+        info_text += f"<b>Data de Geração:</b> {datetime.now().strftime('%d/%m/%Y às %H:%M')}"
         elements.append(Paragraph(info_text, styles['Normal']))
         elements.append(Spacer(1, 0.8*cm))
         
@@ -2947,7 +2946,7 @@ def criar_pagamento_futuro(obra_id):
             obra_id=obra_id,
             descricao=data.get('descricao'),
             valor=float(data.get('valor', 0)),
-            data_vencimento=datetime.datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
+            data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             fornecedor=data.get('fornecedor'),
             pix=pix_value,
             observacoes=data.get('observacoes'),
@@ -3006,7 +3005,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if 'valor' in data:
             pagamento.valor = float(data['valor'])
         if 'data_vencimento' in data:
-            pagamento.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+            pagamento.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
         if 'fornecedor' in data:
             pagamento.fornecedor = data['fornecedor']
         if 'pix' in data:
@@ -3147,7 +3146,7 @@ def criar_pagamento_parcelado(obra_id):
             valor_total=valor_total,
             numero_parcelas=numero_parcelas,
             valor_parcela=valor_parcela,
-            data_primeira_parcela=datetime.datetime.strptime(data.get('data_primeira_parcela'), '%Y-%m-%d').date(),
+            data_primeira_parcela=datetime.strptime(data.get('data_primeira_parcela'), '%Y-%m-%d').date(),
             periodicidade=periodicidade,
             parcelas_pagas=0,
             status='Ativo',
@@ -3204,7 +3203,7 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
             pagamento.valor_parcela = pagamento.valor_total / pagamento.numero_parcelas if pagamento.numero_parcelas > 0 else 0
         
         if 'data_primeira_parcela' in data:
-            pagamento.data_primeira_parcela = datetime.datetime.strptime(data['data_primeira_parcela'], '%Y-%m-%d').date()
+            pagamento.data_primeira_parcela = datetime.strptime(data['data_primeira_parcela'], '%Y-%m-%d').date()
         
         db.session.commit()
         
@@ -3406,7 +3405,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
             parcela.valor_parcela = float(data['valor_parcela'])
         
         if 'data_vencimento' in data:
-            parcela.data_vencimento = datetime.datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+            parcela.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
         
         if 'observacao' in data:
             parcela.observacao = data['observacao']
@@ -3414,7 +3413,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
         if 'status' in data:
             parcela.status = data['status']
             if data['status'] == 'Pago' and 'data_pagamento' in data:
-                parcela.data_pagamento = datetime.datetime.strptime(data['data_pagamento'], '%Y-%m-%d').date()
+                parcela.data_pagamento = datetime.strptime(data['data_pagamento'], '%Y-%m-%d').date()
         
         db.session.commit()
         
@@ -3462,7 +3461,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         data = request.get_json()
         
         parcela.status = 'Pago'
-        parcela.data_pagamento = datetime.datetime.strptime(
+        parcela.data_pagamento = datetime.strptime(
             data.get('data_pagamento', datetime.date.today().isoformat()), 
             '%Y-%m-%d'
         ).date()
@@ -5018,7 +5017,7 @@ def criar_entrada_diario(obra_id):
         # Criar entrada
         entrada = DiarioObra(
             obra_id=obra_id,
-            data=datetime.datetime.strptime(data.get('data'), '%Y-%m-%d').date() if data.get('data') else datetime.datetime.utcnow().date(),
+            data=datetime.strptime(data.get('data'), '%Y-%m-%d').date() if data.get('data') else datetime.utcnow().date(),
             titulo=data.get('titulo'),
             descricao=data.get('descricao'),
             clima=data.get('clima'),
@@ -5099,7 +5098,7 @@ def atualizar_entrada_diario(entrada_id):
         
         # Atualizar campos
         if 'data' in data:
-            entrada.data = datetime.datetime.strptime(data['data'], '%Y-%m-%d').date()
+            entrada.data = datetime.strptime(data['data'], '%Y-%m-%d').date()
         if 'titulo' in data:
             entrada.titulo = data['titulo']
         if 'descricao' in data:
@@ -5249,9 +5248,9 @@ def gerar_relatorio_diario(obra_id):
         query = DiarioObra.query.filter_by(obra_id=obra_id)
         
         if data_inicio:
-            query = query.filter(DiarioObra.data >= datetime.datetime.strptime(data_inicio, '%Y-%m-%d').date())
+            query = query.filter(DiarioObra.data >= datetime.strptime(data_inicio, '%Y-%m-%d').date())
         if data_fim:
-            query = query.filter(DiarioObra.data <= datetime.datetime.strptime(data_fim, '%Y-%m-%d').date())
+            query = query.filter(DiarioObra.data <= datetime.strptime(data_fim, '%Y-%m-%d').date())
         
         entradas = query.order_by(DiarioObra.data.asc()).all()
         
@@ -5269,7 +5268,7 @@ def gerar_relatorio_diario(obra_id):
         
         # Informações do relatório
         info_data = [
-            ['Relatório gerado em:', datetime.datetime.now().strftime('%d/%m/%Y %H:%M')],
+            ['Relatório gerado em:', datetime.now().strftime('%d/%m/%Y %H:%M')],
             ['Obra:', obra.nome],
             ['Cliente:', obra.cliente or 'N/A'],
         ]
@@ -5402,7 +5401,7 @@ def gerar_relatorio_diario(obra_id):
             buffer,
             mimetype='application/pdf',
             as_attachment=True,
-            download_name=f'diario_obra_{obra.nome}_{datetime.datetime.now().strftime("%Y%m%d")}.pdf'
+            download_name=f'diario_obra_{obra.nome}_{datetime.now().strftime("%Y%m%d")}.pdf'
         )
         
     except Exception as e:
