@@ -5754,7 +5754,7 @@ def get_servicos_obra(obra_id):
         return jsonify({'error': 'Erro ao buscar serviços'}), 500
 
 
-@app.route('/obras/<int:obra_id>/cronograma', methods=['GET'])
+@app.route('/cronograma/<int:obra_id>', methods=['GET'])
 @jwt_required()
 def get_cronograma_obra(obra_id):
     try:
