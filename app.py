@@ -1151,8 +1151,8 @@ def editar_lancamento(lancamento_id):
         if not user_has_access_to_obra(user, lancamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         dados = request.json
-        lancamento.data = datetime.date.fromisoformat(dados['data'])
-        lancamento.data_vencimento = datetime.date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None
+        lancamento.data = date.fromisoformat(dados['data'])
+        lancamento.data_vencimento = date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None
         lancamento.descricao = dados['descricao']
         lancamento.valor_total = float(dados['valor_total']) 
         lancamento.valor_pago = float(dados.get('valor_pago', lancamento.valor_pago)) 
@@ -1283,8 +1283,8 @@ def add_pagamento_servico(servico_id):
 
         novo_pagamento = PagamentoServico(
             servico_id=servico_id,
-            data=datetime.date.fromisoformat(dados['data']),
-            data_vencimento=datetime.date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
+            data=date.fromisoformat(dados['data']),
+            data_vencimento=date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
             valor_total=valor_total, 
             valor_pago=valor_pago, 
             status=status,
@@ -1406,9 +1406,9 @@ def editar_pagamento_servico(pagamento_id):
         
         # Atualizar campos se fornecidos
         if 'data' in dados:
-            pagamento.data = datetime.date.fromisoformat(dados['data'])
+            pagamento.data = date.fromisoformat(dados['data'])
         if 'data_vencimento' in dados:
-            pagamento.data_vencimento = datetime.date.fromisoformat(dados['data_vencimento']) if dados['data_vencimento'] else None
+            pagamento.data_vencimento = date.fromisoformat(dados['data_vencimento']) if dados['data_vencimento'] else None
         if 'valor' in dados:
             pagamento.valor_total = float(dados['valor'])
             # Se status = Pago, atualizar valor_pago também
@@ -4730,7 +4730,7 @@ def inserir_pagamento(obra_id):
         valor_total = float(dados.get('valor', 0))
         tipo = dados.get('tipo')  # 'Material', 'Mão de Obra', ou 'Serviço'
         status = dados.get('status', 'A Pagar')  # 'Pago' ou 'A Pagar'
-        data = datetime.date.fromisoformat(dados.get('data'))
+        data = date.fromisoformat(dados.get('data'))
         
         # Campos opcionais
         servico_id = dados.get('servico_id')
@@ -4760,7 +4760,7 @@ def inserir_pagamento(obra_id):
                 valor_total=valor_total,
                 valor_pago=valor_pago,
                 data=data,
-                data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
+                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
                 status=status,
                 prioridade=prioridade,
                 fornecedor=fornecedor
@@ -4798,7 +4798,7 @@ def inserir_pagamento(obra_id):
                     obra_id=obra_id,
                     descricao=descricao,
                     valor=valor_total,
-                    data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else data,
+                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
                     fornecedor=fornecedor,
                     pix=pix,
                     observacoes=f"Inserido via botão Inserir Pagamento - Tipo: {tipo}",
@@ -4819,7 +4819,7 @@ def inserir_pagamento(obra_id):
                     valor_total=valor_total,
                     valor_pago=valor_pago,
                     data=data,
-                    data_vencimento=datetime.date.fromisoformat(data_vencimento) if data_vencimento else None,
+                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
                     status=status,
                     pix=pix,
                     prioridade=prioridade,
@@ -4860,7 +4860,7 @@ def marcar_multiplos_como_pago(obra_id):
         data_pagamento = dados.get('data_pagamento')
         
         if data_pagamento:
-            data_pagamento = datetime.date.fromisoformat(data_pagamento)
+            data_pagamento = date.fromisoformat(data_pagamento)
         else:
             data_pagamento = date.today()
         
