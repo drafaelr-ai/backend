@@ -1013,9 +1013,49 @@ def add_lancamento(obra_id):
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
-        dados = request.json
+        dados = request.get_json()  # CORREÇÃO: Usar get_json() ao invés de request.json
+        
+        if not dados:
+            return jsonify({"erro": "Dados inválidos ou ausentes"}), 400
+        
+        # Validar campos obrigatórios
+        if 'valor' not in dados:
+            return jsonify({"erro": "Campo 'valor' é obrigatório"}), 400
+        if 'status' not in dados:
+            return jsonify({"erro": "Campo 'status' é obrigatório"}), 400
+        if 'descricao' not in dados:
+            return jsonify({"erro": "Campo 'descricao' é obrigatório"}), 400
+        
         valor_total = float(dados['valor'])
         status = dados['status']
+        
+        # PROCESSAR DATAS COM SEGURANÇA
+        data_registro = None
+        data_vencimento_obj = None
+        
+        try:
+            # Tentar pegar data_vencimento primeiro
+            if dados.get('data_vencimento'):
+                data_vencimento_obj = date.fromisoformat(dados['data_vencimento'])
+            
+            # Se não tiver data_vencimento, tentar 'data'
+            if not data_vencimento_obj and dados.get('data'):
+                data_vencimento_obj = date.fromisoformat(dados['data'])
+            
+            # Se não tiver nenhuma, usar hoje
+            if not data_vencimento_obj:
+                data_vencimento_obj = date.today()
+            
+            # Para lançamentos, precisamos de data_registro
+            if dados.get('data'):
+                data_registro = date.fromisoformat(dados['data'])
+            else:
+                data_registro = date.today()
+                
+        except ValueError as e:
+            return jsonify({"erro": f"Formato de data inválido: {str(e)}"}), 400
+        
+        print(f"--- [LOG] Status='{status}', Valor={valor_total}, Data Vencimento={data_vencimento_obj} ---")
         
         # LÓGICA PRINCIPAL: Se é "A Pagar", cria PagamentoFuturo
         if status == 'A Pagar':
@@ -1025,7 +1065,7 @@ def add_lancamento(obra_id):
                 obra_id=obra_id,
                 descricao=dados['descricao'],
                 valor=valor_total,
-                data_vencimento=datetime.date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else datetime.date.fromisoformat(dados['data']),
+                data_vencimento=data_vencimento_obj,
                 fornecedor=dados.get('fornecedor'),
                 pix=dados.get('pix'),
                 observacoes=None,
@@ -1050,12 +1090,12 @@ def add_lancamento(obra_id):
             
             novo_lancamento = Lancamento(
                 obra_id=obra_id, 
-                tipo=dados['tipo'], 
+                tipo=dados.get('tipo', 'Saída'), 
                 descricao=dados['descricao'],
                 valor_total=valor_total,
                 valor_pago=valor_pago,
-                data=datetime.date.fromisoformat(dados['data']),
-                data_vencimento=datetime.date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
+                data=data_registro,
+                data_vencimento=data_vencimento_obj if dados.get('data_vencimento') else None,
                 status=status, 
                 pix=dados.get('pix'),
                 prioridade=int(dados.get('prioridade', 0)),
