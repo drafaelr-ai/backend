@@ -17,7 +17,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet
 from sqlalchemy.orm import joinedload 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
@@ -3353,7 +3353,7 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
                 else:
                     valor_ultima = valor_parcela_normal
                 
-                data_vencimento = pagamento.data_primeira_parcela + datetime.timedelta(days=dias_intervalo * i)
+                data_vencimento = pagamento.data_primeira_parcela + timedelta(days=dias_intervalo * i)
                 status = 'Pago' if i < pagamento.parcelas_pagas else 'Previsto'
                 
                 parcela = ParcelaIndividual(
@@ -3516,8 +3516,8 @@ def obter_alertas_vencimento(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         hoje = date.today()
-        amanha = hoje + datetime.timedelta(days=1)
-        em_7_dias = hoje + datetime.timedelta(days=7)
+        amanha = hoje + timedelta(days=1)
+        em_7_dias = hoje + timedelta(days=7)
         
         print(f"--- [DEBUG] Hoje: {hoje}, Amanhã: {amanha}, Em 7 dias: {em_7_dias} ---")
         
@@ -3783,7 +3783,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Seção: RESUMO - Atenção Urgente (Vencidos + Próximos 7 dias)
         hoje = date.today()
-        limite_7_dias = hoje + datetime.timedelta(days=7)
+        limite_7_dias = hoje + timedelta(days=7)
         
         # Separar pagamentos por urgência
         pagamentos_resumo = []  # Vencidos + próximos 7 dias
