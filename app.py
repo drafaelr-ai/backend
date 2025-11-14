@@ -5695,6 +5695,12 @@ class CronogramaObra(db.Model):
     data_fim_real = db.Column(db.Date, nullable=True)  # Quando terminou DE FATO
     percentual_conclusao = db.Column(db.Float, nullable=False, default=0.0)  # Avanço físico REAL (você informa manualmente)
     
+    # ===== TIPO DE MEDIÇÃO (NOVO) =====
+    tipo_medicao = db.Column(db.String(20), default='empreitada')  # 'area' ou 'empreitada'
+    area_total = db.Column(db.Float)  # Para modo 'area'
+    area_executada = db.Column(db.Float, default=0)  # Para modo 'area'
+    unidade_medida = db.Column(db.String(10), default='m²')  # m², m³, m, un, kg, L
+    
     observacoes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=func.now())
     updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
@@ -5714,6 +5720,11 @@ class CronogramaObra(db.Model):
             'data_inicio_real': self.data_inicio_real.isoformat() if self.data_inicio_real else None,
             'data_fim_real': self.data_fim_real.isoformat() if self.data_fim_real else None,
             'percentual_conclusao': float(self.percentual_conclusao),
+            # TIPO DE MEDIÇÃO (NOVO)
+            'tipo_medicao': self.tipo_medicao,
+            'area_total': self.area_total,
+            'area_executada': self.area_executada,
+            'unidade_medida': self.unidade_medida,
             'observacoes': self.observacoes,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -5808,6 +5819,10 @@ def create_cronograma():
             data_inicio_real=data_inicio_real,
             data_fim_real=data_fim_real,
             percentual_conclusao=float(data.get('percentual_conclusao', 0)),
+            tipo_medicao=data.get('tipo_medicao', 'empreitada'),
+            area_total=float(data['area_total']) if data.get('area_total') else None,
+            area_executada=float(data.get('area_executada', 0)) if data.get('area_total') else None,
+            unidade_medida=data.get('unidade_medida', 'm²') if data.get('area_total') else None,
             observacoes=data.get('observacoes')
         )
         
@@ -5882,6 +5897,19 @@ def update_cronograma(cronograma_id):
         
         if 'observacoes' in data:
             item.observacoes = data['observacoes']
+        
+        # CAMPOS DE MEDIÇÃO (novos)
+        if 'tipo_medicao' in data:
+            item.tipo_medicao = data['tipo_medicao']
+        
+        if 'area_total' in data:
+            item.area_total = float(data['area_total']) if data['area_total'] else None
+        
+        if 'area_executada' in data:
+            item.area_executada = float(data['area_executada']) if data['area_executada'] else None
+        
+        if 'unidade_medida' in data:
+            item.unidade_medida = data['unidade_medida']
         
         if item.data_fim_prevista < item.data_inicio:
             return jsonify({'error': 'Data de término não pode ser anterior à data de início'}), 400
