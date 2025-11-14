@@ -447,6 +447,7 @@ class DiarioObra(db.Model):
     equipe_presente = db.Column(db.Text, nullable=True)
     atividades_realizadas = db.Column(db.Text, nullable=True)
     materiais_utilizados = db.Column(db.Text, nullable=True)
+    equipamentos_utilizados = db.Column(db.Text, nullable=True)
     observacoes = db.Column(db.Text, nullable=True)
     criado_por = db.Column(db.Integer, nullable=True)
     criado_em = db.Column(db.DateTime, default=func.now())
@@ -468,6 +469,7 @@ class DiarioObra(db.Model):
             'equipe_presente': self.equipe_presente,
             'atividades_realizadas': self.atividades_realizadas,
             'materiais_utilizados': self.materiais_utilizados,
+            'equipamentos_utilizados': self.equipamentos_utilizados,
             'observacoes': self.observacoes,
             'criado_por': self.criado_por,
             'criado_em': self.criado_em.isoformat() if self.criado_em else None,
