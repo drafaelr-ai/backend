@@ -1171,15 +1171,50 @@ def editar_lancamento(lancamento_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
-@check_permission(roles=['administrador']) 
+@jwt_required()
 def deletar_lancamento(lancamento_id):
-    # ... (código inalterado) ...
+    """
+    Deleta um lançamento com regras específicas:
+    - Lançamentos PAGOS só podem ser deletados por usuários MASTER
+    - Lançamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
+    """
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
     try:
+        # Buscar o lançamento
         lancamento = Lancamento.query.get_or_404(lancamento_id)
+        
+        # Obter o papel do usuário
+        claims = get_jwt()
+        user_role = claims.get('role')
+        
+        # Verificar se o lançamento está PAGO (executado)
+        is_pago = lancamento.status == 'Pago'
+        
+        # REGRA: Se está PAGO, apenas MASTER pode deletar
+        if is_pago and user_role != 'master':
+            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} (não MASTER) ---")
+            return jsonify({
+                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
+            }), 403
+        
+        # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
+        if not is_pago and user_role not in ['administrador', 'master']:
+            print(f"--- [LOG] ❌ Tentativa de deletar lançamento por usuário {user_role} (sem permissão) ---")
+            return jsonify({
+                "erro": "Acesso negado: Permissão insuficiente para excluir este lançamento."
+            }), 403
+        
+        # Se passou nas verificações, deletar o lançamento
         db.session.delete(lancamento)
         db.session.commit()
+        
+        print(f"--- [LOG] ✅ Lançamento {lancamento_id} (Status: {lancamento.status}) deletado com sucesso pelo usuário {user_role} ---")
         return jsonify({"sucesso": "Lançamento deletado"}), 200
+        
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
