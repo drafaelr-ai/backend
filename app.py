@@ -1340,23 +1340,110 @@ def add_pagamento_servico(servico_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
-@check_permission(roles=['administrador']) 
+@jwt_required()
 def deletar_pagamento_servico(servico_id, pagamento_id):
-    # ... (código inalterado) ...
+    """
+    Deleta um pagamento de serviço com regras específicas:
+    - Pagamentos PAGOS só podem ser deletados por usuários MASTER
+    - Pagamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
+    """
     print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
     try:
         pagamento = PagamentoServico.query.filter_by(
             id=pagamento_id, 
             servico_id=servico_id
         ).first_or_404()
         
+        # Obter o papel do usuário
+        claims = get_jwt()
+        user_role = claims.get('role')
+        
+        # Verificar se o pagamento está PAGO (completamente executado)
+        is_pago = pagamento.valor_pago >= pagamento.valor_total
+        
+        # REGRA: Se está PAGO, apenas MASTER pode deletar
+        if is_pago and user_role != 'master':
+            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} (não MASTER) ---")
+            return jsonify({
+                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
+            }), 403
+        
+        # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
+        if not is_pago and user_role not in ['administrador', 'master']:
+            print(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
+            return jsonify({
+                "erro": "Acesso negado: Permissão insuficiente para excluir este pagamento."
+            }), 403
+        
         db.session.delete(pagamento)
         db.session.commit()
+        
+        print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
         return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+        
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+# Rota alternativa para deletar pagamento de serviço (usada pelo histórico)
+@app.route('/obras/<int:obra_id>/servicos/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def deletar_pagamento_servico_alternativo(obra_id, pagamento_id):
+    """
+    Rota alternativa para deletar pagamento de serviço.
+    Busca o pagamento pelo ID e aplica as mesmas regras de segurança.
+    """
+    print(f"--- [LOG] Rota /obras/{obra_id}/servicos/pagamentos/{pagamento_id} (DELETE) acessada ---")
+    
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
+    try:
+        # Buscar o pagamento pelo ID
+        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+        
+        # Verificar se o pagamento pertence a um serviço da obra especificada
+        servico = Servico.query.get(pagamento.servico_id)
+        if not servico or servico.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não encontrado nesta obra"}), 404
+        
+        # Obter o papel do usuário
+        claims = get_jwt()
+        user_role = claims.get('role')
+        
+        # Verificar se o pagamento está PAGO (completamente executado)
+        is_pago = pagamento.valor_pago >= pagamento.valor_total
+        
+        # REGRA: Se está PAGO, apenas MASTER pode deletar
+        if is_pago and user_role != 'master':
+            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} (não MASTER) ---")
+            return jsonify({
+                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
+            }), 403
+        
+        # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
+        if not is_pago and user_role not in ['administrador', 'master']:
+            print(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
+            return jsonify({
+                "erro": "Acesso negado: Permissão insuficiente para excluir este pagamento."
+            }), 403
+        
+        db.session.delete(pagamento)
+        db.session.commit()
+        
+        print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
+        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/.../servicos/pagamentos (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
