@@ -2270,7 +2270,7 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
 
 # --- ROTAS DE ADMINISTRAÇÃO DE USUÁRIOS ---
 @app.route('/admin/users', methods=['GET', 'OPTIONS'])
-@check_permission(roles=['administrador'])
+@check_permission(roles=['master'])
 def get_all_users():
     # ... (código inalterado) ...
     print("--- [LOG] Rota /admin/users (GET) acessada ---")
@@ -2284,8 +2284,12 @@ def get_all_users():
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/admin/users', methods=['POST', 'OPTIONS'])
-@check_permission(roles=['administrador'])
+@check_permission(roles=['master'])
 def create_user():
+    """
+    Cria um novo usuário no sistema.
+    APENAS usuários MASTER podem criar novos usuários.
+    """
     # ... (código inalterado) ...
     print("--- [LOG] Rota /admin/users (POST) acessada ---")
     try:
@@ -2312,7 +2316,7 @@ def create_user():
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
-@check_permission(roles=['administrador'])
+@check_permission(roles=['master'])
 def get_user_permissions(user_id):
     # ... (código inalterado) ...
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
@@ -2326,7 +2330,7 @@ def get_user_permissions(user_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
-@check_permission(roles=['administrador'])
+@check_permission(roles=['master'])
 def set_user_permissions(user_id):
     # ... (código inalterado) ...
     print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
@@ -2347,7 +2351,7 @@ def set_user_permissions(user_id):
 
 # --- NOVA ROTA PARA DELETAR USUÁRIO ---
 @app.route('/admin/users/<int:user_id>', methods=['DELETE', 'OPTIONS'])
-@check_permission(roles=['administrador'])
+@check_permission(roles=['master'])
 def delete_user(user_id):
     if request.method == 'OPTIONS': 
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
