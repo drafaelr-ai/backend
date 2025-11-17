@@ -339,7 +339,7 @@ class PagamentoFuturo(db.Model):
 
 class PagamentoParcelado(db.Model):
     """Pagamentos parcelados (ex: 1/10, 2/10, etc)"""
-    __tablename__ = 'pagamento_parcelado'
+    __tablename__ = 'pagamento_parcelado_v2'
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     descricao = db.Column(db.String(255), nullable=False)
@@ -427,7 +427,7 @@ class ParcelaIndividual(db.Model):
     forma_pagamento = db.Column(db.String(50), nullable=True)  # PIX, Boleto, TED, Dinheiro, etc
     observacao = db.Column(db.String(255), nullable=True)
     
-    pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
+    pagamento_parcelado = db.relationship('pagamento_parcelado_v2', backref='parcelas_individuais')
     
     def to_dict(self):
         return {
@@ -6419,47 +6419,6 @@ def limpar_e_adicionar_coluna():
         
         if result.fetchone():
             resultados.append("✅ VALIDAÇÃO OK!")
-            resultados.append("🎉 MIGRATION CONCLUÍDA!")
-        
-        return jsonify({'success': True, 'detalhes': resultados}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e), 'success': False}), 500
-
-
-@app.route('/admin/adicionar-coluna-sem-validacao', methods=['POST'])
-def adicionar_coluna_sem_validacao():
-    """Adiciona coluna sem validações (mais rápido)"""
-    try:
-        resultados = []
-        
-        # Aumentar timeout para 120 segundos
-        db.session.execute(db.text("SET statement_timeout = '120s';"))
-        
-        # Tentar com NOT VALID (não valida dados existentes - mais rápido)
-        try:
-            db.session.execute(db.text("""
-                ALTER TABLE pagamento_parcelado 
-                ADD COLUMN IF NOT EXISTS servico_id INTEGER;
-            """))
-            db.session.commit()
-            resultados.append("✅ Coluna adicionada")
-        except Exception as e:
-            db.session.rollback()
-            if "already exists" in str(e).lower():
-                resultados.append("⚠️ Coluna já existe")
-            else:
-                raise e
-        
-        # VALIDAR
-        result = db.session.execute(db.text("""
-            SELECT column_name FROM information_schema.columns 
-            WHERE table_name = 'pagamento_parcelado' AND column_name = 'servico_id';
-        """))
-        
-        if result.fetchone():
-            resultados.append("✅ SUCESSO!")
             resultados.append("🎉 MIGRATION CONCLUÍDA!")
         
         return jsonify({'success': True, 'detalhes': resultados}), 200
