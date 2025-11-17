@@ -6368,7 +6368,78 @@ def migrate_add_servico_id():
         }), 500
 
 # ==============================================================================
-
+@app.route('/admin/migration-servico-id-SECRET-KEY-12345', methods=['GET'])
+def migration_sem_jwt():
+    """
+    ENDPOINT TEMPORÁRIO SEM JWT - DELETAR APÓS USO!
+    Acesse: https://backend-production-78c9.up.railway.app/admin/migration-servico-id-SECRET-KEY-12345
+    """
+    try:
+        resultados = []
+        
+        # 1. ADD COLUMN
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE pagamento_parcelado ADD COLUMN servico_id INTEGER;"
+            ))
+            db.session.commit()
+            resultados.append("✅ Coluna servico_id adicionada")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Coluna já existe")
+            else:
+                resultados.append(f"❌ Erro coluna: {str(e)}")
+        
+        # 2. ADD FOREIGN KEY
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE pagamento_parcelado 
+                ADD CONSTRAINT fk_pagamento_parcelado_servico 
+                FOREIGN KEY (servico_id) REFERENCES servico(id) ON DELETE SET NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ Foreign key adicionada")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ FK já existe")
+            else:
+                resultados.append(f"❌ Erro FK: {str(e)}")
+        
+        # 3. CREATE INDEX
+        try:
+            db.session.execute(db.text(
+                "CREATE INDEX idx_pagamento_parcelado_servico ON pagamento_parcelado(servico_id);"
+            ))
+            db.session.commit()
+            resultados.append("✅ Índice criado")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Índice já existe")
+            else:
+                resultados.append(f"❌ Erro índice: {str(e)}")
+        
+        # VALIDAR
+        result = db.session.execute(db.text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'pagamento_parcelado' AND column_name = 'servico_id';
+        """))
+        
+        if result.fetchone():
+            resultados.append("")
+            resultados.append("🎉 MIGRATION CONCLUÍDA!")
+        else:
+            resultados.append("❌ FALHOU!")
+        
+        return jsonify({
+            'success': True,
+            'detalhes': resultados
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
