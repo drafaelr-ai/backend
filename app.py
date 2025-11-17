@@ -345,6 +345,9 @@ class PagamentoParcelado(db.Model):
     descricao = db.Column(db.String(255), nullable=False)
     fornecedor = db.Column(db.String(150), nullable=True)
     
+    # Vínculo com serviço do cronograma (opcional)
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
+    
     # Informações do parcelamento
     valor_total = db.Column(db.Float, nullable=False)
     numero_parcelas = db.Column(db.Integer, nullable=False)
@@ -393,7 +396,10 @@ class PagamentoParcelado(db.Model):
             "observacoes": self.observacoes,
             # Informações da próxima parcela pendente
             "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero <= self.numero_parcelas else None,
-            "proxima_parcela_vencimento": proxima_parcela_vencimento
+            "proxima_parcela_vencimento": proxima_parcela_vencimento,
+            # Vínculo com serviço
+            "servico_id": self.servico_id,
+            "servico_nome": Servico.query.get(self.servico_id).nome if self.servico_id else None
         }
     
 # ----------------------------------------------------
@@ -1251,6 +1257,37 @@ def add_servico(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /obras/{obra_id}/servicos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+
+@app.route('/obras/<int:obra_id>/servicos-nomes', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def listar_servicos_nomes(obra_id):
+    """
+    Retorna lista simplificada de serviços (id, nome) para uso em dropdowns
+    """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        servicos = Servico.query.filter_by(obra_id=obra_id).order_by(Servico.nome).all()
+        
+        servicos_simples = [
+            {
+                'id': s.id,
+                'nome': s.nome
+            }
+            for s in servicos
+        ]
+        
+        return jsonify({'servicos': servicos_simples}), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/servicos-nomes (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/servicos/<int:servico_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -3311,6 +3348,7 @@ def criar_pagamento_parcelado(obra_id):
             obra_id=obra_id,
             descricao=data.get('descricao'),
             fornecedor=data.get('fornecedor'),
+            servico_id=data.get('servico_id'),  # Vínculo opcional com serviço
             valor_total=valor_total,
             numero_parcelas=numero_parcelas,
             valor_parcela=valor_parcela,
@@ -5965,10 +6003,23 @@ def get_servico_financeiro(obra_id):
         
         valor_pago_lancamentos = float(lancamentos_pagos.total_pago or 0.0)
         
-        # Somar ambos
-        valor_pago = valor_pago_servico + valor_pago_lancamentos
+        # Opção C: Parcelas pagas de pagamentos parcelados vinculados ao servico_id
+        # Buscar pagamentos parcelados vinculados ao serviço
+        pagamentos_parcelados_vinculados = PagamentoParcelado.query.filter_by(
+            obra_id=obra_id,
+            servico_id=servico.id
+        ).all()
+        
+        valor_pago_parcelas = 0.0
+        for pp in pagamentos_parcelados_vinculados:
+            # Somar o valor das parcelas já pagas (parcelas_pagas * valor_parcela)
+            valor_pago_parcelas += pp.parcelas_pagas * pp.valor_parcela
+        
+        # Somar todos os pagamentos
+        valor_pago = valor_pago_servico + valor_pago_lancamentos + valor_pago_parcelas
         print(f"[LOG] Valor já pago (PagamentoServico): R$ {valor_pago_servico:.2f}")
         print(f"[LOG] Valor já pago (Lancamentos): R$ {valor_pago_lancamentos:.2f}")
+        print(f"[LOG] Valor já pago (Parcelas): R$ {valor_pago_parcelas:.2f}")
         print(f"[LOG] Valor total pago: R$ {valor_pago:.2f}")
         
         # 4. Buscar dados do cronograma
