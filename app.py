@@ -6260,6 +6260,104 @@ def delete_cronograma(cronograma_id):
         return jsonify({'error': 'Erro ao excluir etapa'}), 500
 
 # ==============================================================================
+# ROTA TEMPORÁRIA DE MIGRATION - ADICIONAR servico_id
+# ==============================================================================
+@app.route('/admin/migrate-add-servico-id', methods=['GET'])
+@jwt_required()
+@check_permission(roles=['master'])
+def migrate_add_servico_id():
+    """
+    ROTA TEMPORÁRIA - Executa migration para adicionar servico_id ao pagamento_parcelado
+    Apenas usuários MASTER podem executar
+    Acesse: https://seu-backend.railway.app/admin/migrate-add-servico-id
+    IMPORTANTE: Após executar com sucesso, REMOVA esta rota do código!
+    """
+    try:
+        resultados = []
+        
+        # 1. ADD COLUMN
+        try:
+            db.session.execute(db.text(
+                "ALTER TABLE pagamento_parcelado ADD COLUMN servico_id INTEGER;"
+            ))
+            db.session.commit()
+            resultados.append("✅ Coluna servico_id adicionada com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Coluna servico_id já existe (OK)")
+            else:
+                resultados.append(f"❌ Erro ao adicionar coluna: {str(e)}")
+        
+        # 2. ADD FOREIGN KEY
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE pagamento_parcelado 
+                ADD CONSTRAINT fk_pagamento_parcelado_servico 
+                FOREIGN KEY (servico_id) REFERENCES servico(id) ON DELETE SET NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ Foreign key adicionada com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Foreign key já existe (OK)")
+            else:
+                resultados.append(f"❌ Erro ao adicionar foreign key: {str(e)}")
+        
+        # 3. CREATE INDEX
+        try:
+            db.session.execute(db.text(
+                "CREATE INDEX idx_pagamento_parcelado_servico ON pagamento_parcelado(servico_id);"
+            ))
+            db.session.commit()
+            resultados.append("✅ Índice criado com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Índice já existe (OK)")
+            else:
+                resultados.append(f"❌ Erro ao criar índice: {str(e)}")
+        
+        # 4. VALIDAR
+        try:
+            result = db.session.execute(db.text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'pagamento_parcelado' 
+                  AND column_name = 'servico_id';
+            """))
+            if result.fetchone():
+                resultados.append("✅ VALIDAÇÃO: Coluna servico_id existe!")
+                resultados.append("")
+                resultados.append("🎉 MIGRATION CONCLUÍDA COM SUCESSO!")
+                resultados.append("")
+                resultados.append("🚀 Próximos passos:")
+                resultados.append("1. Deploy do frontend (App.js)")
+                resultados.append("2. Testar criação de pagamento parcelado")
+                resultados.append("3. REMOVER esta rota /admin/migrate-add-servico-id do código")
+            else:
+                resultados.append("❌ VALIDAÇÃO FALHOU: Coluna não foi criada!")
+        except Exception as e:
+            resultados.append(f"❌ Erro na validação: {str(e)}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Migration executada',
+            'detalhes': resultados
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] migrate_add_servico_id: {str(e)}\n{error_details}")
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'details': error_details
+        }), 500
+
+# ==============================================================================
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
