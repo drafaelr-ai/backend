@@ -5880,6 +5880,138 @@ def get_servicos_obra(obra_id):
         return jsonify({'error': 'Erro ao buscar serviços'}), 500
 
 
+@app.route('/obras/<int:obra_id>/servico-financeiro', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def get_servico_financeiro(obra_id):
+    """
+    Retorna dados financeiros de um serviço específico da obra para análise de valor agregado (EVM)
+    Query parameter: servico_nome (string obrigatório)
+    
+    Retorna:
+    - valor_total: Soma de valor_global_mao_de_obra + valor_global_material do serviço
+    - valor_pago: Soma de todos os pagamentos efetivados (valor_pago) vinculados a este serviço
+    - area_total: Área total do cronograma (se tipo_medicao = 'area')
+    - area_executada: Área executada do cronograma
+    - percentual_pago: Percentual do valor total que já foi pago
+    - percentual_executado: Percentual de conclusão físico do cronograma
+    """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/servico-financeiro (GET) acessada ---")
+    
+    try:
+        # Obter servico_nome da query string
+        servico_nome = request.args.get('servico_nome')
+        
+        if not servico_nome:
+            print("[ERRO] servico_nome não fornecido")
+            return jsonify({'erro': 'servico_nome é obrigatório'}), 400
+        
+        # Verificar acesso à obra
+        user = get_current_user()
+        if not user:
+            return jsonify({"erro": "Usuário não encontrado"}), 404
+        
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({'erro': 'Obra não encontrada'}), 404
+        
+        print(f"[LOG] Buscando dados financeiros para serviço: '{servico_nome}' na obra {obra_id}")
+        
+        # 1. Buscar o serviço na planilha de custos
+        servico = Servico.query.filter_by(
+            obra_id=obra_id,
+            nome=servico_nome
+        ).first()
+        
+        if not servico:
+            print(f"[INFO] Serviço '{servico_nome}' não encontrado na planilha de custos")
+            # Retornar dados vazios mas válidos
+            return jsonify({
+                'servico_nome': servico_nome,
+                'valor_total': 0.0,
+                'valor_pago': 0.0,
+                'area_total': None,
+                'area_executada': None,
+                'percentual_pago': 0.0,
+                'percentual_executado': 0.0
+            }), 200
+        
+        # 2. Calcular valor total orçado (MO + Material)
+        valor_total = float(servico.valor_global_mao_de_obra or 0.0) + float(servico.valor_global_material or 0.0)
+        print(f"[LOG] Valor total orçado: R$ {valor_total:.2f}")
+        
+        # 3. Calcular valor já pago
+        # Opção A: Pagamentos vinculados diretamente ao servico_id via PagamentoServico
+        pagamentos_servico = db.session.query(
+            func.sum(PagamentoServico.valor_pago).label('total_pago')
+        ).filter(
+            PagamentoServico.servico_id == servico.id
+        ).first()
+        
+        valor_pago_servico = float(pagamentos_servico.total_pago or 0.0)
+        
+        # Opção B: Lançamentos vinculados ao servico_id e marcados como 'Pago'
+        lancamentos_pagos = db.session.query(
+            func.sum(Lancamento.valor_pago).label('total_pago')
+        ).filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.servico_id == servico.id
+        ).first()
+        
+        valor_pago_lancamentos = float(lancamentos_pagos.total_pago or 0.0)
+        
+        # Somar ambos
+        valor_pago = valor_pago_servico + valor_pago_lancamentos
+        print(f"[LOG] Valor já pago (PagamentoServico): R$ {valor_pago_servico:.2f}")
+        print(f"[LOG] Valor já pago (Lancamentos): R$ {valor_pago_lancamentos:.2f}")
+        print(f"[LOG] Valor total pago: R$ {valor_pago:.2f}")
+        
+        # 4. Buscar dados do cronograma
+        etapa_cronograma = CronogramaObra.query.filter_by(
+            obra_id=obra_id,
+            servico_nome=servico_nome
+        ).first()
+        
+        area_total = None
+        area_executada = None
+        percentual_executado = 0.0
+        
+        if etapa_cronograma:
+            area_total = float(etapa_cronograma.area_total) if etapa_cronograma.area_total else None
+            area_executada = float(etapa_cronograma.area_executada) if etapa_cronograma.area_executada else None
+            percentual_executado = float(etapa_cronograma.percentual_conclusao or 0.0)
+            print(f"[LOG] Cronograma encontrado - % Executado: {percentual_executado:.1f}%")
+        else:
+            print(f"[INFO] Cronograma não encontrado para este serviço")
+        
+        # 5. Calcular percentual pago
+        percentual_pago = (valor_pago / valor_total * 100.0) if valor_total > 0 else 0.0
+        
+        # 6. Montar resposta
+        resposta = {
+            'servico_nome': servico_nome,
+            'valor_total': valor_total,
+            'valor_pago': valor_pago,
+            'area_total': area_total,
+            'area_executada': area_executada,
+            'percentual_pago': round(percentual_pago, 2),
+            'percentual_executado': round(percentual_executado, 2)
+        }
+        
+        print(f"[LOG] Resposta: {resposta}")
+        return jsonify(resposta), 200
+        
+    except Exception as e:
+        print(f"[ERRO] get_servico_financeiro: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'erro': 'Erro ao buscar dados financeiros do serviço'}), 500
+
+
 @app.route('/cronograma/<int:obra_id>', methods=['GET'])
 @jwt_required()
 def get_cronograma_obra(obra_id):
