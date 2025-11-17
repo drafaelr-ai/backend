@@ -3660,7 +3660,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
 @jwt_required()
 def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
-    """Marca uma parcela individual como paga"""
+    """Marca uma parcela individual como paga e cria lançamento no histórico"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3674,8 +3674,12 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
             return jsonify({"erro": "Parcela não encontrada"}), 404
         
+        if parcela.status == 'Pago':
+            return jsonify({"mensagem": "Parcela já está marcada como paga"}), 200
+        
         data = request.get_json()
         
+        # Marca a parcela como paga
         parcela.status = 'Pago'
         parcela.data_pagamento = datetime.strptime(
             data.get('data_pagamento', date.today().isoformat()), 
@@ -3683,7 +3687,24 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         ).date()
         parcela.forma_pagamento = data.get('forma_pagamento', None)
         
-        db.session.commit()
+        # ===== CRIAR LANÇAMENTO NO HISTÓRICO =====
+        descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
+        
+        novo_lancamento = Lancamento(
+            obra_id=pagamento.obra_id,
+            tipo='Despesa',
+            descricao=descricao_lancamento,
+            valor_total=parcela.valor_parcela,
+            valor_pago=parcela.valor_parcela,
+            data=parcela.data_pagamento,
+            data_vencimento=parcela.data_vencimento,
+            status='Pago',
+            pix=None,
+            prioridade=0,
+            fornecedor=pagamento.fornecedor,
+            servico_id=pagamento.servico_id
+        )
+        db.session.add(novo_lancamento)
         
         # Atualiza o contador de parcelas pagas no pagamento parcelado
         todas_parcelas = ParcelaIndividual.query.filter_by(
@@ -3699,11 +3720,12 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] Parcela {parcela_id} marcada como paga ---")
+        print(f"--- [LOG] Parcela {parcela_id} marcada como paga e lançamento {novo_lancamento.id} criado ---")
         return jsonify({
-            "mensagem": "Parcela marcada como paga",
+            "mensagem": "Parcela marcada como paga e lançamento criado no histórico",
             "parcela": parcela.to_dict(),
-            "pagamento": pagamento.to_dict()
+            "pagamento": pagamento.to_dict(),
+            "lancamento_id": novo_lancamento.id
         }), 200
     
     except Exception as e:
