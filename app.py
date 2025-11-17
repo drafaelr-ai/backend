@@ -165,19 +165,18 @@ class Lancamento(db.Model):
     prioridade = db.Column(db.Integer, nullable=False, default=0) 
     fornecedor = db.Column(db.String(150), nullable=True)
     
-    # Segmento para vincular ao serviço (Material ou Mão de Obra)
-    # NOTA: Esta coluna pode não existir em bancos antigos, o código trata isso
-    segmento = db.Column(db.String(20), nullable=True)
-    
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
     
     def to_dict(self):
-        # Trata segmento de forma defensiva (pode não existir em tabelas antigas)
+        # Trata segmento dinamicamente (não está no modelo)
+        # Tenta pegar do objeto, mas sempre retorna Material se não existir
+        segmento_value = 'Material'
         try:
-            segmento_value = self.segmento if hasattr(self, 'segmento') and self.segmento else 'Material'
+            if hasattr(self, 'segmento') and self.segmento:
+                segmento_value = self.segmento
         except:
-            segmento_value = 'Material'
+            pass
         
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
@@ -3719,47 +3718,29 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         # ===== CRIAR LANÇAMENTO NO HISTÓRICO =====
         descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
         
-        # Pega o segmento do pagamento parcelado (ou usa default)
+        # Pega o segmento do pagamento parcelado para log
         try:
-            segmento_lancamento = pagamento.segmento if hasattr(pagamento, 'segmento') and pagamento.segmento else 'Material'
+            segmento_info = pagamento.segmento if hasattr(pagamento, 'segmento') and pagamento.segmento else 'Material'
         except:
-            segmento_lancamento = 'Material'
+            segmento_info = 'Material'
         
-        print(f"--- [LOG] Criando lançamento: '{descricao_lancamento}', valor={parcela.valor_parcela}, servico_id={pagamento.servico_id}, segmento={segmento_lancamento} ---")
+        print(f"--- [LOG] Criando lançamento: '{descricao_lancamento}', valor={parcela.valor_parcela}, servico_id={pagamento.servico_id}, segmento={segmento_info} (não salvo no lançamento) ---")
         
-        try:
-            novo_lancamento = Lancamento(
-                obra_id=pagamento.obra_id,
-                tipo='Despesa',
-                descricao=descricao_lancamento,
-                valor_total=parcela.valor_parcela,
-                valor_pago=parcela.valor_parcela,
-                data=parcela.data_pagamento,
-                data_vencimento=parcela.data_vencimento,
-                status='Pago',
-                pix=None,
-                prioridade=0,
-                fornecedor=pagamento.fornecedor,
-                servico_id=pagamento.servico_id,
-                segmento=segmento_lancamento
-            )
-        except TypeError:
-            # Se der erro (coluna não existe), cria sem segmento
-            print(f"--- [AVISO] Coluna 'segmento' não existe na tabela lancamento, criando sem ela ---")
-            novo_lancamento = Lancamento(
-                obra_id=pagamento.obra_id,
-                tipo='Despesa',
-                descricao=descricao_lancamento,
-                valor_total=parcela.valor_parcela,
-                valor_pago=parcela.valor_parcela,
-                data=parcela.data_pagamento,
-                data_vencimento=parcela.data_vencimento,
-                status='Pago',
-                pix=None,
-                prioridade=0,
-                fornecedor=pagamento.fornecedor,
-                servico_id=pagamento.servico_id
-            )
+        # Criar lançamento SEM campo segmento (coluna não existe no banco)
+        novo_lancamento = Lancamento(
+            obra_id=pagamento.obra_id,
+            tipo='Despesa',
+            descricao=descricao_lancamento,
+            valor_total=parcela.valor_parcela,
+            valor_pago=parcela.valor_parcela,
+            data=parcela.data_pagamento,
+            data_vencimento=parcela.data_vencimento,
+            status='Pago',
+            pix=None,
+            prioridade=0,
+            fornecedor=pagamento.fornecedor,
+            servico_id=pagamento.servico_id
+        )
         db.session.add(novo_lancamento)
         db.session.flush()  # Para obter o ID antes do commit
         
