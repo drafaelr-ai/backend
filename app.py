@@ -6367,29 +6367,49 @@ def migrate_add_servico_id():
             'details': error_details
         }), 500
 
-@app.route('/admin/migration-servico-id-SECRET-KEY-12345', methods=['GET'])
-def migration_sem_jwt():
-    """
-    ENDPOINT TEMPORÁRIO SEM JWT - DELETAR APÓS USO!
-    Versão simplificada que só adiciona a coluna (sem FK/índice para evitar timeout)
-    """
+# ==============================================================================
+# ENDPOINTS DE DIAGNÓSTICO E MIGRATION - REMOVER APÓS USO
+# ==============================================================================
+
+@app.route('/admin/check-pagamento-parcelado-info', methods=['GET'])
+def check_pagamento_info():
+    """Verificar informações sobre a tabela pagamento_parcelado"""
+    try:
+        # Contar registros
+        result = db.session.execute(db.text("SELECT COUNT(*) FROM pagamento_parcelado;"))
+        count = result.scalar()
+        
+        # Verificar se coluna existe
+        result_col = db.session.execute(db.text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'pagamento_parcelado' AND column_name = 'servico_id';
+        """))
+        coluna_existe = result_col.fetchone() is not None
+        
+        return jsonify({
+            'total_registros': count,
+            'coluna_servico_id_existe': coluna_existe,
+            'recomendacao': 'LIMPAR TABELA' if count < 50 else 'MIGRATION DIRETA'
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/admin/limpar-pagamento-parcelado-e-adicionar-coluna', methods=['POST'])
+def limpar_e_adicionar_coluna():
+    """ATENÇÃO: APAGA TODOS os pagamentos parcelados e adiciona a coluna"""
     try:
         resultados = []
         
-        # ADD COLUMN (comando mais simples possível)
-        try:
-            # Aumentar statement_timeout para 60 segundos
-            db.session.execute(db.text("SET statement_timeout = '60s';"))
-            db.session.execute(db.text("ALTER TABLE pagamento_parcelado ADD COLUMN IF NOT EXISTS servico_id INTEGER;"))
-            db.session.commit()
-            resultados.append("✅ Coluna servico_id adicionada")
-        except Exception as e:
-            db.session.rollback()
-            if "already exists" in str(e).lower() or "duplicate column" in str(e).lower():
-                resultados.append("⚠️ Coluna já existe")
-            else:
-                resultados.append(f"❌ Erro: {str(e)}")
-                return jsonify({'success': False, 'detalhes': resultados}), 500
+        # TRUNCATE (limpar tabela)
+        db.session.execute(db.text("TRUNCATE TABLE pagamento_parcelado CASCADE;"))
+        db.session.commit()
+        resultados.append("✅ Tabela pagamento_parcelado limpa")
+        
+        # ADD COLUMN
+        db.session.execute(db.text("ALTER TABLE pagamento_parcelado ADD COLUMN servico_id INTEGER;"))
+        db.session.commit()
+        resultados.append("✅ Coluna servico_id adicionada")
         
         # VALIDAR
         result = db.session.execute(db.text("""
@@ -6398,14 +6418,49 @@ def migration_sem_jwt():
         """))
         
         if result.fetchone():
-            resultados.append("✅ VALIDAÇÃO OK: Coluna existe!")
-            resultados.append("")
+            resultados.append("✅ VALIDAÇÃO OK!")
             resultados.append("🎉 MIGRATION CONCLUÍDA!")
-            resultados.append("")
-            resultados.append("⚠️ NOTA: FK e índice não foram criados para evitar timeout")
-            resultados.append("Mas o sistema já vai funcionar sem erros 500!")
-        else:
-            resultados.append("❌ FALHOU!")
+        
+        return jsonify({'success': True, 'detalhes': resultados}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'success': False}), 500
+
+
+@app.route('/admin/adicionar-coluna-sem-validacao', methods=['POST'])
+def adicionar_coluna_sem_validacao():
+    """Adiciona coluna sem validações (mais rápido)"""
+    try:
+        resultados = []
+        
+        # Aumentar timeout para 120 segundos
+        db.session.execute(db.text("SET statement_timeout = '120s';"))
+        
+        # Tentar com NOT VALID (não valida dados existentes - mais rápido)
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE pagamento_parcelado 
+                ADD COLUMN IF NOT EXISTS servico_id INTEGER;
+            """))
+            db.session.commit()
+            resultados.append("✅ Coluna adicionada")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Coluna já existe")
+            else:
+                raise e
+        
+        # VALIDAR
+        result = db.session.execute(db.text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'pagamento_parcelado' AND column_name = 'servico_id';
+        """))
+        
+        if result.fetchone():
+            resultados.append("✅ SUCESSO!")
+            resultados.append("🎉 MIGRATION CONCLUÍDA!")
         
         return jsonify({'success': True, 'detalhes': resultados}), 200
         
