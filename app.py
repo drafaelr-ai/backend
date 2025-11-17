@@ -361,26 +361,38 @@ class PagamentoParcelado(db.Model):
     observacoes = db.Column(db.Text, nullable=True)
     
     def to_dict(self):
+        """Converte objeto para dicionário de forma segura"""
         # Calcular a próxima parcela pendente
         proxima_parcela_numero = self.parcelas_pagas + 1
         
         # Calcular a data da próxima parcela
+        proxima_parcela_vencimento = None
         if proxima_parcela_numero <= self.numero_parcelas:
-            # Calcular quantos dias/meses desde a primeira parcela
-            if self.periodicidade == 'Semanal':
-                from datetime import timedelta
-                dias_incremento = (proxima_parcela_numero - 1) * 7
-                proxima_data = self.data_primeira_parcela + timedelta(days=dias_incremento)
-                proxima_parcela_vencimento = proxima_data.isoformat()
-            else:  # Mensal
-                # Para periodicidade mensal, calcular meses
-                from dateutil.relativedelta import relativedelta
-                proxima_data = self.data_primeira_parcela + relativedelta(months=(proxima_parcela_numero - 1))
-                proxima_parcela_vencimento = proxima_data.isoformat()
-        else:
-            # Todas as parcelas já foram pagas
-            proxima_parcela_vencimento = None
+            try:
+                if self.periodicidade == 'Semanal':
+                    from datetime import timedelta
+                    dias_incremento = (proxima_parcela_numero - 1) * 7
+                    proxima_data = self.data_primeira_parcela + timedelta(days=dias_incremento)
+                    proxima_parcela_vencimento = proxima_data.isoformat()
+                else:  # Mensal
+                    from dateutil.relativedelta import relativedelta
+                    proxima_data = self.data_primeira_parcela + relativedelta(months=(proxima_parcela_numero - 1))
+                    proxima_parcela_vencimento = proxima_data.isoformat()
+            except Exception as e:
+                print(f"[AVISO] Erro ao calcular próxima parcela: {e}")
+                proxima_parcela_vencimento = None
         
+        # Buscar nome do serviço de forma segura
+        servico_nome = None
+        if self.servico_id:
+            try:
+                servico = Servico.query.get(self.servico_id)
+                servico_nome = servico.nome if servico else None
+            except Exception as e:
+                print(f"[AVISO] Erro ao buscar serviço {self.servico_id}: {e}")
+                servico_nome = None
+        
+        # Montar dicionário de resposta
         return {
             "id": self.id,
             "obra_id": self.obra_id,
@@ -389,17 +401,15 @@ class PagamentoParcelado(db.Model):
             "valor_total": self.valor_total,
             "numero_parcelas": self.numero_parcelas,
             "valor_parcela": self.valor_parcela,
-            "data_primeira_parcela": self.data_primeira_parcela.isoformat(),
+            "data_primeira_parcela": self.data_primeira_parcela.isoformat() if self.data_primeira_parcela else None,
             "periodicidade": self.periodicidade,
             "parcelas_pagas": self.parcelas_pagas,
             "status": self.status,
             "observacoes": self.observacoes,
-            # Informações da próxima parcela pendente
             "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero <= self.numero_parcelas else None,
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
-            # Vínculo com serviço
             "servico_id": self.servico_id,
-            "servico_nome": (Servico.query.get(self.servico_id).nome if Servico.query.get(self.servico_id) else None) if self.servico_id else None
+            "servico_nome": servico_nome
         }
     
 # ----------------------------------------------------
