@@ -165,6 +165,9 @@ class Lancamento(db.Model):
     prioridade = db.Column(db.Integer, nullable=False, default=0) 
     fornecedor = db.Column(db.String(150), nullable=True)
     
+    # Segmento para vincular ao serviço (Material ou Mão de Obra)
+    segmento = db.Column(db.String(20), nullable=True, default='Material')
+    
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='lancamentos_vinculados', lazy=True)
     
@@ -181,6 +184,7 @@ class Lancamento(db.Model):
             "fornecedor": self.fornecedor, 
             "servico_id": self.servico_id, 
             "servico_nome": self.servico.nome if self.servico else None,
+            "segmento": self.segmento if self.segmento else 'Material',
             "lancamento_id": self.id 
         }
 
@@ -348,6 +352,9 @@ class PagamentoParcelado(db.Model):
     # Vínculo com serviço do cronograma (opcional)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     
+    # Segmento (Mão de Obra ou Material)
+    segmento = db.Column(db.String(20), nullable=True, default='Material')  # 'Material' ou 'Mão de Obra'
+    
     # Informações do parcelamento
     valor_total = db.Column(db.Float, nullable=False)
     numero_parcelas = db.Column(db.Integer, nullable=False)
@@ -398,6 +405,7 @@ class PagamentoParcelado(db.Model):
             "obra_id": self.obra_id,
             "descricao": self.descricao,
             "fornecedor": self.fornecedor,
+            "segmento": self.segmento if self.segmento else 'Material',
             "valor_total": self.valor_total,
             "numero_parcelas": self.numero_parcelas,
             "valor_parcela": self.valor_parcela,
@@ -3359,6 +3367,7 @@ def criar_pagamento_parcelado(obra_id):
             descricao=data.get('descricao'),
             fornecedor=data.get('fornecedor'),
             servico_id=data.get('servico_id'),  # Vínculo opcional com serviço
+            segmento=data.get('segmento', 'Material'),  # Material ou Mão de Obra
             valor_total=valor_total,
             numero_parcelas=numero_parcelas,
             valor_parcela=valor_parcela,
@@ -3662,6 +3671,8 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
 def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
     """Marca uma parcela individual como paga e cria lançamento no histórico"""
     try:
+        print(f"--- [LOG] Iniciando pagamento de parcela: obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id} ---")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
@@ -3670,11 +3681,14 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         if not pagamento or pagamento.obra_id != obra_id:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
+        print(f"--- [LOG] Pagamento encontrado: {pagamento.descricao}, servico_id={pagamento.servico_id} ---")
+        
         parcela = db.session.get(ParcelaIndividual, parcela_id)
         if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
             return jsonify({"erro": "Parcela não encontrada"}), 404
         
         if parcela.status == 'Pago':
+            print(f"--- [LOG] Parcela {parcela_id} já estava paga ---")
             return jsonify({"mensagem": "Parcela já está marcada como paga"}), 200
         
         data = request.get_json()
@@ -3687,8 +3701,13 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         ).date()
         parcela.forma_pagamento = data.get('forma_pagamento', None)
         
+        print(f"--- [LOG] Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas} marcada como paga em {parcela.data_pagamento} ---")
+        
         # ===== CRIAR LANÇAMENTO NO HISTÓRICO =====
         descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
+        segmento_lancamento = pagamento.segmento if pagamento.segmento else 'Material'
+        
+        print(f"--- [LOG] Criando lançamento: '{descricao_lancamento}', valor={parcela.valor_parcela}, servico_id={pagamento.servico_id}, segmento={segmento_lancamento} ---")
         
         novo_lancamento = Lancamento(
             obra_id=pagamento.obra_id,
@@ -3702,9 +3721,13 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
             pix=None,
             prioridade=0,
             fornecedor=pagamento.fornecedor,
-            servico_id=pagamento.servico_id
+            servico_id=pagamento.servico_id,
+            segmento=segmento_lancamento
         )
         db.session.add(novo_lancamento)
+        db.session.flush()  # Para obter o ID antes do commit
+        
+        print(f"--- [LOG] Lançamento criado com ID={novo_lancamento.id} ---")
         
         # Atualiza o contador de parcelas pagas no pagamento parcelado
         todas_parcelas = ParcelaIndividual.query.filter_by(
@@ -3714,13 +3737,16 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         parcelas_pagas_count = sum(1 for p in todas_parcelas if p.status == 'Pago')
         pagamento.parcelas_pagas = parcelas_pagas_count
         
+        print(f"--- [LOG] Total de parcelas pagas: {parcelas_pagas_count}/{pagamento.numero_parcelas} ---")
+        
         # Se todas foram pagas, atualiza status do pagamento
         if parcelas_pagas_count >= pagamento.numero_parcelas:
             pagamento.status = 'Concluído'
+            print(f"--- [LOG] Pagamento marcado como Concluído ---")
         
         db.session.commit()
         
-        print(f"--- [LOG] Parcela {parcela_id} marcada como paga e lançamento {novo_lancamento.id} criado ---")
+        print(f"--- [LOG] ✅ Parcela {parcela_id} marcada como paga e lançamento {novo_lancamento.id} criado com sucesso! ---")
         return jsonify({
             "mensagem": "Parcela marcada como paga e lançamento criado no histórico",
             "parcela": parcela.to_dict(),
