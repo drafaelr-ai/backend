@@ -418,7 +418,7 @@ class ParcelaIndividual(db.Model):
     __tablename__ = 'parcela_individual'
     
     id = db.Column(db.Integer, primary_key=True)
-    pagamento_parcelado_id = db.Column(db.Integer, db.ForeignKey('pagamento_parcelado.id'), nullable=False)
+    pagamento_parcelado_id = db.Column(db.Integer, db.ForeignKey('pagamento_parcelado_v2.id'), nullable=False)
     numero_parcela = db.Column(db.Integer, nullable=False)  # 1, 2, 3...
     valor_parcela = db.Column(db.Float, nullable=False)
     data_vencimento = db.Column(db.Date, nullable=False)
@@ -427,7 +427,7 @@ class ParcelaIndividual(db.Model):
     forma_pagamento = db.Column(db.String(50), nullable=True)  # PIX, Boleto, TED, Dinheiro, etc
     observacao = db.Column(db.String(255), nullable=True)
     
-    pagamento_parcelado = db.relationship('pagamento_parcelado_v2', backref='parcelas_individuais')
+    pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
     
     def to_dict(self):
         return {
