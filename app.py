@@ -399,7 +399,7 @@ class PagamentoParcelado(db.Model):
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
             # Vínculo com serviço
             "servico_id": self.servico_id,
-            "servico_nome": Servico.query.get(self.servico_id).nome if self.servico_id else None
+            "servico_nome": (Servico.query.get(self.servico_id).nome if Servico.query.get(self.servico_id) else None) if self.servico_id else None
         }
     
 # ----------------------------------------------------
