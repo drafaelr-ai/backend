@@ -6495,6 +6495,223 @@ def limpar_e_adicionar_coluna():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e), 'success': False}), 500
+
+# ==============================================================================
+# ENDPOINTS DE DIAGNÓSTICO E CORREÇÃO - servico_id em Pagamento Parcelado
+# ==============================================================================
+
+@app.route('/admin/diagnostico-servico-id-parcelado', methods=['GET'])
+@jwt_required()
+@check_permission(roles=['master'])
+def diagnostico_servico_id_parcelado():
+    """
+    DIAGNÓSTICO: Verifica pagamentos parcelados sem servico_id
+    Apenas usuários MASTER podem executar
+    """
+    try:
+        # 1. Verificar se coluna existe
+        result_col = db.session.execute(db.text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'pagamento_parcelado_v2' AND column_name = 'servico_id';
+        """))
+        coluna_existe = result_col.fetchone() is not None
+        
+        if not coluna_existe:
+            return jsonify({
+                'erro': 'Coluna servico_id NÃO EXISTE na tabela pagamento_parcelado_v2',
+                'solucao': 'Execute a migration: /admin/migrate-add-servico-id'
+            }), 400
+        
+        # 2. Buscar todos os pagamentos parcelados
+        todos = PagamentoParcelado.query.all()
+        
+        # 3. Separar em categorias
+        com_servico = []
+        sem_servico = []
+        
+        for pag in todos:
+            info = {
+                'id': pag.id,
+                'obra_id': pag.obra_id,
+                'descricao': pag.descricao,
+                'fornecedor': pag.fornecedor,
+                'servico_id': pag.servico_id,
+                'servico_nome': None
+            }
+            
+            if pag.servico_id:
+                servico = Servico.query.get(pag.servico_id)
+                info['servico_nome'] = servico.nome if servico else 'SERVIÇO NÃO ENCONTRADO!'
+                com_servico.append(info)
+            else:
+                # Tentar sugerir um serviço
+                servicos_obra = Servico.query.filter_by(obra_id=pag.obra_id).all()
+                sugestoes = []
+                for s in servicos_obra:
+                    # Verifica se a descrição do pagamento menciona o serviço
+                    if s.nome.lower() in pag.descricao.lower() or pag.descricao.lower() in s.nome.lower():
+                        sugestoes.append({
+                            'servico_id': s.id,
+                            'servico_nome': s.nome
+                        })
+                
+                info['sugestoes'] = sugestoes
+                sem_servico.append(info)
+        
+        return jsonify({
+            'coluna_existe': True,
+            'total_pagamentos': len(todos),
+            'com_servico': {
+                'quantidade': len(com_servico),
+                'lista': com_servico
+            },
+            'sem_servico': {
+                'quantidade': len(sem_servico),
+                'lista': sem_servico,
+                'problema': 'Estes pagamentos NÃO vão vincular lançamentos aos serviços ao serem pagos!'
+            },
+            'solucao': 'Use o endpoint /admin/corrigir-servico-id-parcelado para corrigir'
+        }), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[ERRO] diagnostico_servico_id_parcelado: {str(e)}\n{error_details}")
+        return jsonify({'erro': str(e), 'details': error_details}), 500
+
+
+@app.route('/admin/corrigir-servico-id-parcelado', methods=['POST'])
+@jwt_required()
+@check_permission(roles=['master'])
+def corrigir_servico_id_parcelado():
+    """
+    CORREÇÃO: Atualiza servico_id de um pagamento parcelado
+    Body: { "pagamento_id": 123, "servico_id": 456 }
+    """
+    try:
+        data = request.get_json()
+        pagamento_id = data.get('pagamento_id')
+        servico_id = data.get('servico_id')
+        
+        if not pagamento_id:
+            return jsonify({'erro': 'pagamento_id é obrigatório'}), 400
+        
+        pagamento = PagamentoParcelado.query.get(pagamento_id)
+        if not pagamento:
+            return jsonify({'erro': 'Pagamento não encontrado'}), 404
+        
+        # Se servico_id for None, remove o vínculo
+        if servico_id:
+            servico = Servico.query.get(servico_id)
+            if not servico:
+                return jsonify({'erro': 'Serviço não encontrado'}), 404
+            
+            if servico.obra_id != pagamento.obra_id:
+                return jsonify({'erro': 'Serviço não pertence à mesma obra do pagamento'}), 400
+        
+        servico_anterior = pagamento.servico_id
+        pagamento.servico_id = servico_id
+        db.session.commit()
+        
+        servico_nome = None
+        if servico_id:
+            servico = Servico.query.get(servico_id)
+            servico_nome = servico.nome if servico else None
+        
+        print(f"[LOG] Pagamento {pagamento_id} atualizado: servico_id {servico_anterior} → {servico_id}")
+        
+        return jsonify({
+            'mensagem': 'Pagamento atualizado com sucesso',
+            'pagamento_id': pagamento_id,
+            'servico_id_anterior': servico_anterior,
+            'servico_id_novo': servico_id,
+            'servico_nome': servico_nome,
+            'aviso': 'Parcelas já pagas NÃO serão atualizadas! Apenas parcelas futuras terão o novo vínculo.'
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] corrigir_servico_id_parcelado: {str(e)}\n{error_details}")
+        return jsonify({'erro': str(e), 'details': error_details}), 500
+
+
+@app.route('/admin/corrigir-servico-id-lote', methods=['POST'])
+@jwt_required()
+@check_permission(roles=['master'])
+def corrigir_servico_id_lote():
+    """
+    CORREÇÃO EM LOTE: Atualiza servico_id de múltiplos pagamentos parcelados
+    Body: { 
+        "correcoes": [
+            {"pagamento_id": 123, "servico_id": 456},
+            {"pagamento_id": 789, "servico_id": 101}
+        ]
+    }
+    """
+    try:
+        data = request.get_json()
+        correcoes = data.get('correcoes', [])
+        
+        if not correcoes:
+            return jsonify({'erro': 'Lista de correções vazia'}), 400
+        
+        resultados = []
+        erros = []
+        
+        for correcao in correcoes:
+            pagamento_id = correcao.get('pagamento_id')
+            servico_id = correcao.get('servico_id')
+            
+            try:
+                pagamento = PagamentoParcelado.query.get(pagamento_id)
+                if not pagamento:
+                    erros.append(f"Pagamento {pagamento_id} não encontrado")
+                    continue
+                
+                if servico_id:
+                    servico = Servico.query.get(servico_id)
+                    if not servico:
+                        erros.append(f"Serviço {servico_id} não encontrado")
+                        continue
+                    
+                    if servico.obra_id != pagamento.obra_id:
+                        erros.append(f"Serviço {servico_id} não pertence à mesma obra do pagamento {pagamento_id}")
+                        continue
+                
+                servico_anterior = pagamento.servico_id
+                pagamento.servico_id = servico_id
+                
+                resultados.append({
+                    'pagamento_id': pagamento_id,
+                    'servico_id_anterior': servico_anterior,
+                    'servico_id_novo': servico_id,
+                    'status': 'OK'
+                })
+                
+            except Exception as e:
+                erros.append(f"Erro ao atualizar pagamento {pagamento_id}: {str(e)}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'mensagem': f'{len(resultados)} pagamentos atualizados com sucesso',
+            'total_processado': len(correcoes),
+            'sucessos': len(resultados),
+            'erros_count': len(erros),
+            'resultados': resultados,
+            'erros': erros
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] corrigir_servico_id_lote: {str(e)}\n{error_details}")
+        return jsonify({'erro': str(e), 'details': error_details}), 500
+
+# ==============================================================================
+# FIM DOS ENDPOINTS DE DIAGNÓSTICO E CORREÇÃO
+# ==============================================================================
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
