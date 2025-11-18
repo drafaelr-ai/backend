@@ -3783,16 +3783,85 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
 
 
 # ==============================================================================
-# ROTA ALTERNATIVA: Pagar Parcela Individual (caminho simplificado)
+# ROTAS SIMPLIFICADAS PARA PAGAMENTOS PARCELADOS (COMPATÍVEL COM FRONTEND)
 # ==============================================================================
+
+# -----------------------------------------------------------------------------
+# LISTAR parcelas de um pagamento parcelado
+# GET /parcelados/<id>/parcelas
+# -----------------------------------------------------------------------------
+@app.route('/parcelados/<int:parcelado_id>/parcelas', methods=['GET'])
+@jwt_required()
+def listar_parcelas_parcelado(parcelado_id):
+    """Lista todas as parcelas de um pagamento parcelado"""
+    try:
+        # Buscar pagamento parcelado
+        pagamento = PagamentoParcelado.query.get(parcelado_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento parcelado não encontrado"}), 404
+        
+        # Verificar acesso
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, pagamento.obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Buscar parcelas
+        parcelas = ParcelaIndividual.query.filter_by(
+            pagamento_parcelado_id=parcelado_id
+        ).order_by(ParcelaIndividual.numero_parcela).all()
+        
+        return jsonify([p.to_dict() for p in parcelas]), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[ERRO] listar_parcelas_parcelado: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+# -----------------------------------------------------------------------------
+# BUSCAR uma parcela específica
+# GET /parcelas/<id>
+# -----------------------------------------------------------------------------
+@app.route('/parcelas/<int:parcela_id>', methods=['GET'])
+@jwt_required()
+def buscar_parcela(parcela_id):
+    """Retorna detalhes de uma parcela individual"""
+    try:
+        parcela = ParcelaIndividual.query.get(parcela_id)
+        if not parcela:
+            return jsonify({"erro": "Parcela não encontrada"}), 404
+        
+        # Buscar pagamento para verificar acesso
+        pagamento = PagamentoParcelado.query.get(parcela.pagamento_parcelado_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento parcelado não encontrado"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, pagamento.obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        return jsonify(parcela.to_dict()), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[ERRO] buscar_parcela: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+# -----------------------------------------------------------------------------
+# PAGAR PARCELA - Rota simplificada (PRINCIPAL)
+# POST /obras/<obra_id>/parcelas/<parcela_id>/pagar
+# -----------------------------------------------------------------------------
 @app.route('/obras/<int:obra_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
 @jwt_required()
 def pagar_parcela_simplificado(obra_id, parcela_id):
     """
-    Marca uma parcela individual como paga (rota simplificada)
-    Usada pelo frontend quando chama /obras/{obraId}/parcelas/{parcelaId}/pagar
+    Marca uma parcela individual como paga e cria lançamento no histórico
+    Rota simplificada compatível com o frontend
     """
     try:
+        print(f"[LOG] Iniciando pagamento de parcela: obra_id={obra_id}, parcela_id={parcela_id}")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
@@ -3800,20 +3869,145 @@ def pagar_parcela_simplificado(obra_id, parcela_id):
         # Buscar a parcela
         parcela = ParcelaIndividual.query.get(parcela_id)
         if not parcela:
+            print(f"[ERRO] Parcela {parcela_id} não encontrada")
             return jsonify({"erro": "Parcela não encontrada"}), 404
+        
+        print(f"[LOG] Parcela encontrada: {parcela.numero_parcela}, status={parcela.status}")
+        
+        # Verificar se já está paga
+        if parcela.status == 'Pago':
+            print(f"[LOG] Parcela {parcela_id} já estava paga")
+            return jsonify({"mensagem": "Parcela já está marcada como paga"}), 200
         
         # Buscar o pagamento parcelado
         pagamento = PagamentoParcelado.query.get(parcela.pagamento_parcelado_id)
-        if not pagamento or pagamento.obra_id != obra_id:
+        if not pagamento:
+            print(f"[ERRO] Pagamento parcelado ID {parcela.pagamento_parcelado_id} não encontrado")
+            return jsonify({"erro": "Pagamento parcelado não encontrado"}), 404
+        
+        if pagamento.obra_id != obra_id:
+            print(f"[ERRO] Pagamento não pertence à obra {obra_id}")
             return jsonify({"erro": "Pagamento não pertence a esta obra"}), 404
         
-        # Redirecionar para a função principal
-        return marcar_parcela_paga(obra_id, pagamento.id, parcela_id)
+        print(f"[LOG] Pagamento encontrado: {pagamento.descricao}, servico_id={pagamento.servico_id}")
         
+        # Pegar dados do request
+        data = request.get_json() or {}
+        
+        # Marcar parcela como paga
+        parcela.status = 'Pago'
+        parcela.data_pagamento = datetime.strptime(
+            data.get('data_pagamento', date.today().isoformat()), 
+            '%Y-%m-%d'
+        ).date()
+        parcela.forma_pagamento = data.get('forma_pagamento', None)
+        
+        print(f"[LOG] Parcela marcada como paga em {parcela.data_pagamento}")
+        
+        # ===== CRIAR LANÇAMENTO NO HISTÓRICO =====
+        descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
+        
+        print(f"[LOG] Criando lançamento: '{descricao_lancamento}', valor={parcela.valor_parcela}, servico_id={pagamento.servico_id}")
+        
+        # Criar lançamento
+        novo_lancamento = Lancamento(
+            obra_id=pagamento.obra_id,
+            tipo='Despesa',
+            descricao=descricao_lancamento,
+            valor_total=parcela.valor_parcela,
+            valor_pago=parcela.valor_parcela,
+            data=parcela.data_pagamento,
+            data_vencimento=parcela.data_vencimento,
+            status='Pago',
+            pix=None,
+            prioridade=0,
+            fornecedor=pagamento.fornecedor,
+            servico_id=pagamento.servico_id  # CRÍTICO: Vincula ao serviço
+        )
+        db.session.add(novo_lancamento)
+        db.session.flush()
+        
+        print(f"[LOG] Lançamento criado com ID={novo_lancamento.id}")
+        
+        # Atualizar contador de parcelas pagas
+        todas_parcelas = ParcelaIndividual.query.filter_by(
+            pagamento_parcelado_id=pagamento.id
+        ).all()
+        
+        parcelas_pagas_count = sum(1 for p in todas_parcelas if p.status == 'Pago')
+        pagamento.parcelas_pagas = parcelas_pagas_count
+        
+        print(f"[LOG] Total de parcelas pagas: {parcelas_pagas_count}/{pagamento.numero_parcelas}")
+        
+        # Se todas foram pagas, marcar como concluído
+        if parcelas_pagas_count >= pagamento.numero_parcelas:
+            pagamento.status = 'Concluído'
+            print(f"[LOG] Pagamento marcado como Concluído")
+        
+        db.session.commit()
+        
+        print(f"[LOG] ✅ Parcela {parcela_id} paga com sucesso! Lançamento ID={novo_lancamento.id}")
+        
+        return jsonify({
+            "mensagem": "Parcela marcada como paga e lançamento criado no histórico",
+            "parcela": parcela.to_dict(),
+            "pagamento": pagamento.to_dict(),
+            "lancamento_id": novo_lancamento.id
+        }), 200
+    
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
         print(f"[ERRO] pagar_parcela_simplificado: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e), "details": str(error_details)}), 500
+
+
+# -----------------------------------------------------------------------------
+# EDITAR PARCELA INDIVIDUAL
+# PUT /parcelas/<id>
+# -----------------------------------------------------------------------------
+@app.route('/parcelas/<int:parcela_id>', methods=['PUT'])
+@jwt_required()
+def editar_parcela_individual_simplificado(parcela_id):
+    """Edita uma parcela individual"""
+    try:
+        parcela = ParcelaIndividual.query.get(parcela_id)
+        if not parcela:
+            return jsonify({"erro": "Parcela não encontrada"}), 404
+        
+        # Buscar pagamento para verificar acesso
+        pagamento = PagamentoParcelado.query.get(parcela.pagamento_parcelado_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, pagamento.obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Atualizar dados
+        data = request.get_json()
+        
+        if 'valor_parcela' in data:
+            parcela.valor_parcela = float(data['valor_parcela'])
+        
+        if 'data_vencimento' in data:
+            parcela.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        
+        if 'forma_pagamento' in data:
+            parcela.forma_pagamento = data['forma_pagamento']
+        
+        if 'observacao' in data:
+            parcela.observacao = data['observacao']
+        
+        db.session.commit()
+        
+        print(f"[LOG] Parcela {parcela_id} editada com sucesso")
+        return jsonify(parcela.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] editar_parcela_individual_simplificado: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
