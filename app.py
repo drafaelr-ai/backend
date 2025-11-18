@@ -358,8 +358,8 @@ class PagamentoParcelado(db.Model):
     # Vínculo com serviço do cronograma (opcional)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     
-    # Segmento (Mão de Obra ou Material)
-    segmento = db.Column(db.String(20), nullable=True)
+    # NOTA: Coluna 'segmento' não está definida no modelo para evitar erros
+    # Será adicionada manualmente via SQL quando necessário
     
     # Informações do parcelamento
     valor_total = db.Column(db.Float, nullable=False)
@@ -3379,7 +3379,7 @@ def criar_pagamento_parcelado(obra_id):
             descricao=data.get('descricao'),
             fornecedor=data.get('fornecedor'),
             servico_id=data.get('servico_id'),  # Vínculo opcional com serviço
-            segmento=data.get('segmento', 'Material'),  # Material ou Mão de Obra
+            # segmento será adicionado quando a coluna existir no banco
             valor_total=valor_total,
             numero_parcelas=numero_parcelas,
             valor_parcela=valor_parcela,
