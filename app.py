@@ -1,4 +1,8 @@
-# Forçando novo deploy com correções 24/10
+# ============================================================================
+# VERSÃO CORRIGIDA - 18/NOV/2025 - SEM COLUNA SEGMENTO
+# Esta versão REMOVE a definição de coluna segmento dos modelos
+# para evitar erro "column segmento does not exist"
+# ============================================================================
 import os
 import traceback  # Importado para log de erros detalhado
 import re  # Importado para o CORS com regex
