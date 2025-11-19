@@ -28,7 +28,95 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from functools import wraps
 
 print("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
+# ============================================================================
+# AUTO-MIGRATION - Roda automaticamente na inicialização
+# ============================================================================
+import sys
 
+def run_auto_migration():
+    """Executa migration automaticamente no startup"""
+    print("=" * 70)
+    print("🔧 AUTO-MIGRATION: Verificando estrutura do banco...")
+    print("=" * 70)
+    
+    try:
+        # Importar aqui para evitar problemas circulares
+        import psycopg2
+        from urllib.parse import quote_plus
+        
+        # Usar mesma connection string do app
+        db_password = os.environ.get('DB_PASSWORD')
+        if not db_password:
+            print("⚠️ DB_PASSWORD não encontrada, pulando migration")
+            return
+        
+        encoded_password = quote_plus(db_password)
+        url = f"postgresql://postgres.kwmuiviyqjcxawuiqkrl:{encoded_password}@aws-1-sa-east-1.pooler.supabase.com:6543/postgres?sslmode=require"
+        
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        
+        # Verificar se colunas já existem
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'pagamento_futuro' 
+            AND column_name IN ('servico_id', 'tipo');
+        """)
+        colunas_existentes = [row[0] for row in cur.fetchall()]
+        
+        if 'servico_id' in colunas_existentes and 'tipo' in colunas_existentes:
+            print("✅ Colunas já existem, migration não necessária")
+            cur.close()
+            conn.close()
+            return
+        
+        print("📝 Colunas não encontradas, executando migration...")
+        
+        # Adicionar servico_id
+        if 'servico_id' not in colunas_existentes:
+            cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN servico_id INTEGER;")
+            print("✅ Coluna servico_id adicionada")
+        
+        # Adicionar tipo
+        if 'tipo' not in colunas_existentes:
+            cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN tipo VARCHAR(50);")
+            print("✅ Coluna tipo adicionada")
+        
+        # Criar foreign key (ignora se já existe)
+        try:
+            cur.execute("""
+                ALTER TABLE pagamento_futuro 
+                ADD CONSTRAINT fk_pagamento_futuro_servico 
+                FOREIGN KEY (servico_id) REFERENCES servico(id) ON DELETE SET NULL;
+            """)
+            print("✅ Foreign key criada")
+        except:
+            print("⚠️ Foreign key já existe")
+            conn.rollback()
+        
+        # Criar índice
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pagamento_futuro_servico ON pagamento_futuro(servico_id);")
+        print("✅ Índice criado")
+        
+        conn.commit()
+        print("🎉 AUTO-MIGRATION CONCLUÍDA COM SUCESSO!")
+        
+        cur.close()
+        conn.close()
+        
+    except Exception as e:
+        print(f"❌ Erro na auto-migration: {e}")
+        import traceback
+        traceback.print_exc()
+
+# Executar migration automaticamente
+print("\n--- [LOG] Executando auto-migration antes de iniciar o app ---")
+run_auto_migration()
+print("--- [LOG] Auto-migration concluída, iniciando app.py ---\n")
+
+# ============================================================================
+# CONTINUA O CÓDIGO NORMAL DO app.py AQUI
+# ============================================================================
 app = Flask(__name__)
 
 # --- CORS global canônico ---
