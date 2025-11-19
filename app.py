@@ -3566,7 +3566,13 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
 def deletar_pagamento_parcelado(obra_id, pagamento_id):
-    """Deleta um pagamento parcelado e todas suas parcelas individuais"""
+    """
+    Deleta um pagamento parcelado e TODOS os registros vinculados:
+    - Lançamentos criados por parcelas pagas
+    - Ajusta/deleta PagamentoServico
+    - Parcelas individuais
+    - O pagamento parcelado em si
+    """
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3576,22 +3582,100 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         if not pagamento or pagamento.obra_id != obra_id:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
-        # CORREÇÃO: Deletar todas as parcelas individuais primeiro
+        print(f"\n{'='*80}")
+        print(f"🗑️ INÍCIO: Deletando pagamento parcelado ID={pagamento_id}")
+        print(f"   Descrição: {pagamento.descricao}")
+        print(f"   Vinculado ao serviço: {pagamento.servico_id}")
+        print(f"{'='*80}")
+        
+        # 1. Buscar todas as parcelas
         parcelas = ParcelaIndividual.query.filter_by(pagamento_parcelado_id=pagamento_id).all()
+        print(f"   📋 Total de parcelas: {len(parcelas)}")
+        
+        lancamentos_deletados = 0
+        valor_total_ajustado = 0.0
+        
+        # 2. Para cada parcela, deletar lançamentos associados
+        for parcela in parcelas:
+            if parcela.status == 'Pago':
+                # Montar descrição do lançamento (igual à criação)
+                descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
+                
+                # Buscar e deletar lançamento
+                lancamento = Lancamento.query.filter_by(
+                    obra_id=obra_id,
+                    descricao=descricao_lancamento,
+                    valor_total=parcela.valor_parcela,
+                    servico_id=pagamento.servico_id
+                ).first()
+                
+                if lancamento:
+                    db.session.delete(lancamento)
+                    lancamentos_deletados += 1
+                    valor_total_ajustado += parcela.valor_parcela
+                    print(f"      ✅ Lançamento deletado: '{descricao_lancamento}' (R$ {parcela.valor_parcela})")
+        
+        # 3. Ajustar ou deletar PagamentoServico se houver vínculo com serviço
+        if pagamento.servico_id and valor_total_ajustado > 0:
+            # Determinar tipo de pagamento
+            tipo_pag = 'material'
+            if hasattr(pagamento, 'segmento') and pagamento.segmento == 'Mão de Obra':
+                tipo_pag = 'mao_de_obra'
+            
+            # Buscar PagamentoServico
+            pagamento_servico = PagamentoServico.query.filter_by(
+                servico_id=pagamento.servico_id,
+                fornecedor=pagamento.fornecedor,
+                tipo_pagamento=tipo_pag
+            ).first()
+            
+            if pagamento_servico:
+                # Subtrair valor pago
+                pagamento_servico.valor_pago -= valor_total_ajustado
+                pagamento_servico.valor_total -= valor_total_ajustado
+                
+                # Se chegou a zero, deletar o registro
+                if pagamento_servico.valor_pago <= 0:
+                    db.session.delete(pagamento_servico)
+                    print(f"      🗑️ PagamentoServico deletado (valor zerado)")
+                else:
+                    print(f"      ✅ PagamentoServico ajustado: R$ {pagamento_servico.valor_pago}")
+        
+        # 4. Deletar todas as parcelas individuais
         for parcela in parcelas:
             db.session.delete(parcela)
+        print(f"   🗑️ {len(parcelas)} parcela(s) deletada(s)")
         
-        # Agora pode deletar o pagamento parcelado
+        # 5. Finalmente, deletar o pagamento parcelado
         db.session.delete(pagamento)
+        
+        # Commit de tudo
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento parcelado {pagamento_id} e {len(parcelas)} parcela(s) deletados da obra {obra_id} ---")
-        return jsonify({"mensagem": "Pagamento parcelado deletado com sucesso"}), 200
+        print(f"   ✅ SUCESSO: Pagamento parcelado deletado completamente")
+        print(f"      - {lancamentos_deletados} lançamento(s) deletado(s)")
+        print(f"      - {len(parcelas)} parcela(s) deletada(s)")
+        print(f"      - Valor total ajustado: R$ {valor_total_ajustado:.2f}")
+        print(f"{'='*80}\n")
+        
+        return jsonify({
+            "mensagem": "Pagamento parcelado deletado com sucesso",
+            "detalhes": {
+                "parcelas_deletadas": len(parcelas),
+                "lancamentos_deletados": lancamentos_deletados,
+                "valor_ajustado": valor_total_ajustado
+            }
+        }), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
+        print(f"\n{'='*80}")
+        print(f"❌ ERRO ao deletar pagamento parcelado {pagamento_id}:")
+        print(f"   {str(e)}")
+        print(f"\nStack trace:")
+        print(error_details)
+        print(f"{'='*80}\n")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- TABELA DE PREVISÕES (CÁLCULO) ---
