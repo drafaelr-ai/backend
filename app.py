@@ -31,7 +31,7 @@ print("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
 def run_auto_migration():
     """Executa migration automaticamente no startup"""
     print("=" * 70)
-    print("🔧 AUTO-MIGRATION: Verificando estrutura do banco...")
+    print("🔧 AUTO-MIGRATION: Corrigindo estrutura do banco...")
     print("=" * 70)
     
     try:
@@ -48,48 +48,32 @@ def run_auto_migration():
         
         conn = psycopg2.connect(url)
         cur = conn.cursor()
-        
-        # AUMENTAR TIMEOUT
         cur.execute("SET statement_timeout = '900s';")
         
-        # 1. Verificar colunas em pagamento_futuro (Lógica existente)
-        print("📝 Verificando pagamento_futuro...")
-        cur.execute("""
-            SELECT column_name FROM information_schema.columns 
-            WHERE table_name = 'pagamento_futuro' 
-            AND column_name IN ('servico_id', 'tipo');
-        """)
-        colunas_futuro = [row[0] for row in cur.fetchall()]
-        
-        if 'servico_id' not in colunas_futuro:
+        # 1. Verificar colunas em pagamento_futuro
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'servico_id';")
+        if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN servico_id INTEGER;")
-            print("✅ Coluna servico_id adicionada em pagamento_futuro")
-        
-        if 'tipo' not in colunas_futuro:
+            print("✅ Coluna servico_id adicionada")
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'tipo';")
+        if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN tipo VARCHAR(50);")
-            print("✅ Coluna tipo adicionada em pagamento_futuro")
-
-        # 2. Verificar coluna segmento em pagamento_parcelado_v2 (Lógica existente)
-        print("📝 Verificando pagamento_parcelado_v2...")
-        cur.execute("""
-            SELECT column_name FROM information_schema.columns 
-            WHERE table_name = 'pagamento_parcelado_v2' 
-            AND column_name = 'segmento';
-        """)
+            print("✅ Coluna tipo adicionada")
+        # 2. Verificar coluna segmento em pagamento_parcelado_v2
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_parcelado_v2' AND column_name = 'segmento';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_parcelado_v2 ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';")
-            print("✅ Coluna segmento adicionada em pagamento_parcelado_v2")
-
+            print("✅ Coluna segmento adicionada")
         # =================================================================
-        # 3. CRÍTICO: SEMPRE DROPAR E RECRIAR PARCELA_INDIVIDUAL
+        # 3. CORREÇÃO DO ERRO DE FOREIGN KEY (CRÍTICO)
         # =================================================================
-        print("📝 Forçando recriação de parcela_individual...")
+        print("🔄 Forçando recriação da tabela parcela_individual para corrigir FK...")
         
-        # SEMPRE DROPAR (sem verificações)
+        # Dropamos a tabela para garantir que ela perca o vínculo com a tabela antiga (pagamento_parcelado)
         cur.execute("DROP TABLE IF EXISTS parcela_individual CASCADE;")
-        print("🗑️ Tabela parcela_individual dropada (se existia)")
         
-        # CRIAR DO ZERO
+        # Recriamos apontando explicitamente para pagamento_parcelado_v2
+        print("📝 Criando tabela parcela_individual correta...")
         cur.execute("""
             CREATE TABLE parcela_individual (
                 id SERIAL PRIMARY KEY,
@@ -101,18 +85,18 @@ def run_auto_migration():
                 data_pagamento DATE,
                 forma_pagamento VARCHAR(50),
                 observacao VARCHAR(255),
-                CONSTRAINT fk_pagamento_parcelado 
+                CONSTRAINT fk_pagamento_parcelado_v2 
                     FOREIGN KEY(pagamento_parcelado_id) 
                     REFERENCES pagamento_parcelado_v2(id)
                     ON DELETE CASCADE
             );
         """)
-        print("✅ Tabela parcela_individual criada com FK CORRETA para pagamento_parcelado_v2!")
+        print("✅ Tabela parcela_individual recriada vinculada a pagamento_parcelado_v2!")
             
         conn.commit()
-        print("🎉 AUTO-MIGRATION CONCLUÍDA!")
         cur.close()
         conn.close()
+        print("🎉 AUTO-MIGRATION CONCLUÍDA!")
         
     except Exception as e:
         print(f"❌ Erro na auto-migration: {e}")
