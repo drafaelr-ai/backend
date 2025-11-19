@@ -107,6 +107,12 @@ def run_auto_migration():
         print(f"❌ Erro na auto-migration: {e}")
         import traceback
         traceback.print_exc()
+
+# Executar migration automaticamente
+print("\n--- [LOG] Executando auto-migration antes de iniciar o app ---")
+run_auto_migration()
+print("--- [LOG] Auto-migration concluída, iniciando app.py ---\n")
+
 app = Flask(__name__)
 
 # --- CORS global canônico ---
