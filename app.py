@@ -3502,8 +3502,8 @@ def criar_pagamento_parcelado(obra_id):
         novo_pagamento = PagamentoParcelado(
             obra_id=obra_id,
             descricao=data.get('descricao'),
-            fornecedor=data.get('fornecedor'),
-            servico_id=data.get('servico_id'),  # Vínculo opcional com serviço
+            fornecedor=data.get('fornecedor') or None,
+            servico_id=data.get('servico_id') or None,  # Vínculo opcional com serviço (converte "" para None)
             # segmento será adicionado quando a coluna existir no banco
             valor_total=valor_total,
             numero_parcelas=numero_parcelas,
@@ -3512,7 +3512,7 @@ def criar_pagamento_parcelado(obra_id):
             periodicidade=periodicidade,
             parcelas_pagas=0,
             status='Ativo',
-            observacoes=data.get('observacoes')
+            observacoes=data.get('observacoes') or None
         )
         
         db.session.add(novo_pagamento)
