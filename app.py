@@ -338,6 +338,10 @@ class PagamentoFuturo(db.Model):
     pix = db.Column(db.String(100), nullable=True)  # Chave PIX para pagamento
     observacoes = db.Column(db.Text, nullable=True)
     
+    # NOVOS CAMPOS: Para vincular pagamentos futuros a serviços
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
+    tipo = db.Column(db.String(50), nullable=True)  # 'Mão de Obra', 'Material', ou 'Despesa'
+    
     def to_dict(self):
         return {
             "id": self.id,
@@ -348,7 +352,9 @@ class PagamentoFuturo(db.Model):
             "status": self.status,
             "fornecedor": self.fornecedor,
             "pix": self.pix,
-            "observacoes": self.observacoes
+            "observacoes": self.observacoes,
+            "servico_id": self.servico_id,
+            "tipo": self.tipo
         }
 
 class PagamentoParcelado(db.Model):
@@ -1365,276 +1371,288 @@ def deletar_servico(servico_id):
         print(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
-@app.route('/servicos/<int:servico_id>/pagamentos', methods=['POST', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master']) 
-def add_pagamento_servico(servico_id):
-    # ... (código atualizado para valor_total/valor_pago) ...
-    print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos (POST) acessada ---")
-    try:
-        user = get_current_user()
-        servico = Servico.query.get_or_404(servico_id)
+# ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
+# @app.route('/servicos/<int:servico_id>/pagamentos', methods=['POST', 'OPTIONS'])
+# @check_permission(roles=['administrador', 'master']) 
+# def add_pagamento_servico(servico_id):
+#     # ... (código atualizado para valor_total/valor_pago) ...
+#     print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos (POST) acessada ---")
+#     try:
+#         user = get_current_user()
+#         servico = Servico.query.get_or_404(servico_id)
+# 
+#         if not user_has_access_to_obra(user, servico.obra_id):
+#             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+# 
+#         dados = request.json
+#         
+#         tipo_pagamento = dados.get('tipo_pagamento')
+#         if tipo_pagamento not in ['mao_de_obra', 'material']:
+#             return jsonify({"erro": "O 'tipo_pagamento' é obrigatório e deve ser 'mao_de_obra' ou 'material'"}), 400
+#             
+#         valor_total = float(dados['valor'])
+#         status = dados.get('status', 'Pago')
+#         valor_pago = valor_total if status == 'Pago' else 0.0
+# 
+#         novo_pagamento = PagamentoServico(
+#             servico_id=servico_id,
+#             data=date.fromisoformat(dados['data']),
+#             data_vencimento=date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
+#             valor_total=valor_total, 
+#             valor_pago=valor_pago, 
+#             status=status,
+#             tipo_pagamento=tipo_pagamento,
+#             forma_pagamento=dados.get('forma_pagamento'),
+#             pix=dados.get('pix'),  # Chave PIX do pagamento
+#             prioridade=int(dados.get('prioridade', 0)),
+#             fornecedor=dados.get('fornecedor') 
+#         )
+#         db.session.add(novo_pagamento)
+#         db.session.commit()
+#         servico_atualizado = Servico.query.get(servico_id)
+#         return jsonify(servico_atualizado.to_dict())
+#     except Exception as e:
+#         db.session.rollback()
+#         error_details = traceback.format_exc()
+#         print(f"--- [ERRO] /servicos/{servico_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
+#         return jsonify({"erro": str(e), "details": error_details}), 500
+# ===============================================================================
 
-        if not user_has_access_to_obra(user, servico.obra_id):
-            return jsonify({"erro": "Acesso negado a esta obra."}), 403
-
-        dados = request.json
-        
-        tipo_pagamento = dados.get('tipo_pagamento')
-        if tipo_pagamento not in ['mao_de_obra', 'material']:
-            return jsonify({"erro": "O 'tipo_pagamento' é obrigatório e deve ser 'mao_de_obra' ou 'material'"}), 400
-            
-        valor_total = float(dados['valor'])
-        status = dados.get('status', 'Pago')
-        valor_pago = valor_total if status == 'Pago' else 0.0
-
-        novo_pagamento = PagamentoServico(
-            servico_id=servico_id,
-            data=date.fromisoformat(dados['data']),
-            data_vencimento=date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
-            valor_total=valor_total, 
-            valor_pago=valor_pago, 
-            status=status,
-            tipo_pagamento=tipo_pagamento,
-            forma_pagamento=dados.get('forma_pagamento'),
-            pix=dados.get('pix'),  # Chave PIX do pagamento
-            prioridade=int(dados.get('prioridade', 0)),
-            fornecedor=dados.get('fornecedor') 
-        )
-        db.session.add(novo_pagamento)
-        db.session.commit()
-        servico_atualizado = Servico.query.get(servico_id)
-        return jsonify(servico_atualizado.to_dict())
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/{servico_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
-
-@app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-def deletar_pagamento_servico(servico_id, pagamento_id):
-    """
-    Deleta um pagamento de serviço com regras específicas:
-    - Pagamentos PAGOS só podem ser deletados por usuários MASTER
-    - Pagamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
-    """
-    print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
-    
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    
-    try:
-        pagamento = PagamentoServico.query.filter_by(
-            id=pagamento_id, 
-            servico_id=servico_id
-        ).first_or_404()
-        
-        # Obter o papel do usuário
-        claims = get_jwt()
-        user_role = claims.get('role')
-        
-        # Verificar se o pagamento está PAGO (completamente executado)
-        is_pago = pagamento.valor_pago >= pagamento.valor_total
-        
-        # REGRA: Se está PAGO, apenas MASTER pode deletar
-        if is_pago and user_role != 'master':
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} (não MASTER) ---")
-            return jsonify({
-                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
-            }), 403
-        
-        # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
-        if not is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
-            return jsonify({
-                "erro": "Acesso negado: Permissão insuficiente para excluir este pagamento."
-            }), 403
-        
-        db.session.delete(pagamento)
-        db.session.commit()
-        
-        print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
-        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+# ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
+# @app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
+# @jwt_required()
+# def deletar_pagamento_servico(servico_id, pagamento_id):
+#     """
+#     Deleta um pagamento de serviço com regras específicas:
+#     - Pagamentos PAGOS só podem ser deletados por usuários MASTER
+#     - Pagamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
+#     """
+#     print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
+#     
+#     if request.method == 'OPTIONS':
+#         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+#     
+#     try:
+#         pagamento = PagamentoServico.query.filter_by(
+#             id=pagamento_id, 
+#             servico_id=servico_id
+#         ).first_or_404()
+#         
+#         # Obter o papel do usuário
+#         claims = get_jwt()
+#         user_role = claims.get('role')
+#         
+#         # Verificar se o pagamento está PAGO (completamente executado)
+#         is_pago = pagamento.valor_pago >= pagamento.valor_total
+#         
+#         # REGRA: Se está PAGO, apenas MASTER pode deletar
+#         if is_pago and user_role != 'master':
+#             print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} (não MASTER) ---")
+#             return jsonify({
+#                 "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
+#             }), 403
+#         
+#         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
+#         if not is_pago and user_role not in ['administrador', 'master']:
+#             print(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
+#             return jsonify({
+#                 "erro": "Acesso negado: Permissão insuficiente para excluir este pagamento."
+#             }), 403
+#         
+#         db.session.delete(pagamento)
+#         db.session.commit()
+#         
+#         print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
+#         return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+#         
+#     except Exception as e:
+#         db.session.rollback()
+#         error_details = traceback.format_exc()
+#         print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
+#         return jsonify({"erro": str(e), "details": error_details}), 500
+# ===============================================================================
 
 # Rota alternativa para deletar pagamento de serviço (usada pelo histórico)
-@app.route('/obras/<int:obra_id>/servicos/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-def deletar_pagamento_servico_alternativo(obra_id, pagamento_id):
-    """
-    Rota alternativa para deletar pagamento de serviço.
-    Busca o pagamento pelo ID e aplica as mesmas regras de segurança.
-    """
-    print(f"--- [LOG] Rota /obras/{obra_id}/servicos/pagamentos/{pagamento_id} (DELETE) acessada ---")
-    
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    
-    try:
-        # Buscar o pagamento pelo ID
-        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
-        
-        # Verificar se o pagamento pertence a um serviço da obra especificada
-        servico = Servico.query.get(pagamento.servico_id)
-        if not servico or servico.obra_id != obra_id:
-            return jsonify({"erro": "Pagamento não encontrado nesta obra"}), 404
-        
-        # Obter o papel do usuário
-        claims = get_jwt()
-        user_role = claims.get('role')
-        
-        # Verificar se o pagamento está PAGO (completamente executado)
-        is_pago = pagamento.valor_pago >= pagamento.valor_total
-        
-        # REGRA: Se está PAGO, apenas MASTER pode deletar
-        if is_pago and user_role != 'master':
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} (não MASTER) ---")
-            return jsonify({
-                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
-            }), 403
-        
-        # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
-        if not is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
-            return jsonify({
-                "erro": "Acesso negado: Permissão insuficiente para excluir este pagamento."
-            }), 403
-        
-        db.session.delete(pagamento)
-        db.session.commit()
-        
-        print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
-        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/.../servicos/pagamentos (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+# ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
+# @app.route('/obras/<int:obra_id>/servicos/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
+# @jwt_required()
+# def deletar_pagamento_servico_alternativo(obra_id, pagamento_id):
+#     """
+#     Rota alternativa para deletar pagamento de serviço.
+#     Busca o pagamento pelo ID e aplica as mesmas regras de segurança.
+#     """
+#     print(f"--- [LOG] Rota /obras/{obra_id}/servicos/pagamentos/{pagamento_id} (DELETE) acessada ---")
+#     
+#     if request.method == 'OPTIONS':
+#         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+#     
+#     try:
+#         # Buscar o pagamento pelo ID
+#         pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+#         
+#         # Verificar se o pagamento pertence a um serviço da obra especificada
+#         servico = Servico.query.get(pagamento.servico_id)
+#         if not servico or servico.obra_id != obra_id:
+#             return jsonify({"erro": "Pagamento não encontrado nesta obra"}), 404
+#         
+#         # Obter o papel do usuário
+#         claims = get_jwt()
+#         user_role = claims.get('role')
+#         
+#         # Verificar se o pagamento está PAGO (completamente executado)
+#         is_pago = pagamento.valor_pago >= pagamento.valor_total
+#         
+#         # REGRA: Se está PAGO, apenas MASTER pode deletar
+#         if is_pago and user_role != 'master':
+#             print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} (não MASTER) ---")
+#             return jsonify({
+#                 "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
+#             }), 403
+#         
+#         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
+#         if not is_pago and user_role not in ['administrador', 'master']:
+#             print(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
+#             return jsonify({
+#                 "erro": "Acesso negado: Permissão insuficiente para excluir este pagamento."
+#             }), 403
+#         
+#         db.session.delete(pagamento)
+#         db.session.commit()
+#         
+#         print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
+#         return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+#         
+#     except Exception as e:
+#         db.session.rollback()
+#         error_details = traceback.format_exc()
+#         print(f"--- [ERRO] /obras/.../servicos/pagamentos (DELETE): {str(e)}\n{error_details} ---")
+#         return jsonify({"erro": str(e), "details": error_details}), 500
+# ===============================================================================
 
-@app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master'])
-def toggle_pagamento_servico_status(pagamento_id):
-    # ... (código atualizado para valor_total/valor_pago) ...
-    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/status (PATCH) acessada ---")
-    try:
-        user = get_current_user()
-        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
-        servico = Servico.query.get(pagamento.servico_id)
-        
-        if not user_has_access_to_obra(user, servico.obra_id):
-            return jsonify({"erro": "Acesso negado a esta obra."}), 403
-        
-        if pagamento.status == 'Pago':
-            pagamento.status = 'A Pagar'
-            pagamento.valor_pago = 0.0
-        else:
-            pagamento.status = 'Pago'
-            pagamento.valor_pago = pagamento.valor_total
-            
-        db.session.commit()
-        return jsonify(pagamento.to_dict()), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+# ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
+# @app.route('/servicos/pagamentos/<int:pagamento_id>/status', methods=['PATCH', 'OPTIONS'])
+# @check_permission(roles=['administrador', 'master'])
+# def toggle_pagamento_servico_status(pagamento_id):
+#     # ... (código atualizado para valor_total/valor_pago) ...
+#     print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/status (PATCH) acessada ---")
+#     try:
+#         user = get_current_user()
+#         pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+#         servico = Servico.query.get(pagamento.servico_id)
+#         
+#         if not user_has_access_to_obra(user, servico.obra_id):
+#             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+#         
+#         if pagamento.status == 'Pago':
+#             pagamento.status = 'A Pagar'
+#             pagamento.valor_pago = 0.0
+#         else:
+#             pagamento.status = 'Pago'
+#             pagamento.valor_pago = pagamento.valor_total
+#             
+#         db.session.commit()
+#         return jsonify(pagamento.to_dict()), 200
+#         
+#     except Exception as e:
+#         db.session.rollback()
+#         error_details = traceback.format_exc()
+#         print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
+#         return jsonify({"erro": str(e), "details": error_details}), 500
+# ===============================================================================
 
-@app.route('/servicos/pagamentos/<int:pagamento_id>/prioridade', methods=['PATCH', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master'])
-def editar_pagamento_servico_prioridade(pagamento_id):
-    # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/prioridade (PATCH) acessada ---")
-    if request.method == 'OPTIONS': 
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-        
-    try:
-        user = get_current_user()
-        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
-        servico = Servico.query.get(pagamento.servico_id)
-        
-        if not user_has_access_to_obra(user, servico.obra_id):
-            return jsonify({"erro": "Acesso negado a esta obra."}), 403
-        
-        dados = request.json
-        nova_prioridade = dados.get('prioridade')
-        
-        if nova_prioridade is None or not isinstance(nova_prioridade, int):
-            return jsonify({"erro": "Prioridade inválida. Deve ser um número."}), 400
-            
-        pagamento.prioridade = int(nova_prioridade)
-        db.session.commit()
-        
-        return jsonify(pagamento.to_dict()), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/pagamentos/.../prioridade (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+# ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
+# @app.route('/servicos/pagamentos/<int:pagamento_id>/prioridade', methods=['PATCH', 'OPTIONS'])
+# @check_permission(roles=['administrador', 'master'])
+# def editar_pagamento_servico_prioridade(pagamento_id):
+#     # ... (código inalterado) ...
+#     print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id}/prioridade (PATCH) acessada ---")
+#     if request.method == 'OPTIONS': 
+#         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+#         
+#     try:
+#         user = get_current_user()
+#         pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+#         servico = Servico.query.get(pagamento.servico_id)
+#         
+#         if not user_has_access_to_obra(user, servico.obra_id):
+#             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+#         
+#         dados = request.json
+#         nova_prioridade = dados.get('prioridade')
+#         
+#         if nova_prioridade is None or not isinstance(nova_prioridade, int):
+#             return jsonify({"erro": "Prioridade inválida. Deve ser um número."}), 400
+#             
+#         pagamento.prioridade = int(nova_prioridade)
+#         db.session.commit()
+#         
+#         return jsonify(pagamento.to_dict()), 200
+#         
+#     except Exception as e:
+#         db.session.rollback()
+#         error_details = traceback.format_exc()
+#         print(f"--- [ERRO] /servicos/pagamentos/.../prioridade (PATCH): {str(e)}\n{error_details} ---")
+#         return jsonify({"erro": str(e), "details": error_details}), 500
+# ===============================================================================
 
-@app.route('/servicos/pagamentos/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master'])
-def editar_pagamento_servico(pagamento_id):
-    """Edita um pagamento de serviço completo"""
-    print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id} (PUT) acessada ---")
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        user = get_current_user()
-        pagamento = PagamentoServico.query.get_or_404(pagamento_id)
-        servico = Servico.query.get(pagamento.servico_id)
-        
-        if not user_has_access_to_obra(user, servico.obra_id):
-            return jsonify({"erro": "Acesso negado a esta obra."}), 403
-        
-        dados = request.json
-        
-        # Atualizar campos se fornecidos
-        if 'data' in dados:
-            pagamento.data = date.fromisoformat(dados['data'])
-        if 'data_vencimento' in dados:
-            pagamento.data_vencimento = date.fromisoformat(dados['data_vencimento']) if dados['data_vencimento'] else None
-        if 'valor' in dados:
-            pagamento.valor_total = float(dados['valor'])
-            # Se status = Pago, atualizar valor_pago também
-            if pagamento.status == 'Pago':
-                pagamento.valor_pago = pagamento.valor_total
-        if 'tipo_pagamento' in dados:
-            if dados['tipo_pagamento'] not in ['mao_de_obra', 'material']:
-                return jsonify({"erro": "tipo_pagamento deve ser 'mao_de_obra' ou 'material'"}), 400
-            pagamento.tipo_pagamento = dados['tipo_pagamento']
-        if 'forma_pagamento' in dados:
-            pagamento.forma_pagamento = dados['forma_pagamento']
-        if 'pix' in dados:
-            pagamento.pix = dados['pix']
-        if 'fornecedor' in dados:
-            pagamento.fornecedor = dados['fornecedor']
-        if 'prioridade' in dados:
-            pagamento.prioridade = int(dados['prioridade'])
-        if 'status' in dados:
-            pagamento.status = dados['status']
-            # Ajustar valor_pago conforme status
-            if dados['status'] == 'Pago':
-                pagamento.valor_pago = pagamento.valor_total
-            elif dados['status'] == 'A Pagar':
-                pagamento.valor_pago = 0.0
-        
-        db.session.commit()
-        return jsonify(pagamento.to_dict()), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"--- [ERRO] PUT /servicos/pagamentos/{pagamento_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+# ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
+# @app.route('/servicos/pagamentos/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
+# @check_permission(roles=['administrador', 'master'])
+# def editar_pagamento_servico(pagamento_id):
+#     """Edita um pagamento de serviço completo"""
+#     print(f"--- [LOG] Rota /servicos/pagamentos/{pagamento_id} (PUT) acessada ---")
+#     if request.method == 'OPTIONS':
+#         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+#     
+#     try:
+#         user = get_current_user()
+#         pagamento = PagamentoServico.query.get_or_404(pagamento_id)
+#         servico = Servico.query.get(pagamento.servico_id)
+#         
+#         if not user_has_access_to_obra(user, servico.obra_id):
+#             return jsonify({"erro": "Acesso negado a esta obra."}), 403
+#         
+#         dados = request.json
+#         
+#         # Atualizar campos se fornecidos
+#         if 'data' in dados:
+#             pagamento.data = date.fromisoformat(dados['data'])
+#         if 'data_vencimento' in dados:
+#             pagamento.data_vencimento = date.fromisoformat(dados['data_vencimento']) if dados['data_vencimento'] else None
+#         if 'valor' in dados:
+#             pagamento.valor_total = float(dados['valor'])
+#             # Se status = Pago, atualizar valor_pago também
+#             if pagamento.status == 'Pago':
+#                 pagamento.valor_pago = pagamento.valor_total
+#         if 'tipo_pagamento' in dados:
+#             if dados['tipo_pagamento'] not in ['mao_de_obra', 'material']:
+#                 return jsonify({"erro": "tipo_pagamento deve ser 'mao_de_obra' ou 'material'"}), 400
+#             pagamento.tipo_pagamento = dados['tipo_pagamento']
+#         if 'forma_pagamento' in dados:
+#             pagamento.forma_pagamento = dados['forma_pagamento']
+#         if 'pix' in dados:
+#             pagamento.pix = dados['pix']
+#         if 'fornecedor' in dados:
+#             pagamento.fornecedor = dados['fornecedor']
+#         if 'prioridade' in dados:
+#             pagamento.prioridade = int(dados['prioridade'])
+#         if 'status' in dados:
+#             pagamento.status = dados['status']
+#             # Ajustar valor_pago conforme status
+#             if dados['status'] == 'Pago':
+#                 pagamento.valor_pago = pagamento.valor_total
+#             elif dados['status'] == 'A Pagar':
+#                 pagamento.valor_pago = 0.0
+#         
+#         db.session.commit()
+#         return jsonify(pagamento.to_dict()), 200
+#         
+#     except Exception as e:
+#         db.session.rollback()
+#         error_details = traceback.format_exc()
+#         print(f"--- [ERRO] PUT /servicos/pagamentos/{pagamento_id}: {str(e)}\n{error_details} ---")
+#         return jsonify({"erro": str(e), "details": error_details}), 500
+# ===============================================================================
 # ---------------------------------------------------
 
 
@@ -4985,8 +5003,10 @@ def inserir_pagamento(obra_id):
         # Calcular valor_pago baseado no status
         valor_pago = valor_total if status == 'Pago' else 0.0
         
-        # Se está vinculado a um serviço, criar um PagamentoServico
-        if servico_id:
+        # ===== LÓGICA REFATORADA: STATUS "PAGO" vs "A PAGAR" =====
+        
+        # CASO 1: STATUS "PAGO" COM SERVIÇO VINCULADO
+        if servico_id and status == 'Pago':
             servico = Servico.query.get_or_404(servico_id)
             
             # Determinar tipo_pagamento para PagamentoServico
@@ -5029,49 +5049,72 @@ def inserir_pagamento(obra_id):
                 servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
             
             db.session.commit()
-            print(f"--- [LOG] Pagamento inserido e vinculado ao serviço {servico_id} ---")
+            print(f"--- [LOG] ✅ PagamentoServico PAGO criado e vinculado ao serviço {servico_id} ---")
             return jsonify(novo_pagamento.to_dict()), 201
+        
+        # CASO 2: STATUS "A PAGAR" COM SERVIÇO VINCULADO
+        elif servico_id and status == 'A Pagar':
+            servico = Servico.query.get_or_404(servico_id)
             
+            print(f"--- [DEBUG] Criando PagamentoFuturo vinculado ao serviço {servico_id} ---")
+            novo_futuro = PagamentoFuturo(
+                obra_id=obra_id,
+                descricao=f"{descricao} (Serviço: {servico.nome})",
+                valor=valor_total,
+                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
+                fornecedor=fornecedor,
+                pix=pix,
+                observacoes=f"Vinculado ao serviço {servico.nome}",
+                status='Previsto',
+                servico_id=servico_id,  # ✅ NOVO: Vincula ao serviço
+                tipo=tipo  # ✅ NOVO: Armazena o tipo (Mão de Obra / Material)
+            )
+            db.session.add(novo_futuro)
+            db.session.commit()
+            print(f"--- [LOG] ✅ PagamentoFuturo criado vinculado ao serviço {servico_id} (Cronograma) ---")
+            return jsonify(novo_futuro.to_dict()), 201
+        
+        # CASO 3: STATUS "A PAGAR" SEM SERVIÇO
+        elif status == 'A Pagar':
+            print(f"--- [DEBUG] Criando PagamentoFuturo sem vínculo (status='A Pagar') ---")
+            novo_futuro = PagamentoFuturo(
+                obra_id=obra_id,
+                descricao=descricao,
+                valor=valor_total,
+                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
+                fornecedor=fornecedor,
+                pix=pix,
+                observacoes=f"Tipo: {tipo}",
+                status='Previsto',
+                servico_id=None,
+                tipo=tipo  # ✅ Armazena o tipo
+            )
+            db.session.add(novo_futuro)
+            db.session.commit()
+            print(f"--- [LOG] ✅ PagamentoFuturo criado sem vínculo (Cronograma Financeiro) ---")
+            return jsonify(novo_futuro.to_dict()), 201
+        
+        # CASO 4: STATUS "PAGO" SEM SERVIÇO
         else:
-            # LÓGICA CORRIGIDA: Pagamentos sem vínculo a serviço
-            if status == 'A Pagar':
-                # Criar PagamentoFuturo (aparece no Cronograma Financeiro)
-                print(f"--- [DEBUG] Criando PagamentoFuturo (status='A Pagar') ---")
-                novo_futuro = PagamentoFuturo(
-                    obra_id=obra_id,
-                    descricao=descricao,
-                    valor=valor_total,
-                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
-                    fornecedor=fornecedor,
-                    pix=pix,
-                    observacoes=f"Inserido via botão Inserir Pagamento - Tipo: {tipo}",
-                    status='Previsto'
-                )
-                db.session.add(novo_futuro)
-                db.session.commit()
-                print(f"--- [LOG] ✅ PagamentoFuturo criado: ID {novo_futuro.id} (Cronograma Financeiro) ---")
-                return jsonify(novo_futuro.to_dict()), 201
-            
-            else:
-                # Criar Lançamento normal (status='Pago', vai pro histórico)
-                print(f"--- [DEBUG] Criando Lancamento (status='Pago') ---")
-                novo_lancamento = Lancamento(
-                    obra_id=obra_id,
-                    tipo=tipo,
-                    descricao=descricao,
-                    valor_total=valor_total,
-                    valor_pago=valor_pago,
-                    data=data,
-                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
-                    status=status,
-                    pix=pix,
-                    prioridade=prioridade,
-                    fornecedor=fornecedor
-                )
-                db.session.add(novo_lancamento)
-                db.session.commit()
-                print(f"--- [LOG] ✅ Lançamento criado: ID {novo_lancamento.id} (Histórico) ---")
-                return jsonify(novo_lancamento.to_dict()), 201
+            # Criar Lançamento normal (status='Pago', vai pro histórico)
+            print(f"--- [DEBUG] Criando Lancamento (status='Pago') ---")
+            novo_lancamento = Lancamento(
+                obra_id=obra_id,
+                tipo=tipo,
+                descricao=descricao,
+                valor_total=valor_total,
+                valor_pago=valor_pago,
+                data=data,
+                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
+                status=status,
+                pix=pix,
+                prioridade=prioridade,
+                fornecedor=fornecedor
+            )
+            db.session.add(novo_lancamento)
+            db.session.commit()
+            print(f"--- [LOG] ✅ Lançamento criado: ID {novo_lancamento.id} (Histórico) ---")
+            return jsonify(novo_lancamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
@@ -5115,36 +5158,97 @@ def marcar_multiplos_como_pago(obra_id):
             
             try:
                 if tipo_item == 'futuro':
-                    # ===== NOVA LÓGICA: Move pagamento futuro para o Histórico =====
+                    # ===== LÓGICA CORRIGIDA: Verificar se tem vínculo com serviço =====
                     pagamento = PagamentoFuturo.query.get(item_id)
                     if pagamento and pagamento.obra_id == obra_id:
-                        # 1. CRIAR Lançamento no Histórico
-                        novo_lancamento = Lancamento(
-                            obra_id=pagamento.obra_id,
-                            tipo='Despesa',
-                            descricao=pagamento.descricao,
-                            valor_total=pagamento.valor,
-                            valor_pago=pagamento.valor,
-                            data=data_pagamento,
-                            data_vencimento=pagamento.data_vencimento,
-                            status='Pago',
-                            pix=pagamento.pix,
-                            prioridade=0,
-                            fornecedor=pagamento.fornecedor,
-                            servico_id=None
-                        )
-                        db.session.add(novo_lancamento)
                         
-                        # 2. DELETE o PagamentoFuturo (remove do cronograma)
-                        db.session.delete(pagamento)
+                        # CASO 1: Pagamento vinculado a SERVIÇO
+                        if pagamento.servico_id:
+                            servico = Servico.query.get(pagamento.servico_id)
+                            if servico:
+                                # Determinar tipo_pagamento
+                                if pagamento.tipo == 'Mão de Obra':
+                                    tipo_pagamento = 'mao_de_obra'
+                                elif pagamento.tipo == 'Material':
+                                    tipo_pagamento = 'material'
+                                else:
+                                    tipo_pagamento = 'material'  # default
+                                
+                                # Criar PagamentoServico
+                                novo_pag_servico = PagamentoServico(
+                                    servico_id=pagamento.servico_id,
+                                    tipo_pagamento=tipo_pagamento,
+                                    valor_total=pagamento.valor,
+                                    valor_pago=pagamento.valor,  # Marcar como totalmente pago
+                                    data=data_pagamento,
+                                    data_vencimento=pagamento.data_vencimento,
+                                    status='Pago',
+                                    prioridade=0,
+                                    fornecedor=pagamento.fornecedor
+                                )
+                                db.session.add(novo_pag_servico)
+                                db.session.flush()
+                                
+                                # Recalcular percentual do serviço
+                                pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+                                pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
+                                pagamentos_material = [p for p in pagamentos_serv if p.tipo_pagamento == 'material']
+                                
+                                if servico.valor_global_mao_de_obra > 0:
+                                    total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                                    servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+                                
+                                if servico.valor_global_material > 0:
+                                    total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                                    servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                                
+                                # DELETE o PagamentoFuturo
+                                db.session.delete(pagamento)
+                                
+                                resultados.append({
+                                    "tipo": "futuro",
+                                    "id": item_id,
+                                    "status": "success",
+                                    "mensagem": f"Pagamento '{pagamento.descricao}' vinculado ao serviço '{servico.nome}' e marcado como pago",
+                                    "pagamento_servico_id": novo_pag_servico.id
+                                })
+                            else:
+                                resultados.append({
+                                    "tipo": "futuro",
+                                    "id": item_id,
+                                    "status": "error",
+                                    "mensagem": "Serviço vinculado não encontrado"
+                                })
                         
-                        resultados.append({
-                            "tipo": "futuro",
-                            "id": item_id,
-                            "status": "success",
-                            "mensagem": f"Pagamento futuro '{pagamento.descricao}' movido para o histórico",
-                            "lancamento_id": novo_lancamento.id
-                        })
+                        # CASO 2: Pagamento SEM vínculo com serviço
+                        else:
+                            # Criar Lançamento no Histórico
+                            novo_lancamento = Lancamento(
+                                obra_id=pagamento.obra_id,
+                                tipo=pagamento.tipo or 'Despesa',
+                                descricao=pagamento.descricao,
+                                valor_total=pagamento.valor,
+                                valor_pago=pagamento.valor,
+                                data=data_pagamento,
+                                data_vencimento=pagamento.data_vencimento,
+                                status='Pago',
+                                pix=pagamento.pix,
+                                prioridade=0,
+                                fornecedor=pagamento.fornecedor,
+                                servico_id=None
+                            )
+                            db.session.add(novo_lancamento)
+                            
+                            # DELETE o PagamentoFuturo
+                            db.session.delete(pagamento)
+                            
+                            resultados.append({
+                                "tipo": "futuro",
+                                "id": item_id,
+                                "status": "success",
+                                "mensagem": f"Pagamento futuro '{pagamento.descricao}' movido para o histórico",
+                                "lancamento_id": novo_lancamento.id
+                            })
                     else:
                         resultados.append({
                             "tipo": "futuro",
