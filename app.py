@@ -3782,207 +3782,6 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         return jsonify({"erro": str(e)}), 500
 
 
-# ==============================================================================
-# ROTAS COM SQL DIRETO - Contorna problema de Foreign Key
-# ==============================================================================
-
-from sqlalchemy import text
-
-# -----------------------------------------------------------------------------
-# LISTAR parcelas (usando SQL direto)
-# -----------------------------------------------------------------------------
-@app.route('/parcelados/<int:parcelado_id>/parcelas', methods=['GET'])
-@jwt_required()
-def listar_parcelas_sql(parcelado_id):
-    """Lista parcelas usando SQL direto para evitar erro de foreign key"""
-    try:
-        # Buscar pagamento usando v2
-        result = db.session.execute(
-            text("SELECT obra_id FROM pagamento_parcelado_v2 WHERE id = :id"),
-            {"id": parcelado_id}
-        )
-        row = result.fetchone()
-        
-        if not row:
-            return jsonify({"erro": "Pagamento não encontrado"}), 404
-        
-        obra_id = row[0]
-        
-        # Verificar acesso
-        current_user = get_current_user()
-        if not user_has_access_to_obra(current_user, obra_id):
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        # Buscar parcelas com SQL direto
-        result = db.session.execute(
-            text("""
-                SELECT id, pagamento_parcelado_id, numero_parcela, valor_parcela, 
-                       data_vencimento, status, data_pagamento, forma_pagamento, observacao
-                FROM parcela_individual 
-                WHERE pagamento_parcelado_id = :parcelado_id
-                ORDER BY numero_parcela
-            """),
-            {"parcelado_id": parcelado_id}
-        )
-        
-        parcelas = []
-        for row in result:
-            parcelas.append({
-                "id": row[0],
-                "pagamento_parcelado_id": row[1],
-                "numero_parcela": row[2],
-                "valor_parcela": float(row[3]) if row[3] else 0,
-                "data_vencimento": row[4].isoformat() if row[4] else None,
-                "status": row[5],
-                "data_pagamento": row[6].isoformat() if row[6] else None,
-                "forma_pagamento": row[7],
-                "observacao": row[8]
-            })
-        
-        return jsonify(parcelas), 200
-        
-    except Exception as e:
-        error_details = traceback.format_exc()
-        print(f"[ERRO] listar_parcelas_sql: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
-
-
-# -----------------------------------------------------------------------------
-# PAGAR PARCELA (usando SQL direto)
-# -----------------------------------------------------------------------------
-@app.route('/obras/<int:obra_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
-@jwt_required()
-def pagar_parcela_sql(obra_id, parcela_id):
-    """Paga parcela usando SQL direto para evitar erro de foreign key"""
-    try:
-        print(f"[LOG] Iniciando pagamento: obra_id={obra_id}, parcela_id={parcela_id}")
-        
-        current_user = get_current_user()
-        if not user_has_access_to_obra(current_user, obra_id):
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        # Buscar parcela com SQL direto
-        result = db.session.execute(
-            text("""
-                SELECT pi.id, pi.pagamento_parcelado_id, pi.numero_parcela, 
-                       pi.valor_parcela, pi.data_vencimento, pi.status,
-                       pp.descricao, pp.fornecedor, pp.servico_id, pp.numero_parcelas, pp.obra_id
-                FROM parcela_individual pi
-                JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
-                WHERE pi.id = :parcela_id
-            """),
-            {"parcela_id": parcela_id}
-        )
-        
-        row = result.fetchone()
-        if not row:
-            return jsonify({"erro": "Parcela não encontrada"}), 404
-        
-        # Extrair dados
-        parcela_status = row[5]
-        pagamento_obra_id = row[10]
-        
-        if pagamento_obra_id != obra_id:
-            return jsonify({"erro": "Pagamento não pertence a esta obra"}), 404
-        
-        if parcela_status == 'Pago':
-            return jsonify({"mensagem": "Parcela já está paga"}), 200
-        
-        # Dados do request
-        data = request.get_json() or {}
-        data_pagamento = data.get('data_pagamento', date.today().isoformat())
-        forma_pagamento = data.get('forma_pagamento')
-        
-        # Atualizar parcela com SQL direto
-        db.session.execute(
-            text("""
-                UPDATE parcela_individual 
-                SET status = 'Pago',
-                    data_pagamento = :data_pagamento,
-                    forma_pagamento = :forma_pagamento
-                WHERE id = :parcela_id
-            """),
-            {
-                "parcela_id": parcela_id,
-                "data_pagamento": data_pagamento,
-                "forma_pagamento": forma_pagamento
-            }
-        )
-        
-        print(f"[LOG] Parcela {parcela_id} marcada como paga")
-        
-        # Criar lançamento
-        descricao_lanc = f"{row[6]} (Parcela {row[2]}/{row[9]})"
-        valor = float(row[3])
-        servico_id = row[8]
-        fornecedor = row[7]
-        data_venc = row[4]
-        
-        db.session.execute(
-            text("""
-                INSERT INTO lancamento 
-                (obra_id, tipo, descricao, valor_total, valor_pago, data, 
-                 data_vencimento, status, fornecedor, servico_id, prioridade)
-                VALUES 
-                (:obra_id, 'Despesa', :descricao, :valor, :valor, :data,
-                 :data_venc, 'Pago', :fornecedor, :servico_id, 0)
-                RETURNING id
-            """),
-            {
-                "obra_id": obra_id,
-                "descricao": descricao_lanc,
-                "valor": valor,
-                "data": data_pagamento,
-                "data_venc": data_venc,
-                "fornecedor": fornecedor,
-                "servico_id": servico_id
-            }
-        )
-        
-        result = db.session.execute(text("SELECT lastval()"))
-        lancamento_id = result.scalar()
-        
-        print(f"[LOG] Lançamento criado: ID={lancamento_id}, servico_id={servico_id}")
-        
-        # Atualizar contador de parcelas pagas
-        result = db.session.execute(
-            text("""
-                SELECT COUNT(*) FROM parcela_individual 
-                WHERE pagamento_parcelado_id = :ppid AND status = 'Pago'
-            """),
-            {"ppid": row[1]}
-        )
-        pagas = result.scalar()
-        
-        status_pagamento = 'Concluído' if pagas >= row[9] else 'Ativo'
-        
-        db.session.execute(
-            text("""
-                UPDATE pagamento_parcelado_v2 
-                SET parcelas_pagas = :pagas, status = :status
-                WHERE id = :ppid
-            """),
-            {"pagas": pagas, "status": status_pagamento, "ppid": row[1]}
-        )
-        
-        db.session.commit()
-        
-        print(f"[LOG] ✅ Pagamento concluído! Lançamento ID={lancamento_id}")
-        
-        return jsonify({
-            "mensagem": "Parcela paga e lançamento criado",
-            "lancamento_id": lancamento_id,
-            "parcelas_pagas": pagas,
-            "status_pagamento": status_pagamento
-        }), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        print(f"[ERRO] pagar_parcela_sql: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
-
-
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET'])
 @jwt_required()
 def obter_alertas_vencimento(obra_id):
@@ -6690,6 +6489,180 @@ def limpar_e_adicionar_coluna():
         if result.fetchone():
             resultados.append("✅ VALIDAÇÃO OK!")
             resultados.append("🎉 MIGRATION CONCLUÍDA!")
+        
+        return jsonify({'success': True, 'detalhes': resultados}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e), 'success': False}), 500
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
+    app.run(host='0.0.0.0', port=port, debug=True)
+
+# ==============================================================================
+# ROTAS ALTERNATIVAS SIMPLIFICADAS - CRUD DE PAGAMENTOS
+# ==============================================================================
+
+# -----------------------------------------------------------------------------
+# EDITAR Pagamento Futuro (rota alternativa)
+# PUT /uturos/servico-{id}
+# -----------------------------------------------------------------------------
+@app.route('/uturos/servico-<int:pagamento_id>', methods=['PUT', 'PATCH', 'OPTIONS'])
+@jwt_required()
+def editar_pagamento_futuro_alt(pagamento_id):
+    """Edita pagamento futuro - rota alternativa"""
+    try:
+        if request.method == 'OPTIONS':
+            return '', 200
+        
+        pagamento = PagamentoFuturo.query.get(pagamento_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, pagamento.obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        data = request.get_json()
+        
+        if 'descricao' in data:
+            pagamento.descricao = data['descricao']
+        if 'valor' in data:
+            pagamento.valor = float(data['valor'])
+        if 'data_vencimento' in data:
+            pagamento.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        if 'fornecedor' in data:
+            pagamento.fornecedor = data['fornecedor']
+        if 'pix' in data:
+            pagamento.pix = data['pix']
+        if 'observacoes' in data:
+            pagamento.observacoes = data['observacoes']
+        
+        db.session.commit()
+        
+        print(f"[LOG] Pagamento futuro {pagamento_id} editado")
+        return jsonify({"mensagem": "Pagamento atualizado", "id": pagamento_id}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] editar_pagamento_futuro_alt: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+# -----------------------------------------------------------------------------
+# DELETAR Pagamento Futuro (rota alternativa)
+# DELETE /uturos/servico-{id}
+# -----------------------------------------------------------------------------
+@app.route('/uturos/servico-<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def deletar_pagamento_futuro_alt(pagamento_id):
+    """Deleta pagamento futuro - rota alternativa"""
+    try:
+        if request.method == 'OPTIONS':
+            return '', 200
+        
+        pagamento = PagamentoFuturo.query.get(pagamento_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, pagamento.obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        db.session.delete(pagamento)
+        db.session.commit()
+        
+        print(f"[LOG] Pagamento futuro {pagamento_id} deletado")
+        return jsonify({"mensagem": "Pagamento deletado com sucesso"}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] deletar_pagamento_futuro_alt: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+# -----------------------------------------------------------------------------
+# EDITAR Pagamento de Serviço (rota alternativa)
+# PUT /pagamentos-servico/{id}
+# -----------------------------------------------------------------------------
+@app.route('/pagamentos-servico/<int:pagamento_id>', methods=['PUT', 'PATCH', 'OPTIONS'])
+@jwt_required()
+def editar_pagamento_servico_alt(pagamento_id):
+    """Edita pagamento de serviço - rota alternativa"""
+    try:
+        if request.method == 'OPTIONS':
+            return '', 200
+        
+        pagamento = PagamentoServico.query.get(pagamento_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        servico = Servico.query.get(pagamento.servico_id)
+        if not servico:
+            return jsonify({"erro": "Serviço não encontrado"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        data = request.get_json()
+        
+        if 'fornecedor' in data:
+            pagamento.fornecedor = data['fornecedor']
+        if 'valor_total' in data:
+            pagamento.valor_total = float(data['valor_total'])
+        if 'data_vencimento' in data:
+            pagamento.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        if 'tipo_pagamento' in data:
+            pagamento.tipo_pagamento = data['tipo_pagamento']
+        
+        db.session.commit()
+        
+        print(f"[LOG] Pagamento de serviço {pagamento_id} editado")
+        return jsonify({"mensagem": "Pagamento atualizado", "id": pagamento_id}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] editar_pagamento_servico_alt: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+# -----------------------------------------------------------------------------
+# DELETAR Pagamento de Serviço (rota alternativa)
+# DELETE /pagamentos-servico/{id}
+# -----------------------------------------------------------------------------
+@app.route('/pagamentos-servico/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def deletar_pagamento_servico_alt(pagamento_id):
+    """Deleta pagamento de serviço - rota alternativa"""
+    try:
+        if request.method == 'OPTIONS':
+            return '', 200
+        
+        pagamento = PagamentoServico.query.get(pagamento_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        servico = Servico.query.get(pagamento.servico_id)
+        if not servico:
+            return jsonify({"erro": "Serviço não encontrado"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        db.session.delete(pagamento)
+        db.session.commit()
+        
+        print(f"[LOG] Pagamento de serviço {pagamento_id} deletado")
+        return jsonify({"mensagem": "Pagamento deletado com sucesso"}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] deletar_pagamento_servico_alt: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
         
         return jsonify({'success': True, 'detalhes': resultados}), 200
         
