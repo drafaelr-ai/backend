@@ -35,11 +35,9 @@ def run_auto_migration():
     print("=" * 70)
     
     try:
-        # Importar aqui para evitar problemas circulares
         import psycopg2
         from urllib.parse import quote_plus
         
-        # Usar mesma connection string do app
         db_password = os.environ.get('DB_PASSWORD')
         if not db_password:
             print("⚠️ DB_PASSWORD não encontrada, pulando migration")
@@ -51,80 +49,79 @@ def run_auto_migration():
         conn = psycopg2.connect(url)
         cur = conn.cursor()
         
-        # ✅ AUMENTAR TIMEOUT DO BANCO (CRÍTICO!)
+        # AUMENTAR TIMEOUT
         cur.execute("SET statement_timeout = '900s';")
-        print("⏱️ Timeout aumentado para 15 minutos")
         
-        # Verificar se colunas já existem
+        # 1. Verificar colunas em pagamento_futuro (Lógica existente)
+        print("📝 Verificando pagamento_futuro...")
         cur.execute("""
             SELECT column_name FROM information_schema.columns 
             WHERE table_name = 'pagamento_futuro' 
             AND column_name IN ('servico_id', 'tipo');
         """)
-        colunas_existentes = [row[0] for row in cur.fetchall()]
+        colunas_futuro = [row[0] for row in cur.fetchall()]
         
-        if 'servico_id' in colunas_existentes and 'tipo' in colunas_existentes:
-            print("✅ Colunas já existem, migration não necessária")
-            cur.close()
-            conn.close()
-            return
-        
-        print("📝 Colunas não encontradas, executando migration...")
-        
-        # Adicionar servico_id
-        if 'servico_id' not in colunas_existentes:
+        if 'servico_id' not in colunas_futuro:
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN servico_id INTEGER;")
-            print("✅ Coluna servico_id adicionada")
+            print("✅ Coluna servico_id adicionada em pagamento_futuro")
         
-        # Adicionar tipo
-        if 'tipo' not in colunas_existentes:
+        if 'tipo' not in colunas_futuro:
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN tipo VARCHAR(50);")
-            print("✅ Coluna tipo adicionada")
-        
-        # Criar foreign key (ignora se já existe)
-        try:
-            cur.execute("""
-                ALTER TABLE pagamento_futuro 
-                ADD CONSTRAINT fk_pagamento_futuro_servico 
-                FOREIGN KEY (servico_id) REFERENCES servico(id) ON DELETE SET NULL;
-            """)
-            print("✅ Foreign key criada")
-        except Exception as fk_error:
-            print(f"⚠️ Foreign key já existe ou erro: {fk_error}")
-            conn.rollback()
-        
-        # Criar índice
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_pagamento_futuro_servico ON pagamento_futuro(servico_id);")
-        print("✅ Índice criado")
-        
-        # ===== MIGRATION 2: Adicionar coluna segmento em pagamento_parcelado_v2 =====
-        print("\n📝 Verificando coluna segmento em pagamento_parcelado_v2...")
+            print("✅ Coluna tipo adicionada em pagamento_futuro")
+
+        # 2. Verificar coluna segmento em pagamento_parcelado_v2 (Lógica existente)
+        print("📝 Verificando pagamento_parcelado_v2...")
         cur.execute("""
             SELECT column_name FROM information_schema.columns 
             WHERE table_name = 'pagamento_parcelado_v2' 
             AND column_name = 'segmento';
         """)
-        segmento_existe = cur.fetchone()
-        
-        if not segmento_existe:
-            print("📝 Adicionando coluna segmento...")
-            cur.execute("""
-                ALTER TABLE pagamento_parcelado_v2 
-                ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';
-            """)
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE pagamento_parcelado_v2 ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';")
             print("✅ Coluna segmento adicionada em pagamento_parcelado_v2")
+
+        # =================================================================
+        # 3. CORREÇÃO DO ERRO 500: CRIAR TABELA PARCELA_INDIVIDUAL
+        # =================================================================
+        print("📝 Verificando tabela parcela_individual...")
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_name = 'parcela_individual'
+            );
+        """)
+        tabela_existe = cur.fetchone()[0]
+        
+        if not tabela_existe:
+            print("⚠️ Tabela parcela_individual não encontrada. Criando agora...")
+            cur.execute("""
+                CREATE TABLE parcela_individual (
+                    id SERIAL PRIMARY KEY,
+                    pagamento_parcelado_id INTEGER NOT NULL,
+                    numero_parcela INTEGER NOT NULL,
+                    valor_parcela FLOAT NOT NULL,
+                    data_vencimento DATE NOT NULL,
+                    status VARCHAR(20) DEFAULT 'Previsto',
+                    data_pagamento DATE,
+                    forma_pagamento VARCHAR(50),
+                    observacao VARCHAR(255),
+                    CONSTRAINT fk_pagamento_parcelado 
+                        FOREIGN KEY(pagamento_parcelado_id) 
+                        REFERENCES pagamento_parcelado_v2(id)
+                        ON DELETE CASCADE
+                );
+            """)
+            print("✅ Tabela parcela_individual criada com sucesso!")
         else:
-            print("✅ Coluna segmento já existe")
-        
+            print("✅ Tabela parcela_individual já existe.")
+            
         conn.commit()
-        print("🎉 AUTO-MIGRATION CONCLUÍDA COM SUCESSO!")
-        
+        print("🎉 AUTO-MIGRATION CONCLUÍDA!")
         cur.close()
         conn.close()
         
     except Exception as e:
         print(f"❌ Erro na auto-migration: {e}")
-        import traceback
         traceback.print_exc()
 
 # Executar migration automaticamente
