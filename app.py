@@ -28,11 +28,6 @@ from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identi
 from functools import wraps
 
 print("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
-# ============================================================================
-# AUTO-MIGRATION - Roda automaticamente na inicialização
-# ============================================================================
-import sys
-
 def run_auto_migration():
     """Executa migration automaticamente no startup"""
     print("=" * 70)
@@ -55,6 +50,10 @@ def run_auto_migration():
         
         conn = psycopg2.connect(url)
         cur = conn.cursor()
+        
+        # ✅ AUMENTAR TIMEOUT DO BANCO (CRÍTICO!)
+        cur.execute("SET statement_timeout = '900s';")
+        print("⏱️ Timeout aumentado para 15 minutos")
         
         # Verificar se colunas já existem
         cur.execute("""
@@ -90,8 +89,8 @@ def run_auto_migration():
                 FOREIGN KEY (servico_id) REFERENCES servico(id) ON DELETE SET NULL;
             """)
             print("✅ Foreign key criada")
-        except:
-            print("⚠️ Foreign key já existe")
+        except Exception as fk_error:
+            print(f"⚠️ Foreign key já existe ou erro: {fk_error}")
             conn.rollback()
         
         # Criar índice
@@ -108,15 +107,6 @@ def run_auto_migration():
         print(f"❌ Erro na auto-migration: {e}")
         import traceback
         traceback.print_exc()
-
-# Executar migration automaticamente
-print("\n--- [LOG] Executando auto-migration antes de iniciar o app ---")
-run_auto_migration()
-print("--- [LOG] Auto-migration concluída, iniciando app.py ---\n")
-
-# ============================================================================
-# CONTINUA O CÓDIGO NORMAL DO app.py AQUI
-# ============================================================================
 app = Flask(__name__)
 
 # --- CORS global canônico ---
