@@ -4554,6 +4554,14 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT DE RELATÓRIO DO CRONOGRAMA ---
 
+
+# --- ALIAS: ROTA ALTERNATIVA PARA PDF DO CRONOGRAMA (USADA PELO FRONTEND) ---
+@app.route('/obras/<int:obra_id>/cronograma-financeiro/pdf', methods=['GET'])
+@jwt_required()
+def gerar_pdf_cronograma_financeiro_alias(obra_id):
+    """Alias para rota de PDF do cronograma - usado pelo frontend"""
+    return gerar_relatorio_cronograma_pdf(obra_id)
+
 # --- NOVO ENDPOINT: BUSCAR PAGAMENTOS DE SERVIÇO PENDENTES ---
 @app.route('/obras/<int:obra_id>/pagamentos-servico-pendentes', methods=['GET', 'OPTIONS'])
 @jwt_required()
