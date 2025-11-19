@@ -6501,27 +6501,76 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=port, debug=True)
 
 # ==============================================================================
-# ROTAS ALTERNATIVAS SIMPLIFICADAS - CRUD DE PAGAMENTOS
+# ROTAS EXATAS DO FRONTEND - Pagamentos Futuros com servico-ID
 # ==============================================================================
 
 # -----------------------------------------------------------------------------
-# EDITAR Pagamento Futuro (rota alternativa)
-# PUT /uturos/servico-{id}
+# DELETAR Pagamento Futuro (rota exata do frontend)
+# DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/servico-{id}
 # -----------------------------------------------------------------------------
-@app.route('/uturos/servico-<int:pagamento_id>', methods=['PUT', 'PATCH', 'OPTIONS'])
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/servico-<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
-def editar_pagamento_futuro_alt(pagamento_id):
-    """Edita pagamento futuro - rota alternativa"""
+def deletar_pagamento_futuro_servico(obra_id, pagamento_id):
+    """Deleta pagamento futuro - rota exata do frontend"""
     try:
         if request.method == 'OPTIONS':
             return '', 200
         
-        pagamento = PagamentoFuturo.query.get(pagamento_id)
+        print(f"[LOG] DELETE pagamento futuro: obra_id={obra_id}, pagamento_id={pagamento_id}")
+        
+        # Buscar pagamento usando servico_id como filtro adicional
+        pagamento = PagamentoFuturo.query.filter_by(
+            id=pagamento_id,
+            obra_id=obra_id
+        ).first()
+        
         if not pagamento:
+            print(f"[ERRO] Pagamento {pagamento_id} não encontrado na obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         current_user = get_current_user()
-        if not user_has_access_to_obra(current_user, pagamento.obra_id):
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Deletar
+        db.session.delete(pagamento)
+        db.session.commit()
+        
+        print(f"[LOG] ✅ Pagamento futuro {pagamento_id} deletado com sucesso")
+        return jsonify({"mensagem": "Pagamento deletado com sucesso", "id": pagamento_id}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] deletar_pagamento_futuro_servico: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+# -----------------------------------------------------------------------------
+# EDITAR Pagamento Futuro (rota exata do frontend)
+# PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/servico-{id}
+# -----------------------------------------------------------------------------
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/servico-<int:pagamento_id>', methods=['PUT', 'PATCH', 'OPTIONS'])
+@jwt_required()
+def editar_pagamento_futuro_servico(obra_id, pagamento_id):
+    """Edita pagamento futuro - rota exata do frontend"""
+    try:
+        if request.method == 'OPTIONS':
+            return '', 200
+        
+        print(f"[LOG] PUT pagamento futuro: obra_id={obra_id}, pagamento_id={pagamento_id}")
+        
+        pagamento = PagamentoFuturo.query.filter_by(
+            id=pagamento_id,
+            obra_id=obra_id
+        ).first()
+        
+        if not pagamento:
+            print(f"[ERRO] Pagamento {pagamento_id} não encontrado na obra {obra_id}")
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado"}), 403
         
         data = request.get_json()
@@ -6541,134 +6590,16 @@ def editar_pagamento_futuro_alt(pagamento_id):
         
         db.session.commit()
         
-        print(f"[LOG] Pagamento futuro {pagamento_id} editado")
-        return jsonify({"mensagem": "Pagamento atualizado", "id": pagamento_id}), 200
+        print(f"[LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso")
+        return jsonify({"mensagem": "Pagamento atualizado com sucesso", "id": pagamento_id}), 200
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] editar_pagamento_futuro_alt: {str(e)}")
+        error_details = traceback.format_exc()
+        print(f"[ERRO] editar_pagamento_futuro_servico: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
-# -----------------------------------------------------------------------------
-# DELETAR Pagamento Futuro (rota alternativa)
-# DELETE /uturos/servico-{id}
-# -----------------------------------------------------------------------------
-@app.route('/uturos/servico-<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-def deletar_pagamento_futuro_alt(pagamento_id):
-    """Deleta pagamento futuro - rota alternativa"""
-    try:
-        if request.method == 'OPTIONS':
-            return '', 200
-        
-        pagamento = PagamentoFuturo.query.get(pagamento_id)
-        if not pagamento:
-            return jsonify({"erro": "Pagamento não encontrado"}), 404
-        
-        current_user = get_current_user()
-        if not user_has_access_to_obra(current_user, pagamento.obra_id):
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        db.session.delete(pagamento)
-        db.session.commit()
-        
-        print(f"[LOG] Pagamento futuro {pagamento_id} deletado")
-        return jsonify({"mensagem": "Pagamento deletado com sucesso"}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        print(f"[ERRO] deletar_pagamento_futuro_alt: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
-
-
-# -----------------------------------------------------------------------------
-# EDITAR Pagamento de Serviço (rota alternativa)
-# PUT /pagamentos-servico/{id}
-# -----------------------------------------------------------------------------
-@app.route('/pagamentos-servico/<int:pagamento_id>', methods=['PUT', 'PATCH', 'OPTIONS'])
-@jwt_required()
-def editar_pagamento_servico_alt(pagamento_id):
-    """Edita pagamento de serviço - rota alternativa"""
-    try:
-        if request.method == 'OPTIONS':
-            return '', 200
-        
-        pagamento = PagamentoServico.query.get(pagamento_id)
-        if not pagamento:
-            return jsonify({"erro": "Pagamento não encontrado"}), 404
-        
-        servico = Servico.query.get(pagamento.servico_id)
-        if not servico:
-            return jsonify({"erro": "Serviço não encontrado"}), 404
-        
-        current_user = get_current_user()
-        if not user_has_access_to_obra(current_user, servico.obra_id):
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        data = request.get_json()
-        
-        if 'fornecedor' in data:
-            pagamento.fornecedor = data['fornecedor']
-        if 'valor_total' in data:
-            pagamento.valor_total = float(data['valor_total'])
-        if 'data_vencimento' in data:
-            pagamento.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
-        if 'tipo_pagamento' in data:
-            pagamento.tipo_pagamento = data['tipo_pagamento']
-        
-        db.session.commit()
-        
-        print(f"[LOG] Pagamento de serviço {pagamento_id} editado")
-        return jsonify({"mensagem": "Pagamento atualizado", "id": pagamento_id}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        print(f"[ERRO] editar_pagamento_servico_alt: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
-
-
-# -----------------------------------------------------------------------------
-# DELETAR Pagamento de Serviço (rota alternativa)
-# DELETE /pagamentos-servico/{id}
-# -----------------------------------------------------------------------------
-@app.route('/pagamentos-servico/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-def deletar_pagamento_servico_alt(pagamento_id):
-    """Deleta pagamento de serviço - rota alternativa"""
-    try:
-        if request.method == 'OPTIONS':
-            return '', 200
-        
-        pagamento = PagamentoServico.query.get(pagamento_id)
-        if not pagamento:
-            return jsonify({"erro": "Pagamento não encontrado"}), 404
-        
-        servico = Servico.query.get(pagamento.servico_id)
-        if not servico:
-            return jsonify({"erro": "Serviço não encontrado"}), 404
-        
-        current_user = get_current_user()
-        if not user_has_access_to_obra(current_user, servico.obra_id):
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        db.session.delete(pagamento)
-        db.session.commit()
-        
-        print(f"[LOG] Pagamento de serviço {pagamento_id} deletado")
-        return jsonify({"mensagem": "Pagamento deletado com sucesso"}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        print(f"[ERRO] deletar_pagamento_servico_alt: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
-
-        
-        return jsonify({'success': True, 'detalhes': resultados}), 200
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e), 'success': False}), 500
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
