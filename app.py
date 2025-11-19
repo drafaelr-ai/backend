@@ -3896,8 +3896,6 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
-@jwt_required()
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST', 'OPTIONS'])
 @jwt_required(optional=True)
 def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
