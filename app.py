@@ -81,7 +81,7 @@ def run_auto_migration():
             print("✅ Coluna segmento adicionada em pagamento_parcelado_v2")
 
         # =================================================================
-        # 3. CORREÇÃO DO ERRO 500: CRIAR TABELA PARCELA_INDIVIDUAL
+        # 3. CORREÇÃO DO ERRO 500: CRIAR/CORRIGIR TABELA PARCELA_INDIVIDUAL
         # =================================================================
         print("📝 Verificando tabela parcela_individual...")
         cur.execute("""
@@ -114,6 +114,55 @@ def run_auto_migration():
             print("✅ Tabela parcela_individual criada com sucesso!")
         else:
             print("✅ Tabela parcela_individual já existe.")
+            
+            # Verificar se a foreign key aponta para a tabela correta
+            print("📝 Verificando foreign key...")
+            cur.execute("""
+                SELECT 
+                    tc.constraint_name,
+                    ccu.table_name AS foreign_table_name
+                FROM information_schema.table_constraints AS tc 
+                JOIN information_schema.constraint_column_usage AS ccu
+                    ON ccu.constraint_name = tc.constraint_name
+                WHERE tc.table_name = 'parcela_individual' 
+                    AND tc.constraint_type = 'FOREIGN KEY'
+                    AND ccu.column_name = 'pagamento_parcelado_id';
+            """)
+            fk_info = cur.fetchone()
+            
+            if fk_info:
+                constraint_name, foreign_table = fk_info
+                print(f"   FK encontrada: {constraint_name} -> {foreign_table}")
+                
+                # Se FK aponta para tabela errada, corrigir
+                if foreign_table != 'pagamento_parcelado_v2':
+                    print(f"⚠️ FK aponta para '{foreign_table}' (errado!). Corrigindo...")
+                    
+                    # Dropar FK antiga
+                    cur.execute(f"ALTER TABLE parcela_individual DROP CONSTRAINT {constraint_name};")
+                    print(f"   ✅ FK antiga '{constraint_name}' removida")
+                    
+                    # Criar FK nova apontando para tabela correta
+                    cur.execute("""
+                        ALTER TABLE parcela_individual 
+                        ADD CONSTRAINT fk_pagamento_parcelado 
+                        FOREIGN KEY(pagamento_parcelado_id) 
+                        REFERENCES pagamento_parcelado_v2(id)
+                        ON DELETE CASCADE;
+                    """)
+                    print("   ✅ FK corrigida para apontar para pagamento_parcelado_v2")
+                else:
+                    print("   ✅ FK já aponta para a tabela correta")
+            else:
+                print("   ⚠️ Nenhuma FK encontrada, criando...")
+                cur.execute("""
+                    ALTER TABLE parcela_individual 
+                    ADD CONSTRAINT fk_pagamento_parcelado 
+                    FOREIGN KEY(pagamento_parcelado_id) 
+                    REFERENCES pagamento_parcelado_v2(id)
+                    ON DELETE CASCADE;
+                """)
+                print("   ✅ FK criada")
             
         conn.commit()
         print("🎉 AUTO-MIGRATION CONCLUÍDA!")
