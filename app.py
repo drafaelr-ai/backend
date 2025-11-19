@@ -487,7 +487,17 @@ class PagamentoParcelado(db.Model):
     observacoes = db.Column(db.Text, nullable=True)
     
     def to_dict(self):
-        """Converte objeto para dicionário de forma segura"""
+        """Converte objeto para dicionário de forma segura sem dependências externas"""
+        
+        # Função auxiliar para somar meses sem usar dateutil
+        def add_months_safe(source_date, months):
+            import calendar
+            month = source_date.month - 1 + months
+            year = source_date.year + month // 12
+            month = month % 12 + 1
+            day = min(source_date.day, calendar.monthrange(year, month)[1])
+            return date(year, month, day)
+
         # Calcular a próxima parcela pendente
         proxima_parcela_numero = self.parcelas_pagas + 1
         
@@ -501,8 +511,8 @@ class PagamentoParcelado(db.Model):
                     proxima_data = self.data_primeira_parcela + timedelta(days=dias_incremento)
                     proxima_parcela_vencimento = proxima_data.isoformat()
                 else:  # Mensal
-                    from dateutil.relativedelta import relativedelta
-                    proxima_data = self.data_primeira_parcela + relativedelta(months=(proxima_parcela_numero - 1))
+                    # CORREÇÃO: Usa função nativa em vez de dateutil
+                    proxima_data = add_months_safe(self.data_primeira_parcela, (proxima_parcela_numero - 1))
                     proxima_parcela_vencimento = proxima_data.isoformat()
             except Exception as e:
                 print(f"[AVISO] Erro ao calcular próxima parcela: {e}")
@@ -3693,98 +3703,63 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
     """
     # Handler para OPTIONS (CORS preflight)
     if request.method == 'OPTIONS':
-        response = make_response('', 200)
-        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
-        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
-        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
-        return response
-    
-    print("\n" + "="*80)
-    print(f"📋 INÍCIO: listar_parcelas_individuais")
-    print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
-    print("="*80)
+        return make_response('', 200)
     
     try:
         # Validações de acesso
         current_user = get_current_user()
-        print(f"   👤 Usuário: {current_user.username}")
-        
         if not user_has_access_to_obra(current_user, obra_id):
-            print(f"   ❌ Acesso negado à obra {obra_id}")
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
-        # Buscar pagamento parcelado
+        # Buscar pagamento parcelado (usando db.session.get para compatibilidade)
         pagamento = db.session.get(PagamentoParcelado, pagamento_id)
         if not pagamento or pagamento.obra_id != obra_id:
-            print(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
-        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
-        print(f"      - Valor total: R$ {pagamento.valor_total}")
-        print(f"      - Número de parcelas: {pagamento.numero_parcelas}")
-        print(f"      - Periodicidade: {pagamento.periodicidade}")
-        print(f"      - Parcelas pagas: {pagamento.parcelas_pagas}")
-        
-        # Buscar parcelas individuais
+        # Buscar parcelas individuais existentes
         parcelas = ParcelaIndividual.query.filter_by(
             pagamento_parcelado_id=pagamento_id
         ).order_by(ParcelaIndividual.numero_parcela).all()
         
-        print(f"   📊 Parcelas existentes no banco: {len(parcelas)}")
-        
         # Gerar parcelas automaticamente se não existirem
         if not parcelas:
-            print(f"   🔄 Nenhuma parcela encontrada. Gerando automaticamente...")
+            print(f"--- [LOG] Gerando parcelas para Pagamento ID {pagamento_id} ---")
             
-            # Validar dados necessários
-            if not pagamento.data_primeira_parcela:
-                error_msg = "Pagamento não possui data_primeira_parcela definida"
-                print(f"   ❌ {error_msg}")
-                return jsonify({"erro": error_msg}), 400
-            
-            if not pagamento.valor_parcela or pagamento.valor_parcela <= 0:
-                error_msg = "Pagamento não possui valor_parcela válido"
-                print(f"   ❌ {error_msg}")
-                return jsonify({"erro": error_msg}), 400
-            
-            # Determinar intervalo entre parcelas
-            if pagamento.periodicidade == 'Semanal':
-                dias_intervalo = 7
-            elif pagamento.periodicidade == 'Quinzenal':
-                dias_intervalo = 15
-            elif pagamento.periodicidade == 'Mensal':
-                dias_intervalo = 30
-            else:
-                dias_intervalo = 30
-            
-            print(f"      - Intervalo entre parcelas: {dias_intervalo} dias")
-            
+            import calendar
+            from datetime import timedelta
+
+            # Função auxiliar local para cálculo preciso de meses
+            def add_months_local(source_date, months):
+                month = source_date.month - 1 + months
+                year = source_date.year + month // 12
+                month = month % 12 + 1
+                day = min(source_date.day, calendar.monthrange(year, month)[1])
+                return date(year, month, day)
+
             valor_parcela_padrao = pagamento.valor_parcela
             
             # Gerar cada parcela
             for i in range(pagamento.numero_parcelas):
                 numero_parcela = i + 1
                 
-                # Ajustar valor da última parcela
+                # Ajustar valor da última parcela para fechar o total exato (evita dízimas)
                 if numero_parcela == pagamento.numero_parcelas:
                     valor_parcelas_anteriores = valor_parcela_padrao * (pagamento.numero_parcelas - 1)
                     valor_desta_parcela = pagamento.valor_total - valor_parcelas_anteriores
-                    print(f"      - Parcela {numero_parcela}/{pagamento.numero_parcelas}: R$ {valor_desta_parcela} (ajustada)")
                 else:
                     valor_desta_parcela = valor_parcela_padrao
-                    print(f"      - Parcela {numero_parcela}/{pagamento.numero_parcelas}: R$ {valor_desta_parcela}")
                 
-                # Calcular data de vencimento
-                data_vencimento = pagamento.data_primeira_parcela + timedelta(days=dias_intervalo * i)
+                # Calcular data de vencimento (Lógica corrigida)
+                if pagamento.periodicidade == 'Semanal':
+                    data_vencimento = pagamento.data_primeira_parcela + timedelta(days=7 * i)
+                elif pagamento.periodicidade == 'Quinzenal':
+                    data_vencimento = pagamento.data_primeira_parcela + timedelta(days=15 * i)
+                else: # Mensal (Padrão)
+                    data_vencimento = add_months_local(pagamento.data_primeira_parcela, i)
                 
-                # Determinar status e data de pagamento
-                if i < pagamento.parcelas_pagas:
-                    status = 'Pago'
-                    data_pagamento = data_vencimento
-                else:
-                    status = 'Previsto'
-                    data_pagamento = None
+                # Determinar status inicial
+                status = 'Pago' if i < pagamento.parcelas_pagas else 'Previsto'
+                data_pagamento = data_vencimento if status == 'Pago' else None
                 
                 # Criar parcela
                 parcela = ParcelaIndividual(
@@ -3799,43 +3774,21 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
                 )
                 db.session.add(parcela)
             
-            # Commit das parcelas geradas
             db.session.commit()
-            print(f"   ✅ {pagamento.numero_parcelas} parcelas geradas e salvas no banco")
             
-            # Recarregar parcelas do banco
+            # Recarregar parcelas geradas
             parcelas = ParcelaIndividual.query.filter_by(
                 pagamento_parcelado_id=pagamento_id
             ).order_by(ParcelaIndividual.numero_parcela).all()
-            
-            print(f"   📊 Parcelas após geração: {len(parcelas)}")
         
-        # Preparar resposta
-        parcelas_dict = [p.to_dict() for p in parcelas]
-        
-        # Log resumo
-        parcelas_pagas_count = sum(1 for p in parcelas if p.status == 'Pago')
-        parcelas_previstas_count = len(parcelas) - parcelas_pagas_count
-        
-        print(f"   📊 Resumo final:")
-        print(f"      - Total de parcelas: {len(parcelas)}")
-        print(f"      - Pagas: {parcelas_pagas_count}")
-        print(f"      - Previstas: {parcelas_previstas_count}")
-        print(f"   ✅ Retornando {len(parcelas_dict)} parcelas")
-        print("="*80 + "\n")
-        
-        return jsonify(parcelas_dict), 200
+        return jsonify([p.to_dict() for p in parcelas]), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"\n" + "="*80)
-        print(f"❌ ERRO FATAL em listar_parcelas_individuais:")
-        print(f"   {str(e)}")
-        print(f"\nStack trace completo:")
-        print(error_details)
-        print("="*80 + "\n")
+        print(f"--- [ERRO] listar_parcelas_individuais: {str(e)}\n{error_details} ---")
         return jsonify({"erro": f"Erro interno: {str(e)}"}), 500
+
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT'])
 @jwt_required()
 def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
