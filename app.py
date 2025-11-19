@@ -97,6 +97,25 @@ def run_auto_migration():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_pagamento_futuro_servico ON pagamento_futuro(servico_id);")
         print("✅ Índice criado")
         
+        # ===== MIGRATION 2: Adicionar coluna segmento em pagamento_parcelado_v2 =====
+        print("\n📝 Verificando coluna segmento em pagamento_parcelado_v2...")
+        cur.execute("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'pagamento_parcelado_v2' 
+            AND column_name = 'segmento';
+        """)
+        segmento_existe = cur.fetchone()
+        
+        if not segmento_existe:
+            print("📝 Adicionando coluna segmento...")
+            cur.execute("""
+                ALTER TABLE pagamento_parcelado_v2 
+                ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';
+            """)
+            print("✅ Coluna segmento adicionada em pagamento_parcelado_v2")
+        else:
+            print("✅ Coluna segmento já existe")
+        
         conn.commit()
         print("🎉 AUTO-MIGRATION CONCLUÍDA COM SUCESSO!")
         
@@ -452,8 +471,8 @@ class PagamentoParcelado(db.Model):
     # Vínculo com serviço do cronograma (opcional)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     
-    # NOTA: Coluna 'segmento' não está definida no modelo para evitar erros
-    # Será adicionada manualmente via SQL quando necessário
+    # Tipo de pagamento: Material ou Mão de Obra
+    segmento = db.Column(db.String(50), nullable=True, default='Material')
     
     # Informações do parcelamento
     valor_total = db.Column(db.Float, nullable=False)
@@ -3856,11 +3875,27 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         if pagamento.servico_id:
             print(f"--- [LOG] Parcela vinculada ao serviço {pagamento.servico_id}, criando/atualizando PagamentoServico ---")
             
+            # Determinar tipo de pagamento baseado no segmento do pagamento parcelado
+            try:
+                if hasattr(pagamento, 'segmento') and pagamento.segmento:
+                    # Converter "Mão de Obra" para "mao_de_obra" e "Material" para "material"
+                    if pagamento.segmento == 'Mão de Obra':
+                        tipo_pag = 'mao_de_obra'
+                    else:
+                        tipo_pag = 'material'
+                    print(f"--- [LOG] Segmento detectado: {pagamento.segmento} -> tipo_pagamento: {tipo_pag} ---")
+                else:
+                    tipo_pag = 'material'  # Padrão
+                    print(f"--- [LOG] Segmento não encontrado, usando padrão: material ---")
+            except Exception as seg_error:
+                tipo_pag = 'material'  # Fallback seguro
+                print(f"--- [LOG] Erro ao detectar segmento: {seg_error}, usando padrão: material ---")
+            
             # Buscar PagamentoServico existente para este serviço e fornecedor
             pagamento_servico_existente = PagamentoServico.query.filter_by(
                 servico_id=pagamento.servico_id,
                 fornecedor=pagamento.fornecedor,
-                tipo_pagamento='material'  # Parcelas são sempre material por padrão
+                tipo_pagamento=tipo_pag
             ).first()
             
             if pagamento_servico_existente:
@@ -3871,7 +3906,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
                 # Criar novo registro
                 novo_pagamento_servico = PagamentoServico(
                     servico_id=pagamento.servico_id,
-                    tipo_pagamento='material',
+                    tipo_pagamento=tipo_pag,
                     valor_total=parcela.valor_parcela,
                     valor_pago=parcela.valor_parcela,
                     data=parcela.data_pagamento,
@@ -3881,7 +3916,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
                 )
                 db.session.add(novo_pagamento_servico)
                 db.session.flush()
-                print(f"--- [LOG] Novo PagamentoServico criado com ID={novo_pagamento_servico.id} ---")
+                print(f"--- [LOG] Novo PagamentoServico criado com ID={novo_pagamento_servico.id}, tipo={tipo_pag} ---")
         
         # Atualiza o contador de parcelas pagas no pagamento parcelado
         todas_parcelas = ParcelaIndividual.query.filter_by(
@@ -6714,6 +6749,271 @@ def limpar_e_adicionar_coluna():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e), 'success': False}), 500
+
+
+# ==============================================================================
+# ROTAS DE EXPORTAÇÃO CSV
+# ==============================================================================
+
+@app.route('/obras/<int:obra_id>/servicos/exportar-csv', methods=['GET'])
+@jwt_required()
+def exportar_servicos_csv(obra_id):
+    """Exporta a planilha de serviços para CSV"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        # Buscar todos os serviços da obra
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        
+        # Criar CSV em memória
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Cabeçalho
+        writer.writerow([
+            'Serviço',
+            'Responsável',
+            'Valor Global Mão de Obra',
+            'Valor Global Material',
+            'Mão de Obra Orçada',
+            'Mão de Obra Paga',
+            'Mão de Obra Restante',
+            '% Mão de Obra',
+            'Material Orçado',
+            'Material Pago',
+            'Material Restante',
+            '% Material',
+            'Total Orçado',
+            'Total Pago',
+            'Total Restante',
+            '% Total Executado'
+        ])
+        
+        # Dados
+        for servico in servicos:
+            # Calcular valores de mão de obra
+            mao_obra_pago = sum(
+                pag.valor_pago for pag in servico.pagamentos 
+                if pag.tipo_pagamento == 'mao_de_obra'
+            )
+            mao_obra_orcado = servico.valor_global_mao_de_obra
+            mao_obra_restante = mao_obra_orcado - mao_obra_pago
+            perc_mao_obra = (mao_obra_pago / mao_obra_orcado * 100) if mao_obra_orcado > 0 else 0
+            
+            # Calcular valores de material
+            material_pago = sum(
+                pag.valor_pago for pag in servico.pagamentos 
+                if pag.tipo_pagamento == 'material'
+            )
+            material_orcado = servico.valor_global_material
+            material_restante = material_orcado - material_pago
+            perc_material = (material_pago / material_orcado * 100) if material_orcado > 0 else 0
+            
+            # Totais
+            total_orcado = mao_obra_orcado + material_orcado
+            total_pago = mao_obra_pago + material_pago
+            total_restante = total_orcado - total_pago
+            perc_total = (total_pago / total_orcado * 100) if total_orcado > 0 else 0
+            
+            writer.writerow([
+                servico.nome,
+                servico.responsavel or '-',
+                f'R$ {mao_obra_orcado:,.2f}',
+                f'R$ {material_orcado:,.2f}',
+                f'R$ {mao_obra_orcado:,.2f}',
+                f'R$ {mao_obra_pago:,.2f}',
+                f'R$ {mao_obra_restante:,.2f}',
+                f'{perc_mao_obra:.1f}%',
+                f'R$ {material_orcado:,.2f}',
+                f'R$ {material_pago:,.2f}',
+                f'R$ {material_restante:,.2f}',
+                f'{perc_material:.1f}%',
+                f'R$ {total_orcado:,.2f}',
+                f'R$ {total_pago:,.2f}',
+                f'R$ {total_restante:,.2f}',
+                f'{perc_total:.1f}%'
+            ])
+        
+        # Preparar para download
+        output.seek(0)
+        
+        return send_file(
+            io.BytesIO(output.getvalue().encode('utf-8-sig')),  # UTF-8 com BOM para Excel
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f'Servicos_{obra.nome.replace(" ", "_")}_{date.today()}.csv'
+        )
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] exportar_servicos_csv: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/cronograma-financeiro/exportar-csv', methods=['GET'])
+@jwt_required()
+def exportar_cronograma_csv(obra_id):
+    """Exporta o cronograma financeiro para CSV"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        hoje = date.today()
+        
+        # Buscar dados
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id).all()
+        pagamentos_parcelados = PagamentoParcelado.query.filter_by(obra_id=obra_id).all()
+        
+        # Criar CSV em memória
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # SEÇÃO 1: PAGAMENTOS FUTUROS (ÚNICOS)
+        writer.writerow(['===== PAGAMENTOS FUTUROS (ÚNICOS) ====='])
+        writer.writerow([
+            'Descrição',
+            'Fornecedor',
+            'Vencimento',
+            'Valor',
+            'Status',
+            'Tipo',
+            'Serviço Vinculado'
+        ])
+        
+        for pag in pagamentos_futuros:
+            servico_nome = '-'
+            if pag.servico_id:
+                servico = Servico.query.get(pag.servico_id)
+                servico_nome = servico.nome if servico else '-'
+            
+            status_display = 'Pago' if pag.status == 'Pago' else ('Vencido' if pag.data_vencimento < hoje else 'Previsto')
+            tipo_display = pag.tipo if hasattr(pag, 'tipo') and pag.tipo else '-'
+            
+            writer.writerow([
+                pag.descricao,
+                pag.fornecedor or '-',
+                pag.data_vencimento.strftime('%d/%m/%Y') if pag.data_vencimento else '-',
+                f'R$ {pag.valor:,.2f}',
+                status_display,
+                tipo_display,
+                servico_nome
+            ])
+        
+        writer.writerow([])  # Linha em branco
+        
+        # SEÇÃO 2: PAGAMENTOS PARCELADOS
+        writer.writerow(['===== PAGAMENTOS PARCELADOS ====='])
+        writer.writerow([
+            'Descrição',
+            'Fornecedor',
+            'Valor Total',
+            'Parcelas',
+            'Valor/Parcela',
+            'Periodicidade',
+            'Parcelas Pagas',
+            'Status',
+            'Segmento',
+            'Serviço Vinculado'
+        ])
+        
+        for pag in pagamentos_parcelados:
+            servico_nome = '-'
+            if pag.servico_id:
+                servico = Servico.query.get(pag.servico_id)
+                servico_nome = servico.nome if servico else '-'
+            
+            segmento = 'Material'
+            try:
+                if hasattr(pag, 'segmento') and pag.segmento:
+                    segmento = pag.segmento
+            except:
+                pass
+            
+            writer.writerow([
+                pag.descricao,
+                pag.fornecedor or '-',
+                f'R$ {pag.valor_total:,.2f}',
+                f'{pag.numero_parcelas}',
+                f'R$ {pag.valor_parcela:,.2f}',
+                pag.periodicidade,
+                f'{pag.parcelas_pagas}/{pag.numero_parcelas}',
+                pag.status,
+                segmento,
+                servico_nome
+            ])
+        
+        writer.writerow([])  # Linha em branco
+        
+        # SEÇÃO 3: RESUMO FINANCEIRO
+        writer.writerow(['===== RESUMO FINANCEIRO ====='])
+        
+        # Calcular totais
+        total_futuros_previsto = sum(p.valor for p in pagamentos_futuros if p.status != 'Pago' and p.data_vencimento >= hoje)
+        total_futuros_vencido = sum(p.valor for p in pagamentos_futuros if p.status != 'Pago' and p.data_vencimento < hoje)
+        total_futuros_pago = sum(p.valor for p in pagamentos_futuros if p.status == 'Pago')
+        
+        total_parcelado = sum(p.valor_total for p in pagamentos_parcelados)
+        total_parcelado_pago = sum(p.parcelas_pagas * p.valor_parcela for p in pagamentos_parcelados)
+        total_parcelado_restante = total_parcelado - total_parcelado_pago
+        
+        writer.writerow([
+            'Total Pagamentos Futuros (Previstos)',
+            f'R$ {total_futuros_previsto:,.2f}'
+        ])
+        writer.writerow([
+            'Total Pagamentos Futuros (Vencidos)',
+            f'R$ {total_futuros_vencido:,.2f}'
+        ])
+        writer.writerow([
+            'Total Pagamentos Futuros (Pagos)',
+            f'R$ {total_futuros_pago:,.2f}'
+        ])
+        writer.writerow([
+            'Total Parcelados (Valor Total)',
+            f'R$ {total_parcelado:,.2f}'
+        ])
+        writer.writerow([
+            'Total Parcelados (Já Pago)',
+            f'R$ {total_parcelado_pago:,.2f}'
+        ])
+        writer.writerow([
+            'Total Parcelados (Restante)',
+            f'R$ {total_parcelado_restante:,.2f}'
+        ])
+        writer.writerow([
+            'TOTAL GERAL A PAGAR',
+            f'R$ {(total_futuros_previsto + total_futuros_vencido + total_parcelado_restante):,.2f}'
+        ])
+        
+        # Preparar para download
+        output.seek(0)
+        
+        return send_file(
+            io.BytesIO(output.getvalue().encode('utf-8-sig')),
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=f'Cronograma_{obra.nome.replace(" ", "_")}_{date.today()}.csv'
+        )
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] exportar_cronograma_csv: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+# ==============================================================================
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
@@ -6823,3 +7123,152 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
     app.run(host='0.0.0.0', port=port, debug=True)
+# ROTA PARA EXPORTAR SERVICOS EM PDF
+# Inserir após a rota exportar_servicos_csv (linha ~6850)
+
+@app.route('/obras/<int:obra_id>/servicos/exportar-pdf', methods=['GET'])
+@jwt_required()
+def exportar_servicos_pdf(obra_id):
+    """Exporta a planilha de serviços para PDF"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        # Buscar todos os serviços da obra
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        
+        # Criar PDF em memória
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=2*cm, bottomMargin=2*cm)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Função para formatar valores em reais
+        def formatar_real(valor):
+            return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+        
+        # Título
+        titulo = Paragraph(f"<b>Planilha de Serviços - {obra.nome}</b>", styles['Title'])
+        elements.append(titulo)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Subtítulo
+        subtitulo = Paragraph(f"Gerado em: {date.today().strftime('%d/%m/%Y')}", styles['Normal'])
+        elements.append(subtitulo)
+        elements.append(Spacer(1, 1*cm))
+        
+        # Preparar dados da tabela
+        data = [
+            ['Serviço', 'Responsável', 'MO Orçado', 'MO Pago', '% MO', 'Mat Orçado', 'Mat Pago', '% Mat', 'Total', '% Total']
+        ]
+        
+        total_geral_orcado = 0
+        total_geral_pago = 0
+        
+        for servico in servicos:
+            # Calcular valores de mão de obra
+            mao_obra_pago = sum(
+                pag.valor_pago for pag in servico.pagamentos 
+                if pag.tipo_pagamento == 'mao_de_obra'
+            )
+            mao_obra_orcado = servico.valor_global_mao_de_obra
+            perc_mao_obra = (mao_obra_pago / mao_obra_orcado * 100) if mao_obra_orcado > 0 else 0
+            
+            # Calcular valores de material
+            material_pago = sum(
+                pag.valor_pago for pag in servico.pagamentos 
+                if pag.tipo_pagamento == 'material'
+            )
+            material_orcado = servico.valor_global_material
+            perc_material = (material_pago / material_orcado * 100) if material_orcado > 0 else 0
+            
+            # Totais
+            total_orcado = mao_obra_orcado + material_orcado
+            total_pago = mao_obra_pago + material_pago
+            perc_total = (total_pago / total_orcado * 100) if total_orcado > 0 else 0
+            
+            total_geral_orcado += total_orcado
+            total_geral_pago += total_pago
+            
+            # Truncar nome do serviço se muito longo
+            nome_servico = servico.nome if len(servico.nome) <= 20 else servico.nome[:17] + '...'
+            resp = servico.responsavel if servico.responsavel and len(servico.responsavel) <= 15 else (servico.responsavel[:12] + '...' if servico.responsavel else '-')
+            
+            data.append([
+                nome_servico,
+                resp,
+                formatar_real(mao_obra_orcado),
+                formatar_real(mao_obra_pago),
+                f'{perc_mao_obra:.1f}%',
+                formatar_real(material_orcado),
+                formatar_real(material_pago),
+                f'{perc_material:.1f}%',
+                formatar_real(total_orcado),
+                f'{perc_total:.1f}%'
+            ])
+        
+        # Linha de totais
+        perc_geral = (total_geral_pago / total_geral_orcado * 100) if total_geral_orcado > 0 else 0
+        data.append([
+            'TOTAL',
+            '',
+            '',
+            '',
+            '',
+            '',
+            '',
+            '',
+            formatar_real(total_geral_orcado),
+            f'{perc_geral:.1f}%'
+        ])
+        
+        # Criar tabela
+        table = Table(data, colWidths=[3*cm, 2.5*cm, 2*cm, 2*cm, 1.5*cm, 2*cm, 2*cm, 1.5*cm, 2.5*cm, 1.5*cm])
+        
+        # Estilo da tabela
+        style_list = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4CAF50')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+            # Linha de totais
+            ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FFC107')),
+            ('TEXTCOLOR', (0, -1), (-1, -1), colors.black),
+            ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ]
+        
+        table.setStyle(TableStyle(style_list))
+        elements.append(table)
+        
+        # Legenda
+        elements.append(Spacer(1, 1*cm))
+        legenda = Paragraph("<b>Legenda:</b> MO = Mão de Obra | Mat = Material", styles['Normal'])
+        elements.append(legenda)
+        
+        # Construir PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        print(f"--- [LOG] PDF de serviços gerado para obra {obra_id} ---")
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f"Servicos_{obra.nome.replace(' ', '_')}_{date.today()}.pdf",
+            mimetype='application/pdf'
+        )
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] ao gerar PDF de serviços: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
