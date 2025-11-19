@@ -3852,6 +3852,37 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         
         print(f"--- [LOG] Lançamento criado com ID={novo_lancamento.id} ---")
         
+        # ===== CRIAR/ATUALIZAR PAGAMENTO_SERVICO SE HOUVER SERVIÇO VINCULADO =====
+        if pagamento.servico_id:
+            print(f"--- [LOG] Parcela vinculada ao serviço {pagamento.servico_id}, criando/atualizando PagamentoServico ---")
+            
+            # Buscar PagamentoServico existente para este serviço e fornecedor
+            pagamento_servico_existente = PagamentoServico.query.filter_by(
+                servico_id=pagamento.servico_id,
+                fornecedor=pagamento.fornecedor,
+                tipo_pagamento='material'  # Parcelas são sempre material por padrão
+            ).first()
+            
+            if pagamento_servico_existente:
+                # Atualizar valor_pago do registro existente
+                pagamento_servico_existente.valor_pago += parcela.valor_parcela
+                print(f"--- [LOG] PagamentoServico ID={pagamento_servico_existente.id} atualizado. Novo valor_pago: {pagamento_servico_existente.valor_pago} ---")
+            else:
+                # Criar novo registro
+                novo_pagamento_servico = PagamentoServico(
+                    servico_id=pagamento.servico_id,
+                    tipo_pagamento='material',
+                    valor_total=parcela.valor_parcela,
+                    valor_pago=parcela.valor_parcela,
+                    data=parcela.data_pagamento,
+                    fornecedor=pagamento.fornecedor,
+                    forma_pagamento=parcela.forma_pagamento,
+                    prioridade=0
+                )
+                db.session.add(novo_pagamento_servico)
+                db.session.flush()
+                print(f"--- [LOG] Novo PagamentoServico criado com ID={novo_pagamento_servico.id} ---")
+        
         # Atualiza o contador de parcelas pagas no pagamento parcelado
         todas_parcelas = ParcelaIndividual.query.filter_by(
             pagamento_parcelado_id=pagamento_id
