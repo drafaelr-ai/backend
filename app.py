@@ -3566,7 +3566,7 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
 def deletar_pagamento_parcelado(obra_id, pagamento_id):
-    """Deleta um pagamento parcelado"""
+    """Deleta um pagamento parcelado e todas suas parcelas individuais"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -3576,10 +3576,16 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         if not pagamento or pagamento.obra_id != obra_id:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
+        # CORREÇÃO: Deletar todas as parcelas individuais primeiro
+        parcelas = ParcelaIndividual.query.filter_by(pagamento_parcelado_id=pagamento_id).all()
+        for parcela in parcelas:
+            db.session.delete(parcela)
+        
+        # Agora pode deletar o pagamento parcelado
         db.session.delete(pagamento)
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento parcelado {pagamento_id} deletado da obra {obra_id} ---")
+        print(f"--- [LOG] Pagamento parcelado {pagamento_id} e {len(parcelas)} parcela(s) deletados da obra {obra_id} ---")
         return jsonify({"mensagem": "Pagamento parcelado deletado com sucesso"}), 200
     
     except Exception as e:
