@@ -3684,65 +3684,158 @@ def calcular_previsoes(obra_id):
 # ENDPOINTS: PARCELAS INDIVIDUAIS (NOVO!)
 # ========================================
 
-@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas', methods=['GET'])
-@jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas', methods=['GET', 'OPTIONS'])
+@jwt_required(optional=True)
 def listar_parcelas_individuais(obra_id, pagamento_id):
-    """Lista todas as parcelas individuais de um pagamento parcelado"""
+    """
+    Lista todas as parcelas individuais de um pagamento parcelado.
+    Se as parcelas não existirem, gera automaticamente baseado na configuração do pagamento.
+    """
+    # Handler para OPTIONS (CORS preflight)
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    print("\n" + "="*80)
+    print(f"📋 INÍCIO: listar_parcelas_individuais")
+    print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
+    print("="*80)
+    
     try:
+        # Validações de acesso
         current_user = get_current_user()
+        print(f"   👤 Usuário: {current_user.username}")
+        
         if not user_has_access_to_obra(current_user, obra_id):
+            print(f"   ❌ Acesso negado à obra {obra_id}")
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
+        # Buscar pagamento parcelado
         pagamento = db.session.get(PagamentoParcelado, pagamento_id)
         if not pagamento or pagamento.obra_id != obra_id:
+            print(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
-        # Busca as parcelas individuais
+        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        print(f"      - Valor total: R$ {pagamento.valor_total}")
+        print(f"      - Número de parcelas: {pagamento.numero_parcelas}")
+        print(f"      - Periodicidade: {pagamento.periodicidade}")
+        print(f"      - Parcelas pagas: {pagamento.parcelas_pagas}")
+        
+        # Buscar parcelas individuais
         parcelas = ParcelaIndividual.query.filter_by(
             pagamento_parcelado_id=pagamento_id
         ).order_by(ParcelaIndividual.numero_parcela).all()
         
-        # Se não existem parcelas individuais, gera automaticamente
+        print(f"   📊 Parcelas existentes no banco: {len(parcelas)}")
+        
+        # Gerar parcelas automaticamente se não existirem
         if not parcelas:
-            dias_intervalo = 7 if pagamento.periodicidade == 'Semanal' else 30
-            valor_parcela_normal = pagamento.valor_parcela
+            print(f"   🔄 Nenhuma parcela encontrada. Gerando automaticamente...")
             
+            # Validar dados necessários
+            if not pagamento.data_primeira_parcela:
+                error_msg = "Pagamento não possui data_primeira_parcela definida"
+                print(f"   ❌ {error_msg}")
+                return jsonify({"erro": error_msg}), 400
+            
+            if not pagamento.valor_parcela or pagamento.valor_parcela <= 0:
+                error_msg = "Pagamento não possui valor_parcela válido"
+                print(f"   ❌ {error_msg}")
+                return jsonify({"erro": error_msg}), 400
+            
+            # Determinar intervalo entre parcelas
+            if pagamento.periodicidade == 'Semanal':
+                dias_intervalo = 7
+            elif pagamento.periodicidade == 'Quinzenal':
+                dias_intervalo = 15
+            elif pagamento.periodicidade == 'Mensal':
+                dias_intervalo = 30
+            else:
+                dias_intervalo = 30
+            
+            print(f"      - Intervalo entre parcelas: {dias_intervalo} dias")
+            
+            valor_parcela_padrao = pagamento.valor_parcela
+            
+            # Gerar cada parcela
             for i in range(pagamento.numero_parcelas):
-                # Ajusta a última parcela
-                if i == pagamento.numero_parcelas - 1:
-                    valor_ja_parcelado = valor_parcela_normal * (pagamento.numero_parcelas - 1)
-                    valor_ultima = pagamento.valor_total - valor_ja_parcelado
+                numero_parcela = i + 1
+                
+                # Ajustar valor da última parcela
+                if numero_parcela == pagamento.numero_parcelas:
+                    valor_parcelas_anteriores = valor_parcela_padrao * (pagamento.numero_parcelas - 1)
+                    valor_desta_parcela = pagamento.valor_total - valor_parcelas_anteriores
+                    print(f"      - Parcela {numero_parcela}/{pagamento.numero_parcelas}: R$ {valor_desta_parcela} (ajustada)")
                 else:
-                    valor_ultima = valor_parcela_normal
+                    valor_desta_parcela = valor_parcela_padrao
+                    print(f"      - Parcela {numero_parcela}/{pagamento.numero_parcelas}: R$ {valor_desta_parcela}")
                 
+                # Calcular data de vencimento
                 data_vencimento = pagamento.data_primeira_parcela + timedelta(days=dias_intervalo * i)
-                status = 'Pago' if i < pagamento.parcelas_pagas else 'Previsto'
                 
+                # Determinar status e data de pagamento
+                if i < pagamento.parcelas_pagas:
+                    status = 'Pago'
+                    data_pagamento = data_vencimento
+                else:
+                    status = 'Previsto'
+                    data_pagamento = None
+                
+                # Criar parcela
                 parcela = ParcelaIndividual(
                     pagamento_parcelado_id=pagamento_id,
-                    numero_parcela=i + 1,
-                    valor_parcela=valor_ultima,
+                    numero_parcela=numero_parcela,
+                    valor_parcela=valor_desta_parcela,
                     data_vencimento=data_vencimento,
-                    status=status
+                    data_pagamento=data_pagamento,
+                    status=status,
+                    forma_pagamento=None,
+                    observacoes=None
                 )
                 db.session.add(parcela)
             
+            # Commit das parcelas geradas
             db.session.commit()
+            print(f"   ✅ {pagamento.numero_parcelas} parcelas geradas e salvas no banco")
             
-            # Recarrega as parcelas
+            # Recarregar parcelas do banco
             parcelas = ParcelaIndividual.query.filter_by(
                 pagamento_parcelado_id=pagamento_id
             ).order_by(ParcelaIndividual.numero_parcela).all()
+            
+            print(f"   📊 Parcelas após geração: {len(parcelas)}")
         
-        return jsonify([p.to_dict() for p in parcelas]), 200
+        # Preparar resposta
+        parcelas_dict = [p.to_dict() for p in parcelas]
+        
+        # Log resumo
+        parcelas_pagas_count = sum(1 for p in parcelas if p.status == 'Pago')
+        parcelas_previstas_count = len(parcelas) - parcelas_pagas_count
+        
+        print(f"   📊 Resumo final:")
+        print(f"      - Total de parcelas: {len(parcelas)}")
+        print(f"      - Pagas: {parcelas_pagas_count}")
+        print(f"      - Previstas: {parcelas_previstas_count}")
+        print(f"   ✅ Retornando {len(parcelas_dict)} parcelas")
+        print("="*80 + "\n")
+        
+        return jsonify(parcelas_dict), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET parcelas individuais: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
-
-
+        print(f"\n" + "="*80)
+        print(f"❌ ERRO FATAL em listar_parcelas_individuais:")
+        print(f"   {str(e)}")
+        print(f"\nStack trace completo:")
+        print(error_details)
+        print("="*80 + "\n")
+        return jsonify({"erro": f"Erro interno: {str(e)}"}), 500
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT'])
 @jwt_required()
 def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
@@ -3805,32 +3898,61 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST'])
 @jwt_required()
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
     """Marca uma parcela individual como paga e cria lançamento no histórico"""
+    
+    # Handler para OPTIONS (CORS preflight)
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+
     try:
-        print(f"--- [LOG] Iniciando pagamento de parcela: obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id} ---")
+        print(f"\n{'='*80}")
+        print(f"💳 INÍCIO: marcar_parcela_paga")
+        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id}")
+        print(f"{'='*80}")
         
+        # Validações de acesso
         current_user = get_current_user()
+        print(f"   👤 Usuário: {current_user.username} (role: {current_user.role})")
+        
         if not user_has_access_to_obra(current_user, obra_id):
+            print(f"   ❌ Acesso negado à obra {obra_id}")
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
+        # Buscar pagamento parcelado
         pagamento = db.session.get(PagamentoParcelado, pagamento_id)
         if not pagamento or pagamento.obra_id != obra_id:
+            print(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
-        print(f"--- [LOG] Pagamento encontrado: {pagamento.descricao}, servico_id={pagamento.servico_id} ---")
+        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        print(f"      - servico_id: {pagamento.servico_id}")
+        print(f"      - fornecedor: {pagamento.fornecedor}")
         
+        # Buscar parcela
         parcela = db.session.get(ParcelaIndividual, parcela_id)
         if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
+            print(f"   ❌ Parcela {parcela_id} não encontrada ou não pertence ao pagamento {pagamento_id}")
             return jsonify({"erro": "Parcela não encontrada"}), 404
         
         if parcela.status == 'Pago':
-            print(f"--- [LOG] Parcela {parcela_id} já estava paga ---")
+            print(f"   ⚠️ Parcela {parcela_id} já estava paga")
             return jsonify({"mensagem": "Parcela já está marcada como paga"}), 200
         
+        print(f"   ✅ Parcela encontrada: {parcela.numero_parcela}/{pagamento.numero_parcelas}")
+        print(f"      - valor: R$ {parcela.valor_parcela}")
+        
+        # Processar dados
         data = request.get_json()
         
-        # Marca a parcela como paga
+        # Marcar parcela como paga
         parcela.status = 'Pago'
         parcela.data_pagamento = datetime.strptime(
             data.get('data_pagamento', date.today().isoformat()), 
@@ -3838,20 +3960,19 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         ).date()
         parcela.forma_pagamento = data.get('forma_pagamento', None)
         
-        print(f"--- [LOG] Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas} marcada como paga em {parcela.data_pagamento} ---")
+        print(f"   ✅ Parcela marcada como paga em {parcela.data_pagamento}")
         
-        # ===== CRIAR LANÇAMENTO NO HISTÓRICO =====
+        # Criar lançamento no histórico
         descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
         
-        # Pega o segmento do pagamento parcelado para log
-        try:
-            segmento_info = pagamento.segmento if hasattr(pagamento, 'segmento') and pagamento.segmento else 'Material'
-        except:
-            segmento_info = 'Material'
+        # Tratamento seguro do segmento
+        segmento_info = 'Material'
+        if hasattr(pagamento, 'segmento') and pagamento.segmento:
+            segmento_info = pagamento.segmento
         
-        print(f"--- [LOG] Criando lançamento: '{descricao_lancamento}', valor={parcela.valor_parcela}, servico_id={pagamento.servico_id}, segmento={segmento_info} (não salvo no lançamento) ---")
+        print(f"   📄 Criando lançamento: '{descricao_lancamento}'")
+        print(f"      - segmento: {segmento_info}")
         
-        # Criar lançamento SEM campo segmento (coluna não existe no banco)
         novo_lancamento = Lancamento(
             obra_id=pagamento.obra_id,
             tipo='Despesa',
@@ -3866,59 +3987,71 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
             fornecedor=pagamento.fornecedor,
             servico_id=pagamento.servico_id
         )
+        
+        # Tenta atribuir segmento se o modelo suportar
+        if hasattr(novo_lancamento, 'segmento'):
+            novo_lancamento.segmento = segmento_info
+            print(f"      - segmento atribuído ao lançamento")
+        
         db.session.add(novo_lancamento)
-        db.session.flush()  # Para obter o ID antes do commit
+        db.session.flush()
         
-        print(f"--- [LOG] Lançamento criado com ID={novo_lancamento.id} ---")
+        print(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
         
-        # ===== CRIAR/ATUALIZAR PAGAMENTO_SERVICO SE HOUVER SERVIÇO VINCULADO =====
+        # Criar/atualizar PagamentoServico se houver vínculo
         if pagamento.servico_id:
-            print(f"--- [LOG] Parcela vinculada ao serviço {pagamento.servico_id}, criando/atualizando PagamentoServico ---")
-            
-            # Determinar tipo de pagamento baseado no segmento do pagamento parcelado
-            try:
-                if hasattr(pagamento, 'segmento') and pagamento.segmento:
-                    # Converter "Mão de Obra" para "mao_de_obra" e "Material" para "material"
-                    if pagamento.segmento == 'Mão de Obra':
-                        tipo_pag = 'mao_de_obra'
-                    else:
-                        tipo_pag = 'material'
-                    print(f"--- [LOG] Segmento detectado: {pagamento.segmento} -> tipo_pagamento: {tipo_pag} ---")
-                else:
-                    tipo_pag = 'material'  # Padrão
-                    print(f"--- [LOG] Segmento não encontrado, usando padrão: material ---")
-            except Exception as seg_error:
-                tipo_pag = 'material'  # Fallback seguro
-                print(f"--- [LOG] Erro ao detectar segmento: {seg_error}, usando padrão: material ---")
-            
-            # Buscar PagamentoServico existente para este serviço e fornecedor
-            pagamento_servico_existente = PagamentoServico.query.filter_by(
-                servico_id=pagamento.servico_id,
-                fornecedor=pagamento.fornecedor,
-                tipo_pagamento=tipo_pag
-            ).first()
-            
-            if pagamento_servico_existente:
-                # Atualizar valor_pago do registro existente
-                pagamento_servico_existente.valor_pago += parcela.valor_parcela
-                print(f"--- [LOG] PagamentoServico ID={pagamento_servico_existente.id} atualizado. Novo valor_pago: {pagamento_servico_existente.valor_pago} ---")
+            # ⭐ VALIDAR SE SERVIÇO EXISTE
+            servico = db.session.get(Servico, pagamento.servico_id)
+            if not servico:
+                print(f"--- [AVISO] Serviço {pagamento.servico_id} não existe no banco! Continuando sem vincular ao serviço. ---")
+                novo_lancamento.servico_id = None
             else:
-                # Criar novo registro
-                novo_pagamento_servico = PagamentoServico(
+                print(f"--- [LOG] Parcela vinculada ao serviço {pagamento.servico_id}, criando/atualizando PagamentoServico ---")
+                
+                # Determinar tipo de pagamento baseado no segmento do pagamento parcelado
+                try:
+                    if hasattr(pagamento, 'segmento') and pagamento.segmento:
+                        # Converter "Mão de Obra" para "mao_de_obra" e "Material" para "material"
+                        if pagamento.segmento == 'Mão de Obra':
+                            tipo_pag = 'mao_de_obra'
+                        else:
+                            tipo_pag = 'material'
+                        print(f"--- [LOG] Segmento detectado: {pagamento.segmento} -> tipo_pagamento: {tipo_pag} ---")
+                    else:
+                        tipo_pag = 'material'  # Padrão
+                        print(f"--- [LOG] Segmento não encontrado, usando padrão: material ---")
+                except Exception as seg_error:
+                    tipo_pag = 'material'  # Fallback seguro
+                    print(f"--- [LOG] Erro ao detectar segmento: {seg_error}, usando padrão: material ---")
+                
+                # Buscar PagamentoServico existente para este serviço e fornecedor
+                pagamento_servico_existente = PagamentoServico.query.filter_by(
                     servico_id=pagamento.servico_id,
-                    tipo_pagamento=tipo_pag,
-                    valor_total=parcela.valor_parcela,
-                    valor_pago=parcela.valor_parcela,
-                    data=parcela.data_pagamento,
                     fornecedor=pagamento.fornecedor,
-                    forma_pagamento=parcela.forma_pagamento,
-                    prioridade=0
-                )
-                db.session.add(novo_pagamento_servico)
-                db.session.flush()
-                print(f"--- [LOG] Novo PagamentoServico criado com ID={novo_pagamento_servico.id}, tipo={tipo_pag} ---")
+                    tipo_pagamento=tipo_pag
+                ).first()
+                
+                if pagamento_servico_existente:
+                    # Atualizar valor_pago do registro existente
+                    pagamento_servico_existente.valor_pago += parcela.valor_parcela
+                    print(f"--- [LOG] PagamentoServico ID={pagamento_servico_existente.id} atualizado. Novo valor_pago: {pagamento_servico_existente.valor_pago} ---")
+                else:
+                    # Criar novo registro
+                    novo_pagamento_servico = PagamentoServico(
+                        servico_id=pagamento.servico_id,
+                        tipo_pagamento=tipo_pag,
+                        valor_total=parcela.valor_parcela,
+                        valor_pago=parcela.valor_parcela,
+                        data=parcela.data_pagamento,
+                        fornecedor=pagamento.fornecedor,
+                        forma_pagamento=parcela.forma_pagamento,
+                        prioridade=0
+                    )
+                    db.session.add(novo_pagamento_servico)
+                    db.session.flush()
+                    print(f"--- [LOG] Novo PagamentoServico criado com ID={novo_pagamento_servico.id}, tipo={tipo_pag} ---")
         
-        # Atualiza o contador de parcelas pagas no pagamento parcelado
+        # Atualizar contador de parcelas pagas
         todas_parcelas = ParcelaIndividual.query.filter_by(
             pagamento_parcelado_id=pagamento_id
         ).all()
@@ -3926,30 +4059,35 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         parcelas_pagas_count = sum(1 for p in todas_parcelas if p.status == 'Pago')
         pagamento.parcelas_pagas = parcelas_pagas_count
         
-        print(f"--- [LOG] Total de parcelas pagas: {parcelas_pagas_count}/{pagamento.numero_parcelas} ---")
+        print(f"   📊 Total de parcelas pagas: {parcelas_pagas_count}/{pagamento.numero_parcelas}")
         
-        # Se todas foram pagas, atualiza status do pagamento
+        # Se todas foram pagas, atualizar status
         if parcelas_pagas_count >= pagamento.numero_parcelas:
             pagamento.status = 'Concluído'
-            print(f"--- [LOG] Pagamento marcado como Concluído ---")
+            print(f"   🎉 Pagamento marcado como Concluído")
         
+        # Commit final
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Parcela {parcela_id} marcada como paga e lançamento {novo_lancamento.id} criado com sucesso! ---")
+        print(f"   ✅ SUCESSO: Parcela {parcela_id} paga e lançamento {novo_lancamento.id} criado")
+        print(f"{'='*80}\n")
+        
         return jsonify({
-            "mensagem": "Parcela marcada como paga e lançamento criado no histórico",
+            "mensagem": "Parcela paga com sucesso",
             "parcela": parcela.to_dict(),
-            "pagamento": pagamento.to_dict(),
             "lancamento_id": novo_lancamento.id
         }), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST marcar parcela paga: {str(e)}\n{error_details} ---")
+        print(f"\n{'='*80}")
+        print(f"❌ ERRO FATAL em marcar_parcela_paga:")
+        print(f"   {str(e)}")
+        print(f"\nStack trace completo:")
+        print(error_details)
+        print(f"{'='*80}\n")
         return jsonify({"erro": str(e)}), 500
-
-
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET'])
 @jwt_required()
 def obter_alertas_vencimento(obra_id):
