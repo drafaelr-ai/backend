@@ -3795,7 +3795,7 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
                     data_pagamento=data_pagamento,
                     status=status,
                     forma_pagamento=None,
-                    observacoes=None
+                    observacao=None
                 )
                 db.session.add(parcela)
             
