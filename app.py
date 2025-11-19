@@ -81,61 +81,33 @@ def run_auto_migration():
             print("✅ Coluna segmento adicionada em pagamento_parcelado_v2")
 
         # =================================================================
-        # 3. CRÍTICO: DROPAR E RECRIAR TABELA PARCELA_INDIVIDUAL
+        # 3. CRÍTICO: SEMPRE DROPAR E RECRIAR PARCELA_INDIVIDUAL
         # =================================================================
-        print("📝 Verificando tabela parcela_individual...")
+        print("📝 Forçando recriação de parcela_individual...")
         
-        # Verificar se tabela existe
-        cur.execute("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'parcela_individual');")
-        tabela_existe = cur.fetchone()[0]
+        # SEMPRE DROPAR (sem verificações)
+        cur.execute("DROP TABLE IF EXISTS parcela_individual CASCADE;")
+        print("🗑️ Tabela parcela_individual dropada (se existia)")
         
-        if tabela_existe:
-            print("⚠️ Tabela parcela_individual existe. Verificando FK...")
-            
-            # Verificar se FK aponta para tabela correta
-            cur.execute("""
-                SELECT ccu.table_name 
-                FROM information_schema.table_constraints AS tc 
-                JOIN information_schema.constraint_column_usage AS ccu
-                    ON ccu.constraint_name = tc.constraint_name
-                WHERE tc.table_name = 'parcela_individual' 
-                    AND tc.constraint_type = 'FOREIGN KEY'
-                    AND ccu.column_name = 'pagamento_parcelado_id';
-            """)
-            fk_result = cur.fetchone()
-            
-            if fk_result and fk_result[0] != 'pagamento_parcelado_v2':
-                print(f"❌ FK aponta para '{fk_result[0]}' (errado!)")
-                print("🔄 DROPANDO tabela para recriar com FK correta...")
-                
-                # DROPAR TABELA COMPLETAMENTE (perdendo dados)
-                cur.execute("DROP TABLE IF EXISTS parcela_individual CASCADE;")
-                print("✅ Tabela dropada")
-                tabela_existe = False  # Forçar recriação
-            else:
-                print("✅ FK já está correta ou não existe")
-        
-        # CRIAR tabela se não existir (ou foi dropada)
-        if not tabela_existe:
-            print("📝 Criando tabela parcela_individual...")
-            cur.execute("""
-                CREATE TABLE parcela_individual (
-                    id SERIAL PRIMARY KEY,
-                    pagamento_parcelado_id INTEGER NOT NULL,
-                    numero_parcela INTEGER NOT NULL,
-                    valor_parcela FLOAT NOT NULL,
-                    data_vencimento DATE NOT NULL,
-                    status VARCHAR(20) DEFAULT 'Previsto',
-                    data_pagamento DATE,
-                    forma_pagamento VARCHAR(50),
-                    observacao VARCHAR(255),
-                    CONSTRAINT fk_pagamento_parcelado 
-                        FOREIGN KEY(pagamento_parcelado_id) 
-                        REFERENCES pagamento_parcelado_v2(id)
-                        ON DELETE CASCADE
-                );
-            """)
-            print("✅ Tabela parcela_individual criada com FK correta!")
+        # CRIAR DO ZERO
+        cur.execute("""
+            CREATE TABLE parcela_individual (
+                id SERIAL PRIMARY KEY,
+                pagamento_parcelado_id INTEGER NOT NULL,
+                numero_parcela INTEGER NOT NULL,
+                valor_parcela FLOAT NOT NULL,
+                data_vencimento DATE NOT NULL,
+                status VARCHAR(20) DEFAULT 'Previsto',
+                data_pagamento DATE,
+                forma_pagamento VARCHAR(50),
+                observacao VARCHAR(255),
+                CONSTRAINT fk_pagamento_parcelado 
+                    FOREIGN KEY(pagamento_parcelado_id) 
+                    REFERENCES pagamento_parcelado_v2(id)
+                    ON DELETE CASCADE
+            );
+        """)
+        print("✅ Tabela parcela_individual criada com FK CORRETA para pagamento_parcelado_v2!")
             
         conn.commit()
         print("🎉 AUTO-MIGRATION CONCLUÍDA!")
