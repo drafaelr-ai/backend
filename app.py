@@ -4002,22 +4002,31 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         
         # Criar/atualizar PagamentoServico se houver vínculo
         if pagamento.servico_id:
-            print(f"   🔗 Parcela vinculada ao serviço {pagamento.servico_id}")
-            
-            # CRÍTICO: Validar se serviço existe
+            # ⭐ VALIDAR SE SERVIÇO EXISTE
             servico = db.session.get(Servico, pagamento.servico_id)
             if not servico:
-                print(f"      ❌ AVISO: Serviço {pagamento.servico_id} não existe no banco!")
-                print(f"      ⚠️ Continuando sem vincular ao serviço (evitando erro de foreign key)")
+                print(f"--- [AVISO] Serviço {pagamento.servico_id} não existe no banco! Continuando sem vincular ao serviço. ---")
                 novo_lancamento.servico_id = None
             else:
-                print(f"      ✅ Serviço encontrado: '{servico.nome}'")
+                print(f"--- [LOG] Parcela vinculada ao serviço {pagamento.servico_id}, criando/atualizando PagamentoServico ---")
                 
-                # Determinar tipo de pagamento
-                tipo_pag = 'mao_de_obra' if segmento_info == 'Mão de Obra' else 'material'
-                print(f"      - tipo_pagamento: {tipo_pag}")
+                # Determinar tipo de pagamento baseado no segmento do pagamento parcelado
+                try:
+                    if hasattr(pagamento, 'segmento') and pagamento.segmento:
+                        # Converter "Mão de Obra" para "mao_de_obra" e "Material" para "material"
+                        if pagamento.segmento == 'Mão de Obra':
+                            tipo_pag = 'mao_de_obra'
+                        else:
+                            tipo_pag = 'material'
+                        print(f"--- [LOG] Segmento detectado: {pagamento.segmento} -> tipo_pagamento: {tipo_pag} ---")
+                    else:
+                        tipo_pag = 'material'  # Padrão
+                        print(f"--- [LOG] Segmento não encontrado, usando padrão: material ---")
+                except Exception as seg_error:
+                    tipo_pag = 'material'  # Fallback seguro
+                    print(f"--- [LOG] Erro ao detectar segmento: {seg_error}, usando padrão: material ---")
                 
-                # Buscar PagamentoServico existente
+                # Buscar PagamentoServico existente para este serviço e fornecedor
                 pagamento_servico_existente = PagamentoServico.query.filter_by(
                     servico_id=pagamento.servico_id,
                     fornecedor=pagamento.fornecedor,
@@ -4025,11 +4034,12 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
                 ).first()
                 
                 if pagamento_servico_existente:
+                    # Atualizar valor_pago do registro existente
                     pagamento_servico_existente.valor_pago += parcela.valor_parcela
-                    print(f"      ✅ PagamentoServico ID={pagamento_servico_existente.id} atualizado")
-                    print(f"         Novo valor_pago: R$ {pagamento_servico_existente.valor_pago}")
+                    print(f"--- [LOG] PagamentoServico ID={pagamento_servico_existente.id} atualizado. Novo valor_pago: {pagamento_servico_existente.valor_pago} ---")
                 else:
-                    novo_pag_serv = PagamentoServico(
+                    # Criar novo registro
+                    novo_pagamento_servico = PagamentoServico(
                         servico_id=pagamento.servico_id,
                         tipo_pagamento=tipo_pag,
                         valor_total=parcela.valor_parcela,
@@ -4039,9 +4049,9 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
                         forma_pagamento=parcela.forma_pagamento,
                         prioridade=0
                     )
-                    db.session.add(novo_pag_serv)
+                    db.session.add(novo_pagamento_servico)
                     db.session.flush()
-                    print(f"      ✅ Novo PagamentoServico criado com ID={novo_pag_serv.id}")
+                    print(f"--- [LOG] Novo PagamentoServico criado com ID={novo_pagamento_servico.id}, tipo={tipo_pag} ---")
         
         # Atualizar contador de parcelas pagas
         todas_parcelas = ParcelaIndividual.query.filter_by(
