@@ -7160,10 +7160,6 @@ def exportar_cronograma_csv(obra_id):
 # ==============================================================================
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
-    app.run(host='0.0.0.0', port=port, debug=True)
 
 # ==============================================================================
 # ROTAS EXATAS DO FRONTEND - Pagamentos Futuros com servico-ID
@@ -7265,13 +7261,7 @@ def editar_pagamento_futuro_servico(obra_id, pagamento_id):
         return jsonify({"erro": str(e)}), 500
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
-    app.run(host='0.0.0.0', port=port, debug=True)
 # ROTA PARA EXPORTAR SERVICOS EM PDF
-# Inserir após a rota exportar_servicos_csv (linha ~6850)
-
 @app.route('/obras/<int:obra_id>/servicos/exportar-pdf', methods=['GET'])
 @jwt_required()
 def exportar_servicos_pdf(obra_id):
@@ -7418,3 +7408,12 @@ def exportar_servicos_pdf(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] ao gerar PDF de serviços: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
+
+
+# ==============================================================================
+# INICIALIZAÇÃO DO SERVIDOR (DEVE SER A ÚLTIMA COISA DO ARQUIVO)
+# ==============================================================================
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
+    app.run(host='0.0.0.0', port=port, debug=True)
