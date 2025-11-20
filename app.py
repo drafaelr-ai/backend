@@ -3569,8 +3569,13 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST'])
 @jwt_required()
 def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
-    """Marca um pagamento futuro como pago e move para o histórico"""
+    """Marca um pagamento futuro como pago e move para o histórico ou serviço"""
     try:
+        print(f"\n{'='*80}")
+        print(f"💰 INÍCIO: marcar_pagamento_futuro_pago")
+        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
+        print(f"{'='*80}")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
@@ -3582,15 +3587,91 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         if pagamento.status == 'Pago':
             return jsonify({"mensagem": "Pagamento já está marcado como pago"}), 200
         
-        # ===== NOVA LÓGICA: Move para o Histórico =====
-        # 1. CRIAR o Lançamento no Histórico
+        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        print(f"      - servico_id: {pagamento.servico_id}")
+        print(f"      - tipo: {pagamento.tipo}")
+        print(f"      - valor: R$ {pagamento.valor}")
+        
+        data_pagamento = date.today()
+        
+        # ===== LÓGICA CORRIGIDA: Verificar se tem vínculo com serviço =====
+        
+        # CASO 1: Pagamento vinculado a SERVIÇO
+        if pagamento.servico_id:
+            servico = db.session.get(Servico, pagamento.servico_id)
+            if servico:
+                print(f"   📋 Pagamento vinculado ao serviço '{servico.nome}'")
+                
+                # Determinar tipo_pagamento
+                if pagamento.tipo == 'Mão de Obra':
+                    tipo_pagamento = 'mao_de_obra'
+                elif pagamento.tipo == 'Material':
+                    tipo_pagamento = 'material'
+                else:
+                    tipo_pagamento = 'material'  # default
+                
+                print(f"      - tipo_pagamento determinado: {tipo_pagamento}")
+                
+                # Criar PagamentoServico
+                novo_pag_servico = PagamentoServico(
+                    servico_id=pagamento.servico_id,
+                    tipo_pagamento=tipo_pagamento,
+                    valor_total=pagamento.valor,
+                    valor_pago=pagamento.valor,  # Marcar como totalmente pago
+                    data=data_pagamento,
+                    data_vencimento=pagamento.data_vencimento,
+                    status='Pago',
+                    prioridade=0,
+                    fornecedor=pagamento.fornecedor,
+                    pix=pagamento.pix
+                )
+                db.session.add(novo_pag_servico)
+                db.session.flush()
+                
+                print(f"   ✅ PagamentoServico criado com ID={novo_pag_servico.id}")
+                
+                # Recalcular percentual do serviço
+                pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+                pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
+                pagamentos_material = [p for p in pagamentos_serv if p.tipo_pagamento == 'material']
+                
+                if servico.valor_global_mao_de_obra > 0:
+                    total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                    servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+                    print(f"   📊 Percentual MO atualizado: {servico.percentual_conclusao_mao_obra:.1f}%")
+                
+                if servico.valor_global_material > 0:
+                    total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                    servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                    print(f"   📊 Percentual Material atualizado: {servico.percentual_conclusao_material:.1f}%")
+                
+                # DELETE o PagamentoFuturo
+                db.session.delete(pagamento)
+                
+                # Commit das alterações
+                db.session.commit()
+                
+                print(f"   🎉 SUCESSO: Pagamento vinculado ao serviço '{servico.nome}' e marcado como pago")
+                print(f"{'='*80}\n")
+                
+                return jsonify({
+                    "mensagem": f"Pagamento vinculado ao serviço '{servico.nome}' e marcado como pago",
+                    "pagamento_servico_id": novo_pag_servico.id
+                }), 200
+            else:
+                print(f"   ⚠️ Serviço {pagamento.servico_id} não encontrado, criando lançamento genérico")
+        
+        # CASO 2: Pagamento SEM vínculo com serviço
+        print(f"   📄 Criando lançamento no histórico (sem vínculo de serviço)")
+        
+        # Criar Lançamento no Histórico
         novo_lancamento = Lancamento(
             obra_id=pagamento.obra_id,
-            tipo='Despesa',
+            tipo=pagamento.tipo or 'Despesa',
             descricao=pagamento.descricao,
             valor_total=pagamento.valor,
             valor_pago=pagamento.valor,
-            data=date.today(),
+            data=data_pagamento,
             data_vencimento=pagamento.data_vencimento,
             status='Pago',
             pix=pagamento.pix,
@@ -3600,13 +3681,16 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         )
         db.session.add(novo_lancamento)
         
-        # 2. DELETE o PagamentoFuturo (remove do cronograma)
+        # DELETE o PagamentoFuturo
         db.session.delete(pagamento)
         
-        # 3. Commit das alterações
+        # Commit das alterações
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento futuro {pagamento_id} movido para o histórico (lancamento_id={novo_lancamento.id}) na obra {obra_id} ---")
+        print(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
+        print(f"   🎉 SUCESSO: Pagamento movido para o histórico")
+        print(f"{'='*80}\n")
+        
         return jsonify({
             "mensagem": "Pagamento marcado como pago e movido para o histórico com sucesso",
             "lancamento_id": novo_lancamento.id
@@ -3615,7 +3699,12 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}/marcar-pago: {str(e)}\n{error_details} ---")
+        print(f"\n{'='*80}")
+        print(f"❌ ERRO em marcar_pagamento_futuro_pago:")
+        print(f"   {str(e)}")
+        print(f"\nStack trace:")
+        print(error_details)
+        print(f"{'='*80}\n")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- PAGAMENTOS PARCELADOS ---
