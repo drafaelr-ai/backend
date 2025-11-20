@@ -5529,25 +5529,33 @@ def limpar_tudo_pendente_global():
 @jwt_required()
 def inserir_pagamento(obra_id):
     """
-    Novo endpoint para inserir pagamentos com vínculo opcional a serviços.
-    Permite escolher tipo (Material/Mão de Obra) e status (Pago/A Pagar).
-    Atualiza automaticamente a % de conclusão do serviço vinculado.
+    🆕 ENDPOINT UNIFICADO - Insere pagamentos (à vista ou parcelados) com vínculo opcional a serviços.
+    
+    Suporta:
+    - Pagamentos à vista (Pago ou A Pagar)
+    - Pagamentos parcelados (Semanal/Quinzenal/Mensal)
+    - Vínculo opcional ao serviço
+    - Atualização automática de % de conclusão do serviço
     """
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/inserir-pagamento (POST) acessada ---")
+    print(f"\n{'='*80}")
+    print(f"💰 INSERIR PAGAMENTO - Obra {obra_id}")
+    print(f"{'='*80}")
+    
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
         dados = request.json
+        print(f"📋 Dados recebidos: {dados}")
         
         # Campos obrigatórios
         descricao = dados.get('descricao')
         valor_total = float(dados.get('valor', 0))
-        tipo = dados.get('tipo')  # 'Material', 'Mão de Obra', ou 'Serviço'
+        tipo = dados.get('tipo')  # 'Material' ou 'Mão de Obra'
         status = dados.get('status', 'A Pagar')  # 'Pago' ou 'A Pagar'
         data = date.fromisoformat(dados.get('data'))
         
@@ -5558,126 +5566,262 @@ def inserir_pagamento(obra_id):
         pix = dados.get('pix')
         prioridade = int(dados.get('prioridade', 0))
         
-        # Calcular valor_pago baseado no status
-        valor_pago = valor_total if status == 'Pago' else 0.0
+        # 🆕 NOVOS CAMPOS PARA PARCELAMENTO
+        tipo_forma_pagamento = dados.get('tipo_forma_pagamento', 'avista')  # 'avista' ou 'parcelado'
+        numero_parcelas = dados.get('numero_parcelas')
+        periodicidade = dados.get('periodicidade')  # 'Semanal', 'Quinzenal', 'Mensal'
+        data_primeira_parcela = dados.get('data_primeira_parcela')
         
-        # ===== LÓGICA REFATORADA: STATUS "PAGO" vs "A PAGAR" =====
+        print(f"   Tipo pagamento: {tipo_forma_pagamento}")
+        print(f"   Status: {status}")
+        print(f"   Serviço vinculado: {servico_id}")
         
-        # CASO 1: STATUS "PAGO" COM SERVIÇO VINCULADO
-        if servico_id and status == 'Pago':
-            servico = Servico.query.get_or_404(servico_id)
+        # ===== FLUXO PARCELADO =====
+        if tipo_forma_pagamento == 'parcelado':
+            print(f"   📦 Criando pagamento PARCELADO")
+            print(f"      - Parcelas: {numero_parcelas}")
+            print(f"      - Periodicidade: {periodicidade}")
             
-            # Determinar tipo_pagamento para PagamentoServico
-            if tipo == 'Mão de Obra':
-                tipo_pagamento = 'mao_de_obra'
-            elif tipo == 'Material':
-                tipo_pagamento = 'material'
-            else:
-                tipo_pagamento = 'material'  # default
+            if not numero_parcelas or not periodicidade or not data_primeira_parcela:
+                return jsonify({"erro": "Parcelas, periodicidade e data da primeira parcela são obrigatórios para parcelamento"}), 400
             
-            novo_pagamento = PagamentoServico(
+            numero_parcelas = int(numero_parcelas)
+            valor_parcela = valor_total / numero_parcelas
+            data_primeira = date.fromisoformat(data_primeira_parcela)
+            
+            # Criar PagamentoParcelado
+            novo_parcelado = PagamentoParcelado(
+                obra_id=obra_id,
+                descricao=descricao,
+                fornecedor=fornecedor,
                 servico_id=servico_id,
-                tipo_pagamento=tipo_pagamento,
+                segmento=tipo,  # 'Material' ou 'Mão de Obra'
                 valor_total=valor_total,
-                valor_pago=valor_pago,
-                data=data,
-                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
-                status=status,
-                prioridade=prioridade,
-                fornecedor=fornecedor
+                numero_parcelas=numero_parcelas,
+                valor_parcela=valor_parcela,
+                data_primeira_parcela=data_primeira,
+                periodicidade=periodicidade,
+                parcelas_pagas=0,
+                status='Ativo'
             )
-            db.session.add(novo_pagamento)
+            db.session.add(novo_parcelado)
+            db.session.flush()
             
-            # Recalcular percentual do serviço
-            db.session.flush()  # Garante que o pagamento seja salvo antes do cálculo
+            print(f"   ✅ PagamentoParcelado criado: ID={novo_parcelado.id}")
             
-            pagamentos = PagamentoServico.query.filter_by(servico_id=servico_id).all()
+            # Gerar parcelas individuais
+            from datetime import timedelta
+            import calendar
             
-            # Separar por tipo
-            pagamentos_mao_de_obra = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
-            pagamentos_material = [p for p in pagamentos if p.tipo_pagamento == 'material']
+            for i in range(1, numero_parcelas + 1):
+                # Calcular data de vencimento da parcela
+                if periodicidade == 'Semanal':
+                    data_venc = data_primeira + timedelta(days=(i-1) * 7)
+                elif periodicidade == 'Quinzenal':
+                    data_venc = data_primeira + timedelta(days=(i-1) * 15)
+                else:  # Mensal
+                    month = data_primeira.month - 1 + (i-1)
+                    year = data_primeira.year + month // 12
+                    month = month % 12 + 1
+                    day = min(data_primeira.day, calendar.monthrange(year, month)[1])
+                    data_venc = date(year, month, day)
+                
+                # Status da parcela
+                if status == 'Pago':
+                    parcela_status = 'Pago'
+                    parcela_data_pagamento = data
+                else:
+                    parcela_status = 'Previsto'
+                    parcela_data_pagamento = None
+                
+                nova_parcela = ParcelaIndividual(
+                    pagamento_parcelado_id=novo_parcelado.id,
+                    numero_parcela=i,
+                    valor_parcela=valor_parcela,
+                    data_vencimento=data_venc,
+                    status=parcela_status,
+                    data_pagamento=parcela_data_pagamento,
+                    forma_pagamento=pix if status == 'Pago' else None
+                )
+                db.session.add(nova_parcela)
+                print(f"      ✅ Parcela {i}/{numero_parcelas}: R$ {valor_parcela:.2f} - {data_venc} ({parcela_status})")
             
-            # Calcular percentuais
-            if servico.valor_global_mao_de_obra > 0:
-                total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
-                servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+            db.session.flush()
             
-            if servico.valor_global_material > 0:
-                total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
-                servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+            # Se STATUS = PAGO, criar PagamentoServico para cada parcela
+            if status == 'Pago' and servico_id:
+                print(f"   💰 Status=PAGO com serviço vinculado, criando PagamentoServico...")
+                
+                servico = Servico.query.get(servico_id)
+                if servico:
+                    # Determinar tipo_pagamento
+                    tipo_pagamento = 'mao_de_obra' if tipo == 'Mão de Obra' else 'material'
+                    
+                    # Criar UM PagamentoServico com valor total
+                    novo_pag_servico = PagamentoServico(
+                        servico_id=servico_id,
+                        tipo_pagamento=tipo_pagamento,
+                        valor_total=valor_total,
+                        valor_pago=valor_total,
+                        data=data,
+                        status='Pago',
+                        fornecedor=fornecedor,
+                        prioridade=prioridade
+                    )
+                    db.session.add(novo_pag_servico)
+                    db.session.flush()
+                    
+                    print(f"      ✅ PagamentoServico criado: ID={novo_pag_servico.id}, valor={valor_total}")
+                    
+                    # Atualizar parcelas_pagas
+                    novo_parcelado.parcelas_pagas = numero_parcelas
+                    novo_parcelado.status = 'Concluído'
+                    
+                    # Recalcular % do serviço
+                    pagamentos = PagamentoServico.query.filter_by(servico_id=servico_id).all()
+                    pagamentos_mao = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
+                    pagamentos_mat = [p for p in pagamentos if p.tipo_pagamento == 'material']
+                    
+                    if servico.valor_global_mao_de_obra > 0:
+                        total_pago = sum(p.valor_pago for p in pagamentos_mao)
+                        servico.percentual_conclusao_mao_obra = min(100, (total_pago / servico.valor_global_mao_de_obra) * 100)
+                    
+                    if servico.valor_global_material > 0:
+                        total_pago = sum(p.valor_pago for p in pagamentos_mat)
+                        servico.percentual_conclusao_material = min(100, (total_pago / servico.valor_global_material) * 100)
+                    
+                    print(f"      ✅ Serviço atualizado: MO={servico.percentual_conclusao_mao_obra:.1f}%, MAT={servico.percentual_conclusao_material:.1f}%")
+            
+            elif status == 'Pago':
+                # Status=Pago mas sem serviço vinculado
+                novo_parcelado.parcelas_pagas = numero_parcelas
+                novo_parcelado.status = 'Concluído'
+                print(f"   ✅ Todas as parcelas marcadas como pagas (sem vínculo ao serviço)")
             
             db.session.commit()
-            print(f"--- [LOG] ✅ PagamentoServico PAGO criado e vinculado ao serviço {servico_id} ---")
-            return jsonify(novo_pagamento.to_dict()), 201
-        
-        # CASO 2: STATUS "A PAGAR" COM SERVIÇO VINCULADO
-        elif servico_id and status == 'A Pagar':
-            servico = Servico.query.get_or_404(servico_id)
+            print(f"{'='*80}")
+            print(f"✅ SUCESSO: Pagamento parcelado criado")
+            print(f"{'='*80}\n")
             
-            print(f"--- [DEBUG] Criando PagamentoFuturo vinculado ao serviço {servico_id} ---")
-            novo_futuro = PagamentoFuturo(
-                obra_id=obra_id,
-                descricao=f"{descricao} (Serviço: {servico.nome})",
-                valor=valor_total,
-                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
-                fornecedor=fornecedor,
-                pix=pix,
-                observacoes=f"Vinculado ao serviço {servico.nome}",
-                status='Previsto',
-                servico_id=servico_id,  # ✅ NOVO: Vincula ao serviço
-                tipo=tipo  # ✅ NOVO: Armazena o tipo (Mão de Obra / Material)
-            )
-            db.session.add(novo_futuro)
-            db.session.commit()
-            print(f"--- [LOG] ✅ PagamentoFuturo criado vinculado ao serviço {servico_id} (Cronograma) ---")
-            return jsonify(novo_futuro.to_dict()), 201
+            return jsonify({
+                "mensagem": "Pagamento parcelado criado com sucesso",
+                "pagamento_parcelado": novo_parcelado.to_dict()
+            }), 201
         
-        # CASO 3: STATUS "A PAGAR" SEM SERVIÇO
-        elif status == 'A Pagar':
-            print(f"--- [DEBUG] Criando PagamentoFuturo sem vínculo (status='A Pagar') ---")
-            novo_futuro = PagamentoFuturo(
-                obra_id=obra_id,
-                descricao=descricao,
-                valor=valor_total,
-                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
-                fornecedor=fornecedor,
-                pix=pix,
-                observacoes=f"Tipo: {tipo}",
-                status='Previsto',
-                servico_id=None,
-                tipo=tipo  # ✅ Armazena o tipo
-            )
-            db.session.add(novo_futuro)
-            db.session.commit()
-            print(f"--- [LOG] ✅ PagamentoFuturo criado sem vínculo (Cronograma Financeiro) ---")
-            return jsonify(novo_futuro.to_dict()), 201
-        
-        # CASO 4: STATUS "PAGO" SEM SERVIÇO
+        # ===== FLUXO À VISTA =====
         else:
-            # Criar Lançamento normal (status='Pago', vai pro histórico)
-            print(f"--- [DEBUG] Criando Lancamento (status='Pago') ---")
-            novo_lancamento = Lancamento(
-                obra_id=obra_id,
-                tipo=tipo,
-                descricao=descricao,
-                valor_total=valor_total,
-                valor_pago=valor_pago,
-                data=data,
-                data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
-                status=status,
-                pix=pix,
-                prioridade=prioridade,
-                fornecedor=fornecedor
-            )
-            db.session.add(novo_lancamento)
-            db.session.commit()
-            print(f"--- [LOG] ✅ Lançamento criado: ID {novo_lancamento.id} (Histórico) ---")
-            return jsonify(novo_lancamento.to_dict()), 201
+            print(f"   💵 Criando pagamento À VISTA")
+            valor_pago = valor_total if status == 'Pago' else 0.0
+            
+            # CASO 1: STATUS "PAGO" COM SERVIÇO VINCULADO
+            if servico_id and status == 'Pago':
+                servico = Servico.query.get_or_404(servico_id)
+                tipo_pagamento = 'mao_de_obra' if tipo == 'Mão de Obra' else 'material'
+                
+                novo_pagamento = PagamentoServico(
+                    servico_id=servico_id,
+                    tipo_pagamento=tipo_pagamento,
+                    valor_total=valor_total,
+                    valor_pago=valor_pago,
+                    data=data,
+                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
+                    status=status,
+                    prioridade=prioridade,
+                    fornecedor=fornecedor
+                )
+                db.session.add(novo_pagamento)
+                db.session.flush()
+                
+                # Recalcular percentual do serviço
+                pagamentos = PagamentoServico.query.filter_by(servico_id=servico_id).all()
+                pagamentos_mao = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
+                pagamentos_mat = [p for p in pagamentos if p.tipo_pagamento == 'material']
+                
+                if servico.valor_global_mao_de_obra > 0:
+                    total_pago = sum(p.valor_pago for p in pagamentos_mao)
+                    servico.percentual_conclusao_mao_obra = min(100, (total_pago / servico.valor_global_mao_de_obra) * 100)
+                
+                if servico.valor_global_material > 0:
+                    total_pago = sum(p.valor_pago for p in pagamentos_mat)
+                    servico.percentual_conclusao_material = min(100, (total_pago / servico.valor_global_material) * 100)
+                
+                db.session.commit()
+                print(f"   ✅ PagamentoServico PAGO criado: ID={novo_pagamento.id}")
+                print(f"{'='*80}\n")
+                return jsonify(novo_pagamento.to_dict()), 201
+            
+            # CASO 2: STATUS "A PAGAR" COM SERVIÇO VINCULADO
+            elif servico_id and status == 'A Pagar':
+                servico = Servico.query.get_or_404(servico_id)
+                
+                novo_futuro = PagamentoFuturo(
+                    obra_id=obra_id,
+                    descricao=f"{descricao} (Serviço: {servico.nome})",
+                    valor=valor_total,
+                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
+                    fornecedor=fornecedor,
+                    pix=pix,
+                    observacoes=f"Vinculado ao serviço {servico.nome}",
+                    status='Previsto',
+                    servico_id=servico_id,
+                    tipo=tipo
+                )
+                db.session.add(novo_futuro)
+                db.session.commit()
+                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}")
+                print(f"{'='*80}\n")
+                return jsonify(novo_futuro.to_dict()), 201
+            
+            # CASO 3: STATUS "A PAGAR" SEM SERVIÇO
+            elif status == 'A Pagar':
+                novo_futuro = PagamentoFuturo(
+                    obra_id=obra_id,
+                    descricao=descricao,
+                    valor=valor_total,
+                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
+                    fornecedor=fornecedor,
+                    pix=pix,
+                    observacoes=f"Tipo: {tipo}",
+                    status='Previsto',
+                    servico_id=None,
+                    tipo=tipo
+                )
+                db.session.add(novo_futuro)
+                db.session.commit()
+                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}")
+                print(f"{'='*80}\n")
+                return jsonify(novo_futuro.to_dict()), 201
+            
+            # CASO 4: STATUS "PAGO" SEM SERVIÇO
+            else:
+                novo_lancamento = Lancamento(
+                    obra_id=obra_id,
+                    tipo=tipo,
+                    descricao=descricao,
+                    valor_total=valor_total,
+                    valor_pago=valor_pago,
+                    data=data,
+                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
+                    status=status,
+                    pix=pix,
+                    prioridade=prioridade,
+                    fornecedor=fornecedor
+                )
+                db.session.add(novo_lancamento)
+                db.session.commit()
+                print(f"   ✅ Lançamento criado: ID={novo_lancamento.id}")
+                print(f"{'='*80}\n")
+                return jsonify(novo_lancamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/inserir-pagamento: {str(e)}\n{error_details} ---")
+        print(f"\n{'='*80}")
+        print(f"❌ ERRO em inserir_pagamento:")
+        print(f"   {str(e)}")
+        print(f"\nStack trace:")
+        print(error_details)
+        print(f"{'='*80}\n")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DO ENDPOINT INSERIR PAGAMENTO ---
 
