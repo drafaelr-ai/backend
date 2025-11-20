@@ -890,14 +890,28 @@ def get_obras():
 @app.route('/obras', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def add_obra():
-    # ... (código inalterado) ...
+    """Cria uma nova obra e associa automaticamente o usuário criador"""
     print("--- [LOG] Rota /obras (POST) acessada ---")
     try:
+        # Obter usuário atual
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({"erro": "Usuário não encontrado"}), 404
+        
         dados = request.json
         nova_obra = Obra(nome=dados['nome'], cliente=dados.get('cliente'))
         db.session.add(nova_obra)
+        db.session.flush()  # Gera o ID da obra sem fazer commit final
+        
+        # CORREÇÃO: Associar automaticamente o usuário criador à obra
+        if nova_obra not in current_user.obras_permitidas:
+            current_user.obras_permitidas.append(nova_obra)
+        
         db.session.commit()
+        
+        print(f"--- [LOG] Obra '{nova_obra.nome}' (ID={nova_obra.id}) criada e associada ao usuário {current_user.username} ---")
         return jsonify(nova_obra.to_dict()), 201
+        
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
