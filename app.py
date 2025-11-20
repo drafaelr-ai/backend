@@ -6653,11 +6653,26 @@ def get_cronograma_obra(obra_id):
         return jsonify({'error': 'Erro ao buscar cronograma'}), 500
 
 
-@app.route('/cronograma', methods=['POST'])
-@jwt_required()
+@app.route('/cronograma', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def create_cronograma():
+    """Cria uma nova etapa do cronograma"""
+    # Tratar OPTIONS para CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
     try:
-        current_user_id = get_jwt_identity()
+        # Verificar autenticação
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
         data = request.json
         required_fields = ['obra_id', 'servico_nome', 'data_inicio', 'data_fim_prevista']
         for field in required_fields:
@@ -6667,6 +6682,10 @@ def create_cronograma():
         obra = Obra.query.get(data['obra_id'])
         if not obra:
             return jsonify({'error': 'Obra não encontrada'}), 404
+        
+        # Verificar acesso à obra
+        if not user_has_access_to_obra(current_user, data['obra_id']):
+            return jsonify({'error': 'Acesso negado a esta obra'}), 403
         
         try:
             data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
@@ -6716,24 +6735,40 @@ def create_cronograma():
         return jsonify(novo_item.to_dict()), 201
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] create_cronograma: {str(e)}")
+        error_details = traceback.format_exc()
+        print(f"[ERRO] create_cronograma: {str(e)}\n{error_details}")
         return jsonify({'error': 'Erro ao criar etapa do cronograma'}), 500
 
 
-@app.route('/cronograma/<int:cronograma_id>', methods=['PUT'])
-@jwt_required()
+@app.route('/cronograma/<int:cronograma_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
 def update_cronograma(cronograma_id):
+    """Atualiza uma etapa do cronograma"""
+    # Tratar OPTIONS para CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'PUT, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
     try:
-        current_user_id = get_jwt_identity()
+        # Verificar autenticação
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
         data = request.json
         
         item = CronogramaObra.query.get(cronograma_id)
         if not item:
             return jsonify({'error': 'Etapa não encontrada'}), 404
         
-        obra = Obra.query.get(item.obra_id)
-        if not obra:
-            return jsonify({'error': 'Não autorizado'}), 403
+        # Verificar acesso à obra
+        if not user_has_access_to_obra(current_user, item.obra_id):
+            return jsonify({'error': 'Acesso negado a esta obra'}), 403
         
         if 'servico_nome' in data:
             item.servico_nome = data['servico_nome']
@@ -6804,23 +6839,38 @@ def update_cronograma(cronograma_id):
         return jsonify(item.to_dict()), 200
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] update_cronograma: {str(e)}")
+        error_details = traceback.format_exc()
+        print(f"[ERRO] update_cronograma: {str(e)}\n{error_details}")
         return jsonify({'error': 'Erro ao atualizar cronograma'}), 500
 
 
-@app.route('/cronograma/<int:cronograma_id>', methods=['DELETE'])
-@jwt_required()
+@app.route('/cronograma/<int:cronograma_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required(optional=True)
 def delete_cronograma(cronograma_id):
+    """Deleta uma etapa do cronograma"""
+    # Tratar OPTIONS para CORS preflight
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
     try:
-        current_user_id = get_jwt_identity()
+        # Verificar autenticação
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
         
         item = CronogramaObra.query.get(cronograma_id)
         if not item:
             return jsonify({'error': 'Etapa não encontrada'}), 404
         
-        obra = Obra.query.get(item.obra_id)
-        if not obra:
-            return jsonify({'error': 'Não autorizado'}), 403
+        # Verificar acesso à obra
+        if not user_has_access_to_obra(current_user, item.obra_id):
+            return jsonify({'error': 'Acesso negado a esta obra'}), 403
         
         servico_nome = item.servico_nome
         db.session.delete(item)
