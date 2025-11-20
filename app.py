@@ -227,6 +227,10 @@ class Obra(db.Model):
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
     orcamentos = db.relationship('Orcamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     notas_fiscais = db.relationship('NotaFiscal', backref='obra', lazy=True, cascade="all, delete-orphan")
+    cronograma_items = db.relationship('CronogramaObra', backref='obra', lazy=True, cascade="all, delete-orphan")
+    pagamentos_futuros = db.relationship('PagamentoFuturo', backref='obra', lazy=True, cascade="all, delete-orphan")
+    pagamentos_parcelados = db.relationship('PagamentoParcelado', backref='obra', lazy=True, cascade="all, delete-orphan")
+    diarios = db.relationship('DiarioObra', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
         return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
@@ -6274,7 +6278,8 @@ class CronogramaObra(db.Model):
     created_at = db.Column(db.DateTime, default=func.now())
     updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
 
-    obra = db.relationship('Obra', backref=db.backref('cronograma_items', lazy=True))
+    # Relacionamento já definido no modelo Obra com cascade
+    # obra = db.relationship('Obra', backref=db.backref('cronograma_items', lazy=True))
 
     def to_dict(self):
         return {
