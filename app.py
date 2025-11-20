@@ -6742,6 +6742,124 @@ def get_cronograma_obra(obra_id):
         return jsonify({'error': 'Erro ao buscar cronograma'}), 500
 
 
+@app.route('/obras/<int:obra_id>/cronograma/exportar-pdf', methods=['GET'])
+@jwt_required()
+def exportar_cronograma_fisico_pdf(obra_id):
+    """Gera PDF do cronograma físico da obra (etapas/atividades)"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        # Buscar todas as etapas do cronograma
+        etapas = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
+        
+        # Criar PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Título
+        title_style = styles['Title']
+        title = Paragraph(f"<b>Cronograma da Obra</b><br/>{obra.nome}", title_style)
+        elements.append(title)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Informações gerais
+        info_text = f"<b>Data do Relatório:</b> {date.today().strftime('%d/%m/%Y')}<br/>"
+        info_text += f"<b>Total de Etapas:</b> {len(etapas)}"
+        info = Paragraph(info_text, styles['Normal'])
+        elements.append(info)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        if not etapas:
+            no_data = Paragraph("<i>Nenhuma etapa cadastrada no cronograma.</i>", styles['Normal'])
+            elements.append(no_data)
+        else:
+            # Criar tabela
+            data_table = [['#', 'Etapa', 'Tipo', 'Início', 'Fim Previsto', 'Conclusão', 'Status']]
+            
+            for etapa in etapas:
+                # Determinar status
+                hoje = date.today()
+                if etapa.percentual_conclusao >= 100:
+                    status = 'Concluído'
+                elif not etapa.data_inicio_real:
+                    status = 'A Iniciar'
+                elif etapa.data_fim_prevista and etapa.data_fim_prevista < hoje and etapa.percentual_conclusao < 100:
+                    status = 'Atrasado'
+                else:
+                    status = 'Em Andamento'
+                
+                # Tipo de medição
+                tipo_medicao = 'Empreitada' if etapa.tipo_medicao == 'empreitada' else 'Área/Qtd'
+                if etapa.tipo_medicao == 'area' and etapa.area_total:
+                    tipo_medicao += f" ({etapa.area_executada or 0}/{etapa.area_total} {etapa.unidade_medida or 'm²'})"
+                
+                # Datas
+                data_inicio = etapa.data_inicio.strftime('%d/%m/%Y') if etapa.data_inicio else '-'
+                data_fim = etapa.data_fim_prevista.strftime('%d/%m/%Y') if etapa.data_fim_prevista else '-'
+                
+                data_table.append([
+                    str(etapa.ordem or '-'),
+                    etapa.servico_nome[:30] + '...' if len(etapa.servico_nome) > 30 else etapa.servico_nome,
+                    tipo_medicao,
+                    data_inicio,
+                    data_fim,
+                    f"{etapa.percentual_conclusao:.0f}%",
+                    status
+                ])
+            
+            # Estilo da tabela
+            table = Table(data_table, colWidths=[1*cm, 6*cm, 3.5*cm, 2.5*cm, 2.5*cm, 2*cm, 2.5*cm])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3b82f6')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+            ]))
+            
+            elements.append(table)
+            
+            # Resumo
+            elements.append(Spacer(1, 0.5*cm))
+            
+            concluidas = len([e for e in etapas if e.percentual_conclusao >= 100])
+            em_andamento = len([e for e in etapas if 0 < e.percentual_conclusao < 100])
+            a_iniciar = len([e for e in etapas if e.percentual_conclusao == 0])
+            
+            resumo_text = f"<b>Resumo:</b><br/>"
+            resumo_text += f"Concluídas: {concluidas} | Em Andamento: {em_andamento} | A Iniciar: {a_iniciar}"
+            resumo = Paragraph(resumo_text, styles['Normal'])
+            elements.append(resumo)
+        
+        # Gerar PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'cronograma_obra_{obra_id}_{date.today().strftime("%Y%m%d")}.pdf'
+        )
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[ERRO] exportar_cronograma_fisico_pdf: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
 @app.route('/cronograma', methods=['POST', 'OPTIONS'])
 @jwt_required(optional=True)
 def create_cronograma():
