@@ -3823,8 +3823,13 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
 def deletar_pagamento_parcelado(obra_id, pagamento_id):
-    """Deleta um pagamento parcelado"""
+    """Deleta um pagamento parcelado e todos os registros relacionados"""
     try:
+        print(f"\n{'='*80}")
+        print(f"🗑️ INÍCIO: deletar_pagamento_parcelado")
+        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
+        print(f"{'='*80}")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
@@ -3833,16 +3838,84 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         if not pagamento or pagamento.obra_id != obra_id:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
+        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        print(f"      - servico_id: {pagamento.servico_id}")
+        
+        # ===== DELETAR TODOS OS REGISTROS RELACIONADOS =====
+        
+        # 1. Buscar todas as parcelas deste pagamento
+        parcelas = ParcelaIndividual.query.filter_by(
+            pagamento_parcelado_id=pagamento_id
+        ).all()
+        
+        print(f"   📋 Encontradas {len(parcelas)} parcelas")
+        
+        # 2. Para cada parcela paga, deletar os registros relacionados
+        for parcela in parcelas:
+            if parcela.status == 'Pago':
+                print(f"   🔍 Parcela {parcela.numero_parcela} está PAGA, buscando registros relacionados...")
+                
+                # Deletar Lançamentos vinculados
+                descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
+                lancamentos = Lancamento.query.filter_by(
+                    obra_id=obra_id,
+                    descricao=descricao_lancamento
+                ).all()
+                
+                for lanc in lancamentos:
+                    print(f"      ❌ Deletando Lancamento ID={lanc.id}")
+                    db.session.delete(lanc)
+                
+                # Se o pagamento está vinculado a um serviço, deletar PagamentoServico
+                if pagamento.servico_id:
+                    # Buscar PagamentoServico que pode ter sido criado para esta parcela
+                    pagamentos_servico = PagamentoServico.query.filter_by(
+                        servico_id=pagamento.servico_id,
+                        fornecedor=pagamento.fornecedor
+                    ).all()
+                    
+                    for pag_serv in pagamentos_servico:
+                        # Verificar se o valor corresponde à parcela
+                        # Não podemos ter certeza absoluta, então vamos deletar se o valor bate
+                        # ou reduzir o valor_pago se for maior
+                        if pag_serv.valor_pago >= parcela.valor_parcela:
+                            if pag_serv.valor_pago == parcela.valor_parcela:
+                                print(f"      ❌ Deletando PagamentoServico ID={pag_serv.id} (valor_pago={pag_serv.valor_pago})")
+                                db.session.delete(pag_serv)
+                            else:
+                                print(f"      ➖ Reduzindo PagamentoServico ID={pag_serv.id}: {pag_serv.valor_pago} -> {pag_serv.valor_pago - parcela.valor_parcela}")
+                                pag_serv.valor_pago -= parcela.valor_parcela
+                                if pag_serv.valor_pago <= 0:
+                                    print(f"      ❌ Valor zerado, deletando PagamentoServico ID={pag_serv.id}")
+                                    db.session.delete(pag_serv)
+                            break  # Processar apenas o primeiro encontrado
+        
+        # 3. Deletar todas as parcelas individuais
+        for parcela in parcelas:
+            print(f"   ❌ Deletando ParcelaIndividual ID={parcela.id}")
+            db.session.delete(parcela)
+        
+        # 4. Finalmente, deletar o pagamento parcelado
+        print(f"   ❌ Deletando PagamentoParcelado ID={pagamento_id}")
         db.session.delete(pagamento)
+        
+        # 5. Commit de todas as alterações
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento parcelado {pagamento_id} deletado da obra {obra_id} ---")
+        print(f"   🎉 SUCESSO: Pagamento parcelado e todos os registros relacionados deletados")
+        print(f"{'='*80}\n")
+        
         return jsonify({"mensagem": "Pagamento parcelado deletado com sucesso"}), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
+        print(f"\n{'='*80}")
+        print(f"❌ ERRO em deletar_pagamento_parcelado:")
+        print(f"   {str(e)}")
+        print(f"\nStack trace:")
+        print(error_details)
+        print(f"{'='*80}\n")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- TABELA DE PREVISÕES (CÁLCULO) ---
@@ -6672,23 +6745,14 @@ def get_servico_financeiro(obra_id):
         
         valor_pago_lancamentos = float(lancamentos_pagos.total_pago or 0.0)
         
-        # Opção C: Parcelas pagas de pagamentos parcelados vinculados ao servico_id
-        # Buscar pagamentos parcelados vinculados ao serviço
-        pagamentos_parcelados_vinculados = PagamentoParcelado.query.filter_by(
-            obra_id=obra_id,
-            servico_id=servico.id
-        ).all()
+        # NOTA: Não somamos parcelas pagas aqui porque quando uma parcela é marcada como paga,
+        # já é criado um PagamentoServico (contabilizado na Opção A acima).
+        # Somar aqui causaria duplicidade de valores!
         
-        valor_pago_parcelas = 0.0
-        for pp in pagamentos_parcelados_vinculados:
-            # Somar o valor das parcelas já pagas (parcelas_pagas * valor_parcela)
-            valor_pago_parcelas += pp.parcelas_pagas * pp.valor_parcela
-        
-        # Somar todos os pagamentos
-        valor_pago = valor_pago_servico + valor_pago_lancamentos + valor_pago_parcelas
+        # Somar todos os pagamentos (sem duplicidade)
+        valor_pago = valor_pago_servico + valor_pago_lancamentos
         print(f"[LOG] Valor já pago (PagamentoServico): R$ {valor_pago_servico:.2f}")
         print(f"[LOG] Valor já pago (Lancamentos): R$ {valor_pago_lancamentos:.2f}")
-        print(f"[LOG] Valor já pago (Parcelas): R$ {valor_pago_parcelas:.2f}")
         print(f"[LOG] Valor total pago: R$ {valor_pago:.2f}")
         
         # 4. Buscar dados do cronograma
