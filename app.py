@@ -3215,6 +3215,156 @@ def relatorio_resumo_completo(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+# --- RELATÓRIO DE PAGAMENTOS PDF ---
+@app.route('/obras/<int:obra_id>/relatorio/pagamentos-pdf', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def gerar_relatorio_pagamentos_pdf(obra_id):
+    """Gera relatório PDF com histórico completo de pagamentos da obra"""
+    if request.method == 'OPTIONS':
+        return make_response('', 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/relatorio/pagamentos-pdf (GET) acessada ---")
+    
+    try:
+        # Verificar acesso
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        # Buscar obra
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        # Buscar todos os lançamentos pagos, ordenados por data
+        lancamentos = Lancamento.query.filter_by(
+            obra_id=obra_id,
+            status='Pago'
+        ).order_by(Lancamento.data_vencimento.desc()).all()
+        
+        # Criar PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, 
+                               topMargin=2*cm, bottomMargin=2*cm)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Função para formatar valores
+        def formatar_real(valor):
+            return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+        
+        # Título
+        titulo = Paragraph(f"<b>Relatório de Pagamentos</b>", styles['Title'])
+        elements.append(titulo)
+        elements.append(Spacer(1, 0.3*cm))
+        
+        # Informações da obra
+        info_obra = Paragraph(f"<b>Obra:</b> {obra.nome}<br/><b>Cliente:</b> {obra.cliente or 'Não informado'}", styles['Normal'])
+        elements.append(info_obra)
+        elements.append(Spacer(1, 0.3*cm))
+        
+        # Data de geração
+        data_geracao = Paragraph(f"Gerado em: {date.today().strftime('%d/%m/%Y')}", styles['Normal'])
+        elements.append(data_geracao)
+        elements.append(Spacer(1, 0.8*cm))
+        
+        if not lancamentos:
+            elements.append(Paragraph("Nenhum pagamento registrado ainda.", styles['Normal']))
+        else:
+            # Calcular totais
+            total_geral = sum(l.valor_pago for l in lancamentos)
+            
+            # Subtítulo com total
+            subtitulo = Paragraph(
+                f"<b>Total de Pagamentos:</b> {formatar_real(total_geral)}<br/>" +
+                f"<b>Quantidade de Pagamentos:</b> {len(lancamentos)}",
+                styles['Normal']
+            )
+            elements.append(subtitulo)
+            elements.append(Spacer(1, 0.5*cm))
+            
+            # Tabela de pagamentos
+            data = [['Data', 'Descrição', 'Fornecedor', 'Tipo', 'Valor Pago']]
+            
+            for lanc in lancamentos:
+                data.append([
+                    lanc.data_vencimento.strftime('%d/%m/%Y') if lanc.data_vencimento else '-',
+                    Paragraph(lanc.descricao[:50], styles['Normal']) if len(lanc.descricao) > 50 else lanc.descricao,
+                    lanc.fornecedor or '-',
+                    lanc.tipo or '-',
+                    formatar_real(lanc.valor_pago)
+                ])
+            
+            # Criar tabela
+            table = Table(data, colWidths=[2.5*cm, 7*cm, 3.5*cm, 2*cm, 2.5*cm])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a5568')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (4, 0), (4, -1), 'RIGHT'),  # Valor alinhado à direita
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ]))
+            
+            elements.append(table)
+            
+            # Resumo por tipo
+            elements.append(Spacer(1, 1*cm))
+            elements.append(Paragraph("<b>Resumo por Tipo:</b>", styles['Heading2']))
+            elements.append(Spacer(1, 0.3*cm))
+            
+            # Agrupar por tipo
+            tipos_valores = {}
+            for lanc in lancamentos:
+                tipo = lanc.tipo or 'Não especificado'
+                if tipo not in tipos_valores:
+                    tipos_valores[tipo] = 0
+                tipos_valores[tipo] += lanc.valor_pago
+            
+            resumo_data = [['Tipo', 'Total']]
+            for tipo, total in sorted(tipos_valores.items()):
+                resumo_data.append([tipo, formatar_real(total)])
+            
+            resumo_table = Table(resumo_data, colWidths=[10*cm, 4*cm])
+            resumo_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a5568')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ]))
+            
+            elements.append(resumo_table)
+        
+        # Gerar PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        # Retornar PDF
+        response = make_response(buffer.read())
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=relatorio_pagamentos_{obra.nome.replace(" ", "_")}.pdf'
+        
+        print(f"--- [LOG] Relatório de pagamentos gerado para obra {obra_id} ---")
+        return response
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/relatorio/pagamentos-pdf (GET): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
 # --- FIM DAS ROTAS DE RELATÓRIOS ---
 
 
