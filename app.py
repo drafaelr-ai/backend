@@ -1983,7 +1983,7 @@ def aprovar_orcamento(orcamento_id):
             pix=orcamento.dados_pagamento,
             prioridade=0,
             fornecedor=orcamento.fornecedor, 
-            servico_id=orcamento.servico_id
+            servico_id=None  # ⚠️ Não vincular ao serviço - vincular apenas via PagamentoServico quando pago
         )
         
         db.session.add(novo_lancamento)
@@ -2054,7 +2054,7 @@ def converter_orcamento_para_servico(orcamento_id):
                 pix=orcamento.dados_pagamento,
                 prioridade=0,
                 fornecedor=orcamento.fornecedor, 
-                servico_id=novo_servico.id
+                servico_id=None  # ⚠️ Não vincular ao serviço - vincular apenas via PagamentoServico quando pago
             )
             db.session.add(novo_lancamento)
             db.session.commit()
@@ -4241,7 +4241,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
             pix=None,
             prioridade=0,
             fornecedor=pagamento.fornecedor,
-            servico_id=pagamento.servico_id
+            servico_id=None  # ⚠️ NÃO vincular ao serviço aqui - o vínculo é feito via PagamentoServico
         )
         
         # Tenta atribuir segmento se o modelo suportar
