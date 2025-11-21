@@ -851,8 +851,9 @@ def get_obras():
         resultados = []
         for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas in obras_com_totais:
             
-            # KPI 1: Orçamento Total (INCLUINDO Cronograma Financeiro)
-            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + float(futuro_previsto) + float(parcelas_previstas)
+            # KPI 1: Orçamento Total (APENAS SERVIÇOS CADASTRADOS)
+            # CORREÇÃO: Pagamentos futuros e parcelas SEM serviço não entram no orçamento
+            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
             
             # KPI 2: Total Pago (Valores Efetivados)
             total_pago = float(lanc_pago) + float(pag_pago)
@@ -993,9 +994,11 @@ def get_obra_detalhes(obra_id):
         print(f"--- [DEBUG KPI] total_futuros (PagamentoFuturo): R$ {total_futuros:.2f} ---")
         print(f"--- [DEBUG KPI] total_parcelas_previstas: R$ {total_parcelas_previstas:.2f} ---")
         
-        # KPI 1: ORÇAMENTO TOTAL (INCLUINDO Cronograma Financeiro)
-        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat + total_futuros + total_parcelas_previstas
-        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = R$ {kpi_orcamento_total:.2f} ---")
+        # KPI 1: ORÇAMENTO TOTAL (APENAS SERVIÇOS CADASTRADOS)
+        # CORREÇÃO: Pagamentos futuros e parcelas SEM serviço não devem entrar no orçamento total
+        # Eles são despesas extras/gerais e aparecem apenas em "Liberado para Pagamento"
+        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat
+        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL (somente serviços) = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS (valor_pago de lançamentos + valor_pago de serviços)
         kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos
@@ -2873,11 +2876,12 @@ def relatorio_resumo_completo(obra_id):
             for s in servicos
         )
         
-        # CORREÇÃO: Incluir pagamentos futuros e parcelas no orçamento total
+        # CORREÇÃO: Orçamento total vem APENAS dos serviços cadastrados
+        # Pagamentos futuros e parcelas SEM serviço são despesas extras
         orcamento_total_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros)
         orcamento_total_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas)
         
-        orcamento_total = orcamento_total_lancamentos + orcamento_total_servicos + orcamento_total_futuros + orcamento_total_parcelas
+        orcamento_total = orcamento_total_lancamentos + orcamento_total_servicos
         
         valores_pagos_lancamentos = sum((l.valor_pago or 0) for l in lancamentos)
         valores_pagos_servicos = sum(
