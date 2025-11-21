@@ -795,7 +795,7 @@ def get_obras():
          .group_by(Servico.obra_id) \
          .subquery()
         
-        # CORREÇÃO: 4. Pagamentos Futuros (Cronograma Financeiro)
+        # CORREÇÃO: 4. Pagamentos Futuros (Cronograma Financeiro) - TODOS
         pagamentos_futuros_sum = db.session.query(
             PagamentoFuturo.obra_id,
             func.sum(PagamentoFuturo.valor).label('total_futuro')
@@ -803,13 +803,35 @@ def get_obras():
             PagamentoFuturo.status == 'Previsto'
         ).group_by(PagamentoFuturo.obra_id).subquery()
         
-        # CORREÇÃO: 5. Parcelas Previstas (Cronograma Financeiro)
+        # NOVO: 4b. Pagamentos Futuros SEM serviço (Despesas Extras)
+        pagamentos_futuros_extra_sum = db.session.query(
+            PagamentoFuturo.obra_id,
+            func.sum(PagamentoFuturo.valor).label('total_futuro_extra')
+        ).filter(
+            PagamentoFuturo.status == 'Previsto',
+            PagamentoFuturo.servico_id.is_(None)
+        ).group_by(PagamentoFuturo.obra_id).subquery()
+        
+        # CORREÇÃO: 5. Parcelas Previstas (Cronograma Financeiro) - TODAS
         parcelas_previstas_sum = db.session.query(
             PagamentoParcelado.obra_id,
             func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas')
         ).select_from(ParcelaIndividual) \
          .join(PagamentoParcelado, ParcelaIndividual.pagamento_parcelado_id == PagamentoParcelado.id) \
          .filter(ParcelaIndividual.status == 'Previsto') \
+         .group_by(PagamentoParcelado.obra_id) \
+         .subquery()
+        
+        # NOVO: 5b. Parcelas SEM serviço (Despesas Extras)
+        parcelas_extra_sum = db.session.query(
+            PagamentoParcelado.obra_id,
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_extra')
+        ).select_from(ParcelaIndividual) \
+         .join(PagamentoParcelado, ParcelaIndividual.pagamento_parcelado_id == PagamentoParcelado.id) \
+         .filter(
+             ParcelaIndividual.status == 'Previsto',
+             PagamentoParcelado.servico_id.is_(None)
+         ) \
          .group_by(PagamentoParcelado.obra_id) \
          .subquery()
 
@@ -824,7 +846,9 @@ def get_obras():
             func.coalesce(pagamentos_sum.c.total_pago_pag, 0).label('pag_pago'),
             func.coalesce(pagamentos_sum.c.total_pendente_pag, 0).label('pag_pendente'),
             func.coalesce(pagamentos_futuros_sum.c.total_futuro, 0).label('futuro_previsto'),
-            func.coalesce(parcelas_previstas_sum.c.total_parcelas, 0).label('parcelas_previstas')
+            func.coalesce(parcelas_previstas_sum.c.total_parcelas, 0).label('parcelas_previstas'),
+            func.coalesce(pagamentos_futuros_extra_sum.c.total_futuro_extra, 0).label('futuro_extra'),
+            func.coalesce(parcelas_extra_sum.c.total_parcelas_extra, 0).label('parcelas_extra')
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
@@ -835,6 +859,10 @@ def get_obras():
             pagamentos_futuros_sum, Obra.id == pagamentos_futuros_sum.c.obra_id
         ).outerjoin(
             parcelas_previstas_sum, Obra.id == parcelas_previstas_sum.c.obra_id
+        ).outerjoin(
+            pagamentos_futuros_extra_sum, Obra.id == pagamentos_futuros_extra_sum.c.obra_id
+        ).outerjoin(
+            parcelas_extra_sum, Obra.id == parcelas_extra_sum.c.obra_id
         )
 
         # 7. Filtra permissões
@@ -849,16 +877,15 @@ def get_obras():
 
         # 8. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra in obras_com_totais:
             
             # KPI 1: Orçamento Total (APENAS SERVIÇOS CADASTRADOS)
-            # CORREÇÃO: Pagamentos futuros e parcelas SEM serviço não entram no orçamento
             orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
             
             # KPI 2: Total Pago (Valores Efetivados)
             total_pago = float(lanc_pago) + float(pag_pago)
             
-            # KPI 3: Liberado para Pagamento (Fila) - CORREÇÃO: Incluindo Cronograma Financeiro
+            # KPI 3: Liberado para Pagamento (Fila) - Incluindo Cronograma Financeiro
             liberado_pagamento = (
                 float(lanc_pendente) + 
                 float(pag_pendente) + 
@@ -866,8 +893,8 @@ def get_obras():
                 float(parcelas_previstas)
             )
             
-            # KPI 4: Residual (Orçamento - Pago)
-            residual = orcamento_total - total_pago
+            # KPI 4: Despesas Extras (Pagamentos Fora da Planilha)
+            despesas_extras = float(futuro_extra) + float(parcelas_extra)
             
             resultados.append({
                 "id": obra.id,
@@ -876,7 +903,7 @@ def get_obras():
                 "orcamento_total": orcamento_total,
                 "total_pago": total_pago,
                 "liberado_pagamento": liberado_pagamento,
-                "residual": residual
+                "despesas_extras": despesas_extras
             })
         
         return jsonify(resultados)
@@ -967,7 +994,7 @@ def get_obra_detalhes(obra_id):
         total_pago_servicos = float(pagamentos_servico_valor_pago.valor_pago_serv or 0.0)
         
         # CORREÇÃO: Calcular totais de Pagamentos Futuros e Parcelas ANTES do KPI
-        # Pagamentos Futuros com status='Previsto'
+        # Pagamentos Futuros com status='Previsto' (TODOS)
         pagamentos_futuros_previstos = db.session.query(
             func.sum(PagamentoFuturo.valor).label('total_futuro')
         ).filter(
@@ -975,7 +1002,16 @@ def get_obra_detalhes(obra_id):
             PagamentoFuturo.status == 'Previsto'
         ).first()
         
-        # Parcelas Individuais com status='Previsto'
+        # Pagamentos Futuros SEM serviço (Despesas Extras)
+        pagamentos_futuros_sem_servico = db.session.query(
+            func.sum(PagamentoFuturo.valor).label('total_futuro_extra')
+        ).filter(
+            PagamentoFuturo.obra_id == obra_id,
+            PagamentoFuturo.status == 'Previsto',
+            PagamentoFuturo.servico_id.is_(None)
+        ).first()
+        
+        # Parcelas Individuais com status='Previsto' (TODAS)
         parcelas_previstas = db.session.query(
             func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas')
         ).join(PagamentoParcelado).filter(
@@ -983,8 +1019,19 @@ def get_obra_detalhes(obra_id):
             ParcelaIndividual.status == 'Previsto'
         ).first()
         
+        # Parcelas SEM serviço (Despesas Extras)
+        parcelas_sem_servico = db.session.query(
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_extra')
+        ).join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Previsto',
+            PagamentoParcelado.servico_id.is_(None)
+        ).first()
+        
         total_futuros = float(pagamentos_futuros_previstos.total_futuro or 0.0)
         total_parcelas_previstas = float(parcelas_previstas.total_parcelas or 0.0)
+        total_futuros_extra = float(pagamentos_futuros_sem_servico.total_futuro_extra or 0.0)
+        total_parcelas_extra = float(parcelas_sem_servico.total_parcelas_extra or 0.0)
         
         # Logs de DEBUG para rastreamento
         print(f"--- [DEBUG KPI] obra_id={obra_id} ---")
@@ -993,20 +1040,18 @@ def get_obra_detalhes(obra_id):
         print(f"--- [DEBUG KPI] total_budget_mat: R$ {total_budget_mat:.2f} ---")
         print(f"--- [DEBUG KPI] total_futuros (PagamentoFuturo): R$ {total_futuros:.2f} ---")
         print(f"--- [DEBUG KPI] total_parcelas_previstas: R$ {total_parcelas_previstas:.2f} ---")
+        print(f"--- [DEBUG KPI] total_futuros_extra (sem serviço): R$ {total_futuros_extra:.2f} ---")
+        print(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
         
         # KPI 1: ORÇAMENTO TOTAL (APENAS SERVIÇOS CADASTRADOS)
-        # CORREÇÃO: Pagamentos futuros e parcelas SEM serviço não devem entrar no orçamento total
-        # Eles são despesas extras/gerais e aparecem apenas em "Liberado para Pagamento"
+        # Pagamentos futuros e parcelas SEM serviço não devem entrar no orçamento total
         kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat
         print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL (somente serviços) = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS (valor_pago de lançamentos + valor_pago de serviços)
         kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos
         
-        # KPI 3: VALOR RESIDUAL (Orçamento Total - Valores Pagos)
-        kpi_residual = kpi_orcamento_total - kpi_valores_pagos
-        
-        # KPI 4: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
+        # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
         # Lançamentos com saldo pendente (valor_total - valor_pago > 0)
         lancamentos_pendentes = db.session.query(
             func.sum(Lancamento.valor_total - Lancamento.valor_pago).label('total_pendente')
@@ -1031,6 +1076,11 @@ def get_obra_detalhes(obra_id):
             total_futuros +
             total_parcelas_previstas
         )
+        
+        # KPI 4: DESPESAS EXTRAS (Pagamentos Fora da Planilha de Custos)
+        # Pagamentos futuros e parcelas SEM serviço vinculado
+        kpi_despesas_extras = total_futuros_extra + total_parcelas_extra
+        print(f"--- [DEBUG KPI] ✅ DESPESAS EXTRAS (fora da planilha) = R$ {kpi_despesas_extras:.2f} ---")
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
@@ -1041,12 +1091,12 @@ def get_obra_detalhes(obra_id):
             Lancamento.servico_id.is_(None)
         ).group_by(Lancamento.tipo).all()
         
-        # <--- Enviando os 4 KPIs corretos (ATUALIZADO) -->
+        # <--- Enviando os 4 KPIs corretos (ATUALIZADO v2) -->
         sumarios_dict = {
             "orcamento_total": kpi_orcamento_total,        # Card 1 - Orçamento Total (Vermelho)
             "valores_pagos": kpi_valores_pagos,            # Card 2 - Valores Pagos (Azul/Índigo)
-            "residual": kpi_residual,                      # Card 3 - Residual (Laranja)
-            "liberado_pagamento": kpi_liberado_pagamento,  # Card 4 - Liberado p/ Pagamento (Verde)
+            "liberado_pagamento": kpi_liberado_pagamento,  # Card 3 - Liberado p/ Pagamento (Verde)
+            "despesas_extras": kpi_despesas_extras,        # Card 4 - Despesas Extras (Roxo/Amarelo)
             
             # Mantendo este para o Gráfico
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
