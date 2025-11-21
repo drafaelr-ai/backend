@@ -7329,7 +7329,8 @@ def update_cronograma(cronograma_id):
         if 'unidade_medida' in data:
             item.unidade_medida = data['unidade_medida']
         
-        if item.data_fim_prevista < item.data_inicio:
+        # Validar datas apenas se ambas existirem
+        if item.data_fim_prevista and item.data_inicio and item.data_fim_prevista < item.data_inicio:
             return jsonify({'error': 'Data de término não pode ser anterior à data de início'}), 400
         
         item.updated_at = datetime.utcnow()
