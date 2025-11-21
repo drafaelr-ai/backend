@@ -2927,9 +2927,14 @@ def relatorio_resumo_completo(obra_id):
         )
         
         # CORREÇÃO: Orçamento total vem APENAS dos serviços cadastrados
-        # Pagamentos futuros e parcelas SEM serviço são despesas extras
-        orcamento_total_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros)
-        orcamento_total_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas)
+        # Calcular despesas extras separadamente (pagamentos SEM serviço)
+        despesas_extras_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is None)
+        despesas_extras_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas 
+                                       if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is None)
+        
+        despesas_extras_total = despesas_extras_futuros + despesas_extras_parcelas
+        custo_real_previsto = orcamento_total + despesas_extras_total
+        falta_pagar = custo_real_previsto - valores_pagos
         
         orcamento_total = orcamento_total_lancamentos + orcamento_total_servicos
         
@@ -2957,31 +2962,125 @@ def relatorio_resumo_completo(obra_id):
         elements.append(Paragraph(info_text, styles['Normal']))
         elements.append(Spacer(1, 0.8*cm))
         
-        # === SEÇÃO 1: RESUMO FINANCEIRO ===
-        elements.append(Paragraph("<b>1. RESUMO FINANCEIRO</b>", styles['Heading2']))
+        # === SEÇÃO 1: RESUMO FINANCEIRO COMPLETO ===
+        elements.append(Paragraph("<b>1. RESUMO FINANCEIRO COMPLETO</b>", styles['Heading2']))
         elements.append(Spacer(1, 0.3*cm))
         
-        data_financeiro = [
-            ['Indicador', 'Valor'],
-            ['Orçamento Total', formatar_real(orcamento_total)],
-            ['Valores Pagos', formatar_real(valores_pagos)],
-            ['Percentual Executado', f"{(valores_pagos / orcamento_total * 100) if orcamento_total > 0 else 0:.1f}%"],
-            ['Saldo Restante', formatar_real(orcamento_total - valores_pagos)]
+        # Subtítulo: Orçamento e Custos
+        elements.append(Paragraph("<b>ORÇAMENTO E CUSTOS</b>", styles['Heading3']))
+        elements.append(Spacer(1, 0.2*cm))
+        
+        data_orcamento = [
+            ['Descrição', 'Valor'],
+            ['Orçamento Original (Serviços)', formatar_real(orcamento_total)],
+            ['Despesas Extras (Fora da Planilha)', formatar_real(despesas_extras_total)],
         ]
         
-        table_financeiro = Table(data_financeiro, colWidths=[8*cm, 8*cm])
-        table_financeiro.setStyle(TableStyle([
+        table_orcamento = Table(data_orcamento, colWidths=[10*cm, 6*cm])
+        table_orcamento.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 10),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
             ('GRID', (0, 0), (-1, -1), 1, colors.grey),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
         ]))
-        elements.append(table_financeiro)
+        elements.append(table_orcamento)
+        
+        # Linha de total (Custo Real Previsto)
+        data_custo_real = [
+            ['CUSTO REAL PREVISTO', formatar_real(custo_real_previsto)]
+        ]
+        table_custo_real = Table(data_custo_real, colWidths=[10*cm, 6*cm])
+        table_custo_real.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+        ]))
+        elements.append(table_custo_real)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Subtítulo: Situação de Pagamentos
+        elements.append(Paragraph("<b>SITUAÇÃO DE PAGAMENTOS</b>", styles['Heading3']))
+        elements.append(Spacer(1, 0.2*cm))
+        
+        # Calcular liberado (tudo que está previsto mas não pago)
+        liberado_pagamento = despesas_extras_total  # Simplificado: apenas despesas extras previstas
+        
+        data_pagamentos = [
+            ['Descrição', 'Valor'],
+            ['Valores Já Pagos', formatar_real(valores_pagos)],
+            ['Liberado p/ Pagamento (Previsto)', formatar_real(liberado_pagamento)],
+        ]
+        
+        table_pagamentos = Table(data_pagamentos, colWidths=[10*cm, 6*cm])
+        table_pagamentos.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]))
+        elements.append(table_pagamentos)
+        
+        # Linha de total (Falta Pagar)
+        data_falta = [
+            ['FALTA PAGAR PARA CONCLUIR', formatar_real(falta_pagar)]
+        ]
+        table_falta = Table(data_falta, colWidths=[10*cm, 6*cm])
+        table_falta.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ef4444')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+        ]))
+        elements.append(table_falta)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Subtítulo: Análise de Execução
+        elements.append(Paragraph("<b>ANÁLISE DE EXECUÇÃO</b>", styles['Heading3']))
+        elements.append(Spacer(1, 0.2*cm))
+        
+        perc_executado = (valores_pagos / custo_real_previsto * 100) if custo_real_previsto > 0 else 0
+        perc_sobre_orcamento = (valores_pagos / orcamento_total * 100) if orcamento_total > 0 else 0
+        variacao_extras = (despesas_extras_total / orcamento_total * 100) if orcamento_total > 0 else 0
+        
+        data_analise = [
+            ['Indicador', 'Valor'],
+            ['Percentual Executado (sobre custo real)', f"{perc_executado:.1f}%"],
+            ['Percentual sobre Orçamento Original', f"{perc_sobre_orcamento:.1f}%"],
+            ['Variação (Despesas Extras)', f"+{variacao_extras:.1f}%"],
+        ]
+        
+        table_analise = Table(data_analise, colWidths=[10*cm, 6*cm])
+        table_analise.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]))
+        elements.append(table_analise)
         elements.append(Spacer(1, 0.8*cm))
         
         # === SEÇÃO 2: SERVIÇOS ===
