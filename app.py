@@ -2009,7 +2009,6 @@ def editar_orcamento(orcamento_id):
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def aprovar_orcamento(orcamento_id):
-    # ... (código atualizado para valor_total/valor_pago) ...
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/aprovar (POST) acessada ---")
     try:
         user = get_current_user()
@@ -2021,28 +2020,45 @@ def aprovar_orcamento(orcamento_id):
         if orcamento.status != 'Pendente':
             return jsonify({"erro": "Este orçamento já foi processado."}), 400
 
+        # Receber a opção do frontend
+        data = request.get_json() or {}
+        opcao = data.get('opcao', 'criar_novo')  # 'criar_novo' ou 'atrelar'
+        servico_id = data.get('servico_id')
+
         orcamento.status = 'Aprovado'
         
-        desc_lancamento = f"{orcamento.descricao}"
+        if opcao == 'criar_novo':
+            # Criar novo serviço baseado no orçamento
+            novo_servico = Servico(
+                obra_id=orcamento.obra_id,
+                nome=orcamento.descricao,
+                valor_total=orcamento.valor,
+                valor_pago=0.0,
+                porcentagem=0.0
+            )
+            db.session.add(novo_servico)
+            db.session.flush()  # Para obter o ID do serviço
+            
+            print(f"[LOG] Novo serviço criado: ID {novo_servico.id}, Nome: {novo_servico.nome}")
+            
+        elif opcao == 'atrelar' and servico_id:
+            # Atrelar ao serviço existente
+            servico = Servico.query.get(servico_id)
+            if not servico or servico.obra_id != orcamento.obra_id:
+                return jsonify({"erro": "Serviço inválido ou não pertence a esta obra."}), 400
+            
+            # Atualizar valor total do serviço
+            servico.valor_total += orcamento.valor
+            print(f"[LOG] Orçamento atrelado ao serviço ID {servico.id}, novo valor total: {servico.valor_total}")
+            
+        else:
+            return jsonify({"erro": "Opção inválida para aprovação."}), 400
         
-        novo_lancamento = Lancamento(
-            obra_id=orcamento.obra_id,
-            tipo=orcamento.tipo,
-            descricao=desc_lancamento,
-            valor_total=orcamento.valor,
-            valor_pago=0.0,
-            data=date.today(), 
-            status='A Pagar',
-            pix=orcamento.dados_pagamento,
-            prioridade=0,
-            fornecedor=orcamento.fornecedor, 
-            servico_id=None  # ⚠️ Não vincular ao serviço - vincular apenas via PagamentoServico quando pago
-        )
-        
-        db.session.add(novo_lancamento)
         db.session.commit()
         
-        return jsonify({"sucesso": "Orçamento aprovado e movido para pendências", "lancamento": novo_lancamento.to_dict()}), 200
+        return jsonify({
+            "sucesso": f"Orçamento aprovado! {'Novo serviço criado' if opcao == 'criar_novo' else 'Atrelado ao serviço existente'}."
+        }), 200
         
     except Exception as e:
         db.session.rollback()
