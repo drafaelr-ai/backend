@@ -2926,17 +2926,8 @@ def relatorio_resumo_completo(obra_id):
             for s in servicos
         )
         
-        # CORREÇÃO: Orçamento total vem APENAS dos serviços cadastrados
-        # Calcular despesas extras separadamente (pagamentos SEM serviço)
-        despesas_extras_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is None)
-        despesas_extras_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas 
-                                       if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is None)
-        
-        despesas_extras_total = despesas_extras_futuros + despesas_extras_parcelas
-        custo_real_previsto = orcamento_total + despesas_extras_total
-        falta_pagar = custo_real_previsto - valores_pagos
-        
-        orcamento_total = orcamento_total_lancamentos + orcamento_total_servicos
+        # CORREÇÃO: Calcular orcamento_total e valores_pagos PRIMEIRO
+        orcamento_total = orcamento_total_servicos  # Apenas dos serviços cadastrados
         
         valores_pagos_lancamentos = sum((l.valor_pago or 0) for l in lancamentos)
         valores_pagos_servicos = sum(
@@ -2944,6 +2935,15 @@ def relatorio_resumo_completo(obra_id):
             for s in servicos
         )
         valores_pagos = valores_pagos_lancamentos + valores_pagos_servicos
+        
+        # AGORA calcular despesas extras e custo real previsto
+        despesas_extras_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is None)
+        despesas_extras_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas 
+                                       if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is None)
+        
+        despesas_extras_total = despesas_extras_futuros + despesas_extras_parcelas
+        custo_real_previsto = orcamento_total + despesas_extras_total
+        falta_pagar = custo_real_previsto - valores_pagos
         
         # Criar PDF
         buffer = io.BytesIO()
@@ -3012,8 +3012,10 @@ def relatorio_resumo_completo(obra_id):
         elements.append(Paragraph("<b>SITUAÇÃO DE PAGAMENTOS</b>", styles['Heading3']))
         elements.append(Spacer(1, 0.2*cm))
         
-        # Calcular liberado (tudo que está previsto mas não pago)
-        liberado_pagamento = despesas_extras_total  # Simplificado: apenas despesas extras previstas
+        # Calcular liberado (TODAS as parcelas/pagamentos previstos, com ou sem serviço)
+        liberado_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros)
+        liberado_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas)
+        liberado_pagamento = liberado_futuros + liberado_parcelas
         
         data_pagamentos = [
             ['Descrição', 'Valor'],
