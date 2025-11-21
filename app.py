@@ -4371,7 +4371,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         
         print(f"   ✅ Parcela marcada como paga em {parcela.data_pagamento}")
         
-        # Criar lançamento no histórico
+        # Criar lançamento ou pagamento de serviço baseado no vínculo
         descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
         
         # Tratamento seguro do segmento
@@ -4379,61 +4379,56 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         if hasattr(pagamento, 'segmento') and pagamento.segmento:
             segmento_info = pagamento.segmento
         
-        print(f"   📄 Criando lançamento: '{descricao_lancamento}'")
+        print(f"   📄 Processando pagamento: '{descricao_lancamento}'")
         print(f"      - segmento: {segmento_info}")
+        print(f"      - servico_id: {pagamento.servico_id}")
         
-        novo_lancamento = Lancamento(
-            obra_id=pagamento.obra_id,
-            tipo='Despesa',
-            descricao=descricao_lancamento,
-            valor_total=parcela.valor_parcela,
-            valor_pago=parcela.valor_parcela,
-            data=parcela.data_pagamento,
-            data_vencimento=parcela.data_vencimento,
-            status='Pago',
-            pix=None,
-            prioridade=0,
-            fornecedor=pagamento.fornecedor,
-            servico_id=None  # ⚠️ NÃO vincular ao serviço aqui - o vínculo é feito via PagamentoServico
-        )
-        
-        # Tenta atribuir segmento se o modelo suportar
-        if hasattr(novo_lancamento, 'segmento'):
-            novo_lancamento.segmento = segmento_info
-            print(f"      - segmento atribuído ao lançamento")
-        
-        db.session.add(novo_lancamento)
-        db.session.flush()
-        
-        print(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
-        
-        # Criar/atualizar PagamentoServico se houver vínculo
+        # CORREÇÃO: Se tem serviço vinculado, criar APENAS PagamentoServico (não Lancamento)
+        # Se não tem serviço, criar Lancamento
         if pagamento.servico_id:
-            # ⭐ VALIDAR SE SERVIÇO EXISTE
+            # Parcela vinculada a serviço - criar/atualizar PagamentoServico
             servico = db.session.get(Servico, pagamento.servico_id)
             if not servico:
-                print(f"--- [AVISO] Serviço {pagamento.servico_id} não existe no banco! Continuando sem vincular ao serviço. ---")
-                novo_lancamento.servico_id = None
+                print(f"   ⚠️ Serviço {pagamento.servico_id} não existe! Criando lançamento sem vínculo.")
+                # Serviço não existe, criar lançamento normal
+                novo_lancamento = Lancamento(
+                    obra_id=pagamento.obra_id,
+                    tipo='Despesa',
+                    descricao=descricao_lancamento,
+                    valor_total=parcela.valor_parcela,
+                    valor_pago=parcela.valor_parcela,
+                    data=parcela.data_pagamento,
+                    data_vencimento=parcela.data_vencimento,
+                    status='Pago',
+                    pix=None,
+                    prioridade=0,
+                    fornecedor=pagamento.fornecedor,
+                    servico_id=None
+                )
+                if hasattr(novo_lancamento, 'segmento'):
+                    novo_lancamento.segmento = segmento_info
+                db.session.add(novo_lancamento)
+                db.session.flush()
+                print(f"   ✅ Lançamento criado com ID={novo_lancamento.id} (serviço não encontrado)")
             else:
-                print(f"--- [LOG] Parcela vinculada ao serviço {pagamento.servico_id}, criando/atualizando PagamentoServico ---")
+                print(f"   ✅ Parcela vinculada ao serviço '{servico.nome}', criando/atualizando PagamentoServico")
                 
-                # Determinar tipo de pagamento baseado no segmento do pagamento parcelado
+                # Determinar tipo de pagamento baseado no segmento
                 try:
                     if hasattr(pagamento, 'segmento') and pagamento.segmento:
-                        # Converter "Mão de Obra" para "mao_de_obra" e "Material" para "material"
                         if pagamento.segmento == 'Mão de Obra':
                             tipo_pag = 'mao_de_obra'
                         else:
                             tipo_pag = 'material'
-                        print(f"--- [LOG] Segmento detectado: {pagamento.segmento} -> tipo_pagamento: {tipo_pag} ---")
+                        print(f"      - Segmento: {pagamento.segmento} -> tipo: {tipo_pag}")
                     else:
-                        tipo_pag = 'material'  # Padrão
-                        print(f"--- [LOG] Segmento não encontrado, usando padrão: material ---")
+                        tipo_pag = 'material'
+                        print(f"      - Segmento não encontrado, usando padrão: material")
                 except Exception as seg_error:
-                    tipo_pag = 'material'  # Fallback seguro
-                    print(f"--- [LOG] Erro ao detectar segmento: {seg_error}, usando padrão: material ---")
+                    tipo_pag = 'material'
+                    print(f"      - Erro ao detectar segmento: {seg_error}, usando padrão: material")
                 
-                # Buscar PagamentoServico existente para este serviço e fornecedor
+                # Buscar PagamentoServico existente
                 pagamento_servico_existente = PagamentoServico.query.filter_by(
                     servico_id=pagamento.servico_id,
                     fornecedor=pagamento.fornecedor,
@@ -4443,7 +4438,9 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
                 if pagamento_servico_existente:
                     # Atualizar valor_pago do registro existente
                     pagamento_servico_existente.valor_pago += parcela.valor_parcela
-                    print(f"--- [LOG] PagamentoServico ID={pagamento_servico_existente.id} atualizado. Novo valor_pago: {pagamento_servico_existente.valor_pago} ---")
+                    pagamento_servico_existente.valor_total += parcela.valor_parcela
+                    print(f"      ✅ PagamentoServico ID={pagamento_servico_existente.id} atualizado")
+                    print(f"         Novo valor_pago: R$ {pagamento_servico_existente.valor_pago}")
                 else:
                     # Criar novo registro
                     novo_pagamento_servico = PagamentoServico(
@@ -4458,7 +4455,29 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
                     )
                     db.session.add(novo_pagamento_servico)
                     db.session.flush()
-                    print(f"--- [LOG] Novo PagamentoServico criado com ID={novo_pagamento_servico.id}, tipo={tipo_pag} ---")
+                    print(f"      ✅ Novo PagamentoServico criado com ID={novo_pagamento_servico.id}, tipo={tipo_pag}")
+        else:
+            # Parcela SEM serviço - criar Lancamento normal
+            print(f"   ✅ Parcela sem serviço, criando lançamento geral")
+            novo_lancamento = Lancamento(
+                obra_id=pagamento.obra_id,
+                tipo='Despesa',
+                descricao=descricao_lancamento,
+                valor_total=parcela.valor_parcela,
+                valor_pago=parcela.valor_parcela,
+                data=parcela.data_pagamento,
+                data_vencimento=parcela.data_vencimento,
+                status='Pago',
+                pix=None,
+                prioridade=0,
+                fornecedor=pagamento.fornecedor,
+                servico_id=None
+            )
+            if hasattr(novo_lancamento, 'segmento'):
+                novo_lancamento.segmento = segmento_info
+            db.session.add(novo_lancamento)
+            db.session.flush()
+            print(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
         
         # Atualizar contador de parcelas pagas
         todas_parcelas = ParcelaIndividual.query.filter_by(
@@ -4478,13 +4497,12 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         # Commit final
         db.session.commit()
         
-        print(f"   ✅ SUCESSO: Parcela {parcela_id} paga e lançamento {novo_lancamento.id} criado")
+        print(f"   ✅ SUCESSO: Parcela {parcela_id} marcada como paga")
         print(f"{'='*80}\n")
         
         return jsonify({
             "mensagem": "Parcela paga com sucesso",
-            "parcela": parcela.to_dict(),
-            "lancamento_id": novo_lancamento.id
+            "parcela": parcela.to_dict()
         }), 200
     
     except Exception as e:
