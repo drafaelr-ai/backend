@@ -140,8 +140,10 @@ print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: 
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
 app.config["JWT_SECRET_KEY"] = os.environ.get('JWT_SECRET_KEY', 'sua-chave-secreta-muito-forte-aqui-mude-depois')
+# CORREÇÃO: Aumentar tempo de expiração do token de 15min (padrão) para 24 horas
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
 jwt = JWTManager(app)
-print("--- [LOG] JWT Manager inicializado ---")
+print("--- [LOG] JWT Manager inicializado com expiração de 24 horas ---")
 # ------------------------------------------------
 
 
