@@ -3392,143 +3392,478 @@ def relatorio_resumo_completo(obra_id):
 @app.route('/obras/<int:obra_id>/relatorio/pagamentos-pdf', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def gerar_relatorio_pagamentos_pdf(obra_id):
-    """Gera relatório PDF com histórico completo de pagamentos da obra"""
+    """Gera relatório PDF completo com análise financeira da obra"""
     if request.method == 'OPTIONS':
-        return make_response('', 200)
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
     print(f"--- [LOG] Rota /obras/{obra_id}/relatorio/pagamentos-pdf (GET) acessada ---")
-    
     try:
-        # Verificar acesso
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
-            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
-        # Buscar obra
-        obra = Obra.query.get(obra_id)
-        if not obra:
-            return jsonify({"erro": "Obra não encontrada"}), 404
+        obra = Obra.query.get_or_404(obra_id)
         
-        # Buscar todos os lançamentos pagos, ordenados por data
-        lancamentos = Lancamento.query.filter_by(
-            obra_id=obra_id,
-            status='Pago'
-        ).order_by(Lancamento.data_vencimento.desc()).all()
+        # Buscar todos os dados necessários
+        lancamentos = Lancamento.query.filter_by(obra_id=obra_id).all()
+        servicos = Servico.query.filter_by(obra_id=obra_id).options(joinedload(Servico.pagamentos)).all()
+        orcamentos = Orcamento.query.filter_by(obra_id=obra_id).all()
+        
+        # CORREÇÃO: Buscar também PagamentoFuturo e Parcelas
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id, status='Previsto').all()
+        parcelas_previstas = db.session.query(ParcelaIndividual).join(
+            PagamentoParcelado
+        ).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Previsto'
+        ).all()
+        
+        # Calcular sumários
+        orcamento_total_lancamentos = sum((l.valor_total or 0) for l in lancamentos)
+        
+        orcamento_total_servicos = sum(
+            (s.valor_global_mao_de_obra or 0) + (s.valor_global_material or 0)
+            for s in servicos
+        )
+        
+        # CORREÇÃO: Calcular orcamento_total e valores_pagos PRIMEIRO
+        orcamento_total = orcamento_total_servicos  # Apenas dos serviços cadastrados
+        
+        valores_pagos_lancamentos = sum((l.valor_pago or 0) for l in lancamentos)
+        valores_pagos_servicos = sum(
+            sum((p.valor_pago or 0) for p in s.pagamentos)
+            for s in servicos
+        )
+        valores_pagos = valores_pagos_lancamentos + valores_pagos_servicos
+        
+        # AGORA calcular despesas extras e custo real previsto
+        despesas_extras_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is None)
+        despesas_extras_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas 
+                                       if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is None)
+        
+        despesas_extras_total = despesas_extras_futuros + despesas_extras_parcelas
+        custo_real_previsto = orcamento_total + despesas_extras_total
+        falta_pagar = custo_real_previsto - valores_pagos
         
         # Criar PDF
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, 
-                               topMargin=2*cm, bottomMargin=2*cm)
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
         elements = []
         styles = getSampleStyleSheet()
         
-        # Função para formatar valores
-        def formatar_real(valor):
-            return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-        
         # Título
-        titulo = Paragraph(f"<b>Relatório de Pagamentos</b>", styles['Title'])
-        elements.append(titulo)
-        elements.append(Spacer(1, 0.3*cm))
+        titulo = f"<b>RESUMO COMPLETO DA OBRA</b><br/>{obra.nome}"
+        elements.append(Paragraph(titulo, styles['Title']))
+        elements.append(Spacer(1, 0.5*cm))
         
-        # Informações da obra
-        info_obra = Paragraph(f"<b>Obra:</b> {obra.nome}<br/><b>Cliente:</b> {obra.cliente or 'Não informado'}", styles['Normal'])
-        elements.append(info_obra)
-        elements.append(Spacer(1, 0.3*cm))
-        
-        # Data de geração
-        data_geracao = Paragraph(f"Gerado em: {date.today().strftime('%d/%m/%Y')}", styles['Normal'])
-        elements.append(data_geracao)
+        # Informações da Obra
+        info_text = f"<b>Cliente:</b> {obra.cliente or 'N/A'}<br/>"
+        info_text += f"<b>Data de Geração:</b> {datetime.now().strftime('%d/%m/%Y às %H:%M')}"
+        elements.append(Paragraph(info_text, styles['Normal']))
         elements.append(Spacer(1, 0.8*cm))
         
-        if not lancamentos:
-            elements.append(Paragraph("Nenhum pagamento registrado ainda.", styles['Normal']))
+        # === SEÇÃO 1: RESUMO FINANCEIRO COMPLETO ===
+        elements.append(Paragraph("<b>1. RESUMO FINANCEIRO COMPLETO</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        # Subtítulo: Orçamento e Custos
+        elements.append(Paragraph("<b>ORÇAMENTO E CUSTOS</b>", styles['Heading3']))
+        elements.append(Spacer(1, 0.2*cm))
+        
+        data_orcamento = [
+            ['Descrição', 'Valor'],
+            ['Orçamento Original (Serviços)', formatar_real(orcamento_total)],
+            ['Despesas Extras (Fora da Planilha)', formatar_real(despesas_extras_total)],
+        ]
+        
+        table_orcamento = Table(data_orcamento, colWidths=[10*cm, 6*cm])
+        table_orcamento.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]))
+        elements.append(table_orcamento)
+        
+        # Linha de total (Custo Real Previsto)
+        data_custo_real = [
+            ['CUSTO REAL PREVISTO', formatar_real(custo_real_previsto)]
+        ]
+        table_custo_real = Table(data_custo_real, colWidths=[10*cm, 6*cm])
+        table_custo_real.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+        ]))
+        elements.append(table_custo_real)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Subtítulo: Situação de Pagamentos
+        elements.append(Paragraph("<b>SITUAÇÃO DE PAGAMENTOS</b>", styles['Heading3']))
+        elements.append(Spacer(1, 0.2*cm))
+        
+        # Calcular liberado (TODAS as parcelas/pagamentos previstos, com ou sem serviço)
+        liberado_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros)
+        liberado_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas)
+        liberado_pagamento = liberado_futuros + liberado_parcelas
+        
+        data_pagamentos = [
+            ['Descrição', 'Valor'],
+            ['Valores Já Pagos', formatar_real(valores_pagos)],
+            ['Liberado p/ Pagamento (Previsto)', formatar_real(liberado_pagamento)],
+        ]
+        
+        table_pagamentos = Table(data_pagamentos, colWidths=[10*cm, 6*cm])
+        table_pagamentos.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]))
+        elements.append(table_pagamentos)
+        
+        # Linha de total (Falta Pagar)
+        data_falta = [
+            ['FALTA PAGAR PARA CONCLUIR', formatar_real(falta_pagar)]
+        ]
+        table_falta = Table(data_falta, colWidths=[10*cm, 6*cm])
+        table_falta.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ef4444')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('TOPPADDING', (0, 0), (-1, 0), 10),
+        ]))
+        elements.append(table_falta)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Subtítulo: Análise de Execução
+        elements.append(Paragraph("<b>ANÁLISE DE EXECUÇÃO</b>", styles['Heading3']))
+        elements.append(Spacer(1, 0.2*cm))
+        
+        perc_executado = (valores_pagos / custo_real_previsto * 100) if custo_real_previsto > 0 else 0
+        perc_sobre_orcamento = (valores_pagos / orcamento_total * 100) if orcamento_total > 0 else 0
+        variacao_extras = (despesas_extras_total / orcamento_total * 100) if orcamento_total > 0 else 0
+        
+        data_analise = [
+            ['Indicador', 'Valor'],
+            ['Percentual Executado (sobre custo real)', f"{perc_executado:.1f}%"],
+            ['Percentual sobre Orçamento Original', f"{perc_sobre_orcamento:.1f}%"],
+            ['Variação (Despesas Extras)', f"+{variacao_extras:.1f}%"],
+        ]
+        
+        table_analise = Table(data_analise, colWidths=[10*cm, 6*cm])
+        table_analise.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4f46e5')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ]))
+        elements.append(table_analise)
+        elements.append(Spacer(1, 0.8*cm))
+        
+        # === SEÇÃO 2: SERVIÇOS ===
+        elements.append(Paragraph("<b>2. SERVIÇOS (EMPREITADAS)</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        if servicos:
+            for serv in servicos:
+                elements.append(Paragraph(f"<b>{serv.nome}</b>", styles['Heading3']))
+                
+                valor_global_mo = serv.valor_global_mao_de_obra or 0
+                valor_global_mat = serv.valor_global_material or 0
+                valor_global_total = valor_global_mo + valor_global_mat
+                
+                pagamentos_mo = [p for p in serv.pagamentos if p.tipo_pagamento == 'mao_de_obra']
+                pagamentos_mat = [p for p in serv.pagamentos if p.tipo_pagamento == 'material']
+                
+                valor_pago_mo = sum((p.valor_pago or 0) for p in pagamentos_mo)
+                valor_pago_mat = sum((p.valor_pago or 0) for p in pagamentos_mat)
+                valor_pago_total = valor_pago_mo + valor_pago_mat
+                
+                percentual_mo = (valor_pago_mo / valor_global_mo * 100) if valor_global_mo > 0 else 0
+                percentual_mat = (valor_pago_mat / valor_global_mat * 100) if valor_global_mat > 0 else 0
+                percentual_total = (valor_pago_total / valor_global_total * 100) if valor_global_total > 0 else 0
+                
+                status = "✓ PAGO 100%" if percentual_total >= 99.9 else f"⏳ EM ANDAMENTO ({percentual_total:.1f}%)"
+                
+                data_servico = [
+                    ['', 'Orçado', 'Pago', '% Executado'],
+                    ['Mão de Obra', formatar_real(valor_global_mo), formatar_real(valor_pago_mo), f"{percentual_mo:.1f}%"],
+                    ['Material', formatar_real(valor_global_mat), formatar_real(valor_pago_mat), f"{percentual_mat:.1f}%"],
+                    ['TOTAL', formatar_real(valor_global_total), formatar_real(valor_pago_total), f"{percentual_total:.1f}%"]
+                ]
+                
+                table_servico = Table(data_servico, colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+                table_servico.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+                    ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f0f0f0')),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ]))
+                elements.append(table_servico)
+                elements.append(Paragraph(f"<b>Status:</b> {status}", styles['Normal']))
+                elements.append(Spacer(1, 0.5*cm))
         else:
-            # Calcular totais
-            total_geral = sum(l.valor_pago for l in lancamentos)
-            
-            # Subtítulo com total
-            subtitulo = Paragraph(
-                f"<b>Total de Pagamentos:</b> {formatar_real(total_geral)}<br/>" +
-                f"<b>Quantidade de Pagamentos:</b> {len(lancamentos)}",
-                styles['Normal']
-            )
-            elements.append(subtitulo)
+            elements.append(Paragraph("Nenhum serviço cadastrado.", styles['Normal']))
             elements.append(Spacer(1, 0.5*cm))
+        
+        # === SEÇÃO 3: PENDÊNCIAS VENCIDAS ===
+        elements.append(Paragraph("<b>3. PENDÊNCIAS VENCIDAS ⚠️</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        hoje = date.today()
+        
+        pendencias_lanc_vencidas = []
+        pendencias_lanc_a_pagar = []
+        
+        for l in lancamentos:
+            if (l.valor_total or 0) > (l.valor_pago or 0):
+                if l.data_vencimento and l.data_vencimento < hoje:
+                    pendencias_lanc_vencidas.append(l)
+                else:
+                    pendencias_lanc_a_pagar.append(l)
+        
+        pendencias_serv_vencidas = []
+        pendencias_serv_a_pagar = []
+        
+        for serv in servicos:
+            for pag in serv.pagamentos:
+                if (pag.valor_total or 0) > (pag.valor_pago or 0):
+                    if pag.data_vencimento and pag.data_vencimento < hoje:
+                        pendencias_serv_vencidas.append((serv.nome, pag))
+                    else:
+                        pendencias_serv_a_pagar.append((serv.nome, pag))
+        
+        total_vencido = 0
+        
+        if pendencias_lanc_vencidas or pendencias_serv_vencidas:
+            data_vencidas = [['Descrição', 'Tipo', 'Valor Pendente']]
             
-            # Tabela de pagamentos
-            data = [['Data', 'Descrição', 'Fornecedor', 'Tipo', 'Valor Pago']]
-            
-            for lanc in lancamentos:
-                data.append([
-                    lanc.data_vencimento.strftime('%d/%m/%Y') if lanc.data_vencimento else '-',
-                    Paragraph(lanc.descricao[:50], styles['Normal']) if len(lanc.descricao) > 50 else lanc.descricao,
-                    lanc.fornecedor or '-',
-                    lanc.tipo or '-',
-                    formatar_real(lanc.valor_pago)
+            for lanc in pendencias_lanc_vencidas:
+                valor_pendente = (lanc.valor_total or 0) - (lanc.valor_pago or 0)
+                total_vencido += valor_pendente
+                data_vencidas.append([
+                    lanc.descricao[:40],
+                    lanc.tipo,
+                    formatar_real(valor_pendente)
                 ])
             
-            # Criar tabela
-            table = Table(data, colWidths=[2.5*cm, 7*cm, 3.5*cm, 2*cm, 2.5*cm])
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a5568')),
+            for serv_nome, pag in pendencias_serv_vencidas:
+                valor_pendente = (pag.valor_total or 0) - (pag.valor_pago or 0)
+                total_vencido += valor_pendente
+                tipo_pag_display = pag.tipo_pagamento.replace('_', ' ').title() if pag.tipo_pagamento else 'Serviço'
+                data_vencidas.append([
+                    f"{serv_nome} - {tipo_pag_display}"[:40],
+                    "Serviço",
+                    formatar_real(valor_pendente)
+                ])
+            
+            data_vencidas.append(['', 'TOTAL VENCIDO ⚠️', formatar_real(total_vencido)])
+            
+            table_vencidas = Table(data_vencidas, colWidths=[9*cm, 3.5*cm, 3.5*cm])
+            table_vencidas.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#d32f2f')),  # Vermelho escuro
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('ALIGN', (4, 0), (4, -1), 'RIGHT'),  # Valor alinhado à direita
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('FONTSIZE', (0, 1), (-1, -1), 8),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('BACKGROUND', (0, 1), (-1, -2), colors.HexColor('#ffcdd2')),  # Vermelho claro
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#d32f2f')),  # Linha total em vermelho
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
             ]))
+            elements.append(table_vencidas)
+        else:
+            elements.append(Paragraph("✓ Nenhuma pendência vencida!", styles['Normal']))
+        
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # === SEÇÃO 4: PENDÊNCIAS A PAGAR ===
+        elements.append(Paragraph("<b>4. PENDÊNCIAS A PAGAR (No Prazo)</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        total_a_pagar = 0
+        
+        if pendencias_lanc_a_pagar or pendencias_serv_a_pagar:
+            data_a_pagar = [['Descrição', 'Tipo', 'Valor Pendente']]
             
-            elements.append(table)
+            for lanc in pendencias_lanc_a_pagar:
+                valor_pendente = (lanc.valor_total or 0) - (lanc.valor_pago or 0)
+                total_a_pagar += valor_pendente
+                data_a_pagar.append([
+                    lanc.descricao[:40],
+                    lanc.tipo,
+                    formatar_real(valor_pendente)
+                ])
             
-            # Resumo por tipo
-            elements.append(Spacer(1, 1*cm))
-            elements.append(Paragraph("<b>Resumo por Tipo:</b>", styles['Heading2']))
-            elements.append(Spacer(1, 0.3*cm))
+            for serv_nome, pag in pendencias_serv_a_pagar:
+                valor_pendente = (pag.valor_total or 0) - (pag.valor_pago or 0)
+                total_a_pagar += valor_pendente
+                tipo_pag_display = pag.tipo_pagamento.replace('_', ' ').title() if pag.tipo_pagamento else 'Serviço'
+                data_a_pagar.append([
+                    f"{serv_nome} - {tipo_pag_display}"[:40],
+                    "Serviço",
+                    formatar_real(valor_pendente)
+                ])
             
-            # Agrupar por tipo
-            tipos_valores = {}
-            for lanc in lancamentos:
-                tipo = lanc.tipo or 'Não especificado'
-                if tipo not in tipos_valores:
-                    tipos_valores[tipo] = 0
-                tipos_valores[tipo] += lanc.valor_pago
+            data_a_pagar.append(['', 'TOTAL A PAGAR', formatar_real(total_a_pagar)])
             
-            resumo_data = [['Tipo', 'Total']]
-            for tipo, total in sorted(tipos_valores.items()):
-                resumo_data.append([tipo, formatar_real(total)])
-            
-            resumo_table = Table(resumo_data, colWidths=[10*cm, 4*cm])
-            resumo_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a5568')),
+            table_a_pagar = Table(data_a_pagar, colWidths=[9*cm, 3.5*cm, 3.5*cm])
+            table_a_pagar.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2196f3')),  # Azul
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f0f0f0')),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
             ]))
+            elements.append(table_a_pagar)
+        else:
+            elements.append(Paragraph("✓ Nenhuma pendência a pagar no momento!", styles['Normal']))
+        
+        elements.append(Spacer(1, 0.8*cm))
+        
+        # === SEÇÃO 5: ORÇAMENTOS ===
+        elements.append(Paragraph("<b>5. ORÇAMENTOS</b>", styles['Heading2']))
+        elements.append(Spacer(1, 0.3*cm))
+        
+        if orcamentos:
+            # <-- MUDANÇA: Log de debug para verificar status
+            print(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
+            for orc in orcamentos:
+                print(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
             
-            elements.append(resumo_table)
+            orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
+            orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
+            orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
+            
+            print(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
+            
+            if orcamentos_pendentes:
+                elements.append(Paragraph("<b>5.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
+                data_orc_pend = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
+                for orc in orcamentos_pendentes:
+                    data_orc_pend.append([
+                        orc.descricao[:35],
+                        orc.fornecedor or 'N/A',
+                        formatar_real(orc.valor),
+                        orc.tipo
+                    ])
+                
+                table_orc_pend = Table(data_orc_pend, colWidths=[7*cm, 4*cm, 3*cm, 2*cm])
+                table_orc_pend.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f59e0b')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+                elements.append(table_orc_pend)
+                elements.append(Spacer(1, 0.5*cm))
+            
+            if orcamentos_aprovados:
+                elements.append(Paragraph("<b>5.2. Orçamentos Aprovados</b>", styles['Heading3']))
+                data_orc_apr = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
+                for orc in orcamentos_aprovados:
+                    data_orc_apr.append([
+                        orc.descricao[:35],
+                        orc.fornecedor or 'N/A',
+                        formatar_real(orc.valor),
+                        orc.tipo
+                    ])
+                
+                table_orc_apr = Table(data_orc_apr, colWidths=[7*cm, 4*cm, 3*cm, 2*cm])
+                table_orc_apr.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#10b981')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+                elements.append(table_orc_apr)
+                elements.append(Spacer(1, 0.5*cm))
+            
+            # <-- NOVO: Seção de Orçamentos Rejeitados
+            if orcamentos_rejeitados:
+                elements.append(Paragraph("<b>5.3. Orçamentos Rejeitados (Histórico)</b>", styles['Heading3']))
+                data_orc_rej = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
+                for orc in orcamentos_rejeitados:
+                    data_orc_rej.append([
+                        orc.descricao[:35],
+                        orc.fornecedor or 'N/A',
+                        formatar_real(orc.valor),
+                        orc.tipo
+                    ])
+                
+                table_orc_rej = Table(data_orc_rej, colWidths=[7*cm, 4*cm, 3*cm, 2*cm])
+                table_orc_rej.setStyle(TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ef4444')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+                ]))
+                elements.append(table_orc_rej)
+                elements.append(Spacer(1, 0.5*cm))
+        else:
+            elements.append(Paragraph("Nenhum orçamento cadastrado.", styles['Normal']))
         
         # Gerar PDF
         doc.build(elements)
         buffer.seek(0)
+        pdf_data = buffer.read()
+        buffer.close()
         
-        # Retornar PDF
-        response = make_response(buffer.read())
+        response = make_response(pdf_data)
         response.headers['Content-Type'] = 'application/pdf'
         response.headers['Content-Disposition'] = f'attachment; filename=relatorio_pagamentos_{obra.nome.replace(" ", "_")}.pdf'
         
-        print(f"--- [LOG] Relatório de pagamentos gerado para obra {obra_id} ---")
+        print(f"--- [LOG] Relatório de pagamentos (completo) gerado para obra {obra_id} ---")
         return response
         
     except Exception as e:
