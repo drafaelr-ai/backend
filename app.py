@@ -6515,12 +6515,17 @@ def marcar_multiplos_como_pago(obra_id):
             
             print(f"--- [LOG] Processando item: tipo={tipo_item}, id={item_id} ---")
             
+            # CORREÇÃO CRÍTICA: Usar savepoint para isolar cada item
+            # Se um item der erro, não afeta os outros
+            savepoint = db.session.begin_nested()
+            
             try:
                 if tipo_item == 'futuro':
                     # ===== LÓGICA CORRIGIDA: Verificar se tem vínculo com serviço =====
                     pagamento = db.session.get(PagamentoFuturo, item_id)
                     
                     if not pagamento:
+                        savepoint.rollback()
                         erro_msg = f"Pagamento futuro ID {item_id} não encontrado no banco"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6532,6 +6537,7 @@ def marcar_multiplos_como_pago(obra_id):
                         continue
                     
                     if pagamento.obra_id != obra_id:
+                        savepoint.rollback()
                         erro_msg = f"Pagamento futuro ID {item_id} não pertence à obra {obra_id}"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6546,6 +6552,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if pagamento.servico_id:
                         servico = db.session.get(Servico, pagamento.servico_id)
                         if not servico:
+                            savepoint.rollback()
                             erro_msg = f"Serviço ID {pagamento.servico_id} não encontrado"
                             print(f"--- [ERRO] {erro_msg} ---")
                             resultados.append({
@@ -6642,6 +6649,7 @@ def marcar_multiplos_como_pago(obra_id):
                     parcela = db.session.get(ParcelaIndividual, item_id)
                     
                     if not parcela:
+                        savepoint.rollback()
                         erro_msg = f"Parcela ID {item_id} não encontrada no banco"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6655,6 +6663,7 @@ def marcar_multiplos_como_pago(obra_id):
                     pag_parcelado = db.session.get(PagamentoParcelado, parcela.pagamento_parcelado_id)
                     
                     if not pag_parcelado:
+                        savepoint.rollback()
                         erro_msg = f"Pagamento parcelado ID {parcela.pagamento_parcelado_id} não encontrado"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6666,6 +6675,7 @@ def marcar_multiplos_como_pago(obra_id):
                         continue
                     
                     if pag_parcelado.obra_id != obra_id:
+                        savepoint.rollback()
                         erro_msg = f"Pagamento parcelado não pertence à obra {obra_id}"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6678,6 +6688,7 @@ def marcar_multiplos_como_pago(obra_id):
                     
                     # Verificar se já está paga
                     if parcela.status == 'Pago':
+                        savepoint.rollback()
                         print(f"--- [AVISO] Parcela ID {item_id} já está paga, pulando ---")
                         resultados.append({
                             "tipo": "parcela",
@@ -6714,6 +6725,7 @@ def marcar_multiplos_como_pago(obra_id):
                     pagamento_servico = db.session.get(PagamentoServico, item_id)
                     
                     if not pagamento_servico:
+                        savepoint.rollback()
                         erro_msg = f"Pagamento de serviço ID {item_id} não encontrado"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6727,6 +6739,7 @@ def marcar_multiplos_como_pago(obra_id):
                     servico = db.session.get(Servico, pagamento_servico.servico_id)
                     
                     if not servico:
+                        savepoint.rollback()
                         erro_msg = f"Serviço ID {pagamento_servico.servico_id} não encontrado"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6738,6 +6751,7 @@ def marcar_multiplos_como_pago(obra_id):
                         continue
                     
                     if servico.obra_id != obra_id:
+                        savepoint.rollback()
                         erro_msg = f"Serviço não pertence à obra {obra_id}"
                         print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
@@ -6750,6 +6764,7 @@ def marcar_multiplos_como_pago(obra_id):
                     
                     # Verificar se já está totalmente pago
                     if pagamento_servico.valor_pago >= pagamento_servico.valor_total:
+                        savepoint.rollback()
                         print(f"--- [AVISO] Pagamento de serviço ID {item_id} já está totalmente pago ---")
                         resultados.append({
                             "tipo": "servico",
@@ -6797,8 +6812,16 @@ def marcar_multiplos_como_pago(obra_id):
                         "status": "error",
                         "mensagem": "Tipo de item inválido (esperado: 'futuro', 'parcela' ou 'servico')"
                     })
+                    savepoint.rollback()
+                    continue
+                
+                # SUCESSO: Commit do savepoint
+                savepoint.commit()
+                print(f"--- [LOG] ✅ Item processado com sucesso (savepoint committed) ---")
             
             except Exception as e:
+                # ERRO: Rollback do savepoint (isola o erro deste item)
+                savepoint.rollback()
                 error_details = traceback.format_exc()
                 erro_msg = f"Erro ao processar item tipo={tipo_item}, id={item_id}: {str(e)}"
                 print(f"--- [ERRO] {erro_msg} ---")
