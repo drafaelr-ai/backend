@@ -571,6 +571,108 @@ class ParcelaIndividual(db.Model):
             "observacao": self.observacao
         }
 
+# ===== MODELOS DO CAIXA DE OBRA =====
+class CaixaObra(db.Model):
+    """Caixa principal da obra para pequenas despesas"""
+    __tablename__ = 'caixa_obra'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False, unique=True)
+    saldo_inicial = db.Column(db.Float, default=0, nullable=False)
+    saldo_atual = db.Column(db.Float, default=0, nullable=False)
+    mes_atual = db.Column(db.Integer, nullable=False)  # 1-12
+    ano_atual = db.Column(db.Integer, nullable=False)  # 2025
+    status = db.Column(db.String(20), default='Ativo', nullable=False)  # Ativo, Fechado
+    criado_em = db.Column(db.DateTime, default=func.now())
+    atualizado_em = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
+    
+    # Relacionamentos
+    obra = db.relationship('Obra', backref='caixa')
+    movimentacoes = db.relationship('MovimentacaoCaixa', backref='caixa', lazy=True, cascade='all, delete-orphan')
+    fechamentos = db.relationship('FechamentoCaixa', backref='caixa', lazy=True, cascade='all, delete-orphan')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'obra_id': self.obra_id,
+            'saldo_inicial': self.saldo_inicial,
+            'saldo_atual': self.saldo_atual,
+            'mes_atual': self.mes_atual,
+            'ano_atual': self.ano_atual,
+            'status': self.status,
+            'criado_em': self.criado_em.isoformat() if self.criado_em else None
+        }
+
+class MovimentacaoCaixa(db.Model):
+    """Movimentações (entradas e saídas) do caixa"""
+    __tablename__ = 'movimentacao_caixa'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    caixa_id = db.Column(db.Integer, db.ForeignKey('caixa_obra.id'), nullable=False, index=True)
+    data = db.Column(db.DateTime, nullable=False, default=func.now(), index=True)
+    tipo = db.Column(db.String(10), nullable=False, index=True)  # 'Entrada' ou 'Saída'
+    valor = db.Column(db.Float, nullable=False)
+    descricao = db.Column(db.String(500), nullable=False)
+    comprovante_url = db.Column(db.String(500), nullable=True)  # URL da imagem do comprovante
+    observacoes = db.Column(db.Text, nullable=True)
+    criado_por = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    criado_em = db.Column(db.DateTime, default=func.now())
+    atualizado_em = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'caixa_id': self.caixa_id,
+            'data': self.data.isoformat() if self.data else None,
+            'tipo': self.tipo,
+            'valor': self.valor,
+            'descricao': self.descricao,
+            'comprovante_url': self.comprovante_url,
+            'observacoes': self.observacoes,
+            'criado_por': self.criado_por,
+            'criado_em': self.criado_em.isoformat() if self.criado_em else None
+        }
+
+class FechamentoCaixa(db.Model):
+    """Fechamento mensal do caixa com relatório"""
+    __tablename__ = 'fechamento_caixa'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    caixa_id = db.Column(db.Integer, db.ForeignKey('caixa_obra.id'), nullable=False)
+    mes = db.Column(db.Integer, nullable=False)  # 1-12
+    ano = db.Column(db.Integer, nullable=False)  # 2025
+    saldo_inicial = db.Column(db.Float, nullable=False)
+    total_entradas = db.Column(db.Float, nullable=False)
+    total_saidas = db.Column(db.Float, nullable=False)
+    saldo_final = db.Column(db.Float, nullable=False)
+    quantidade_movimentacoes = db.Column(db.Integer, nullable=False)
+    quantidade_comprovantes = db.Column(db.Integer, nullable=False)
+    pdf_url = db.Column(db.String(500), nullable=True)
+    fechado_em = db.Column(db.DateTime, nullable=False, default=func.now())
+    fechado_por = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    
+    # Índice composto para consulta rápida por período
+    __table_args__ = (
+        db.Index('idx_fechamento_periodo', 'caixa_id', 'ano', 'mes'),
+    )
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'caixa_id': self.caixa_id,
+            'mes': self.mes,
+            'ano': self.ano,
+            'saldo_inicial': self.saldo_inicial,
+            'total_entradas': self.total_entradas,
+            'total_saidas': self.total_saidas,
+            'saldo_final': self.saldo_final,
+            'quantidade_movimentacoes': self.quantidade_movimentacoes,
+            'quantidade_comprovantes': self.quantidade_comprovantes,
+            'pdf_url': self.pdf_url,
+            'fechado_em': self.fechado_em.isoformat() if self.fechado_em else None,
+            'fechado_por': self.fechado_por
+        }
+
 # ===== MODELOS DO DIÁRIO DE OBRAS =====
 # ==============================================================================
 # MODELO DIARIOOBRA CORRETO - SUBSTITUA NO SEU app.py (linha ~431)
@@ -8414,6 +8516,493 @@ def exportar_servicos_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"--- [ERRO] ao gerar PDF de serviços: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+# ==============================================================================
+# ROTAS DO CAIXA DE OBRA
+# ==============================================================================
+
+@app.route('/obras/<int:obra_id>/caixa', methods=['GET', 'POST'])
+@jwt_required()
+def gerenciar_caixa_obra(obra_id):
+    """
+    GET: Retorna informações do caixa da obra (dashboard)
+    POST: Cria ou inicializa o caixa da obra
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        obra = db.session.get(Obra, obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        if request.method == 'GET':
+            # Buscar ou criar caixa
+            caixa = CaixaObra.query.filter_by(obra_id=obra_id).first()
+            
+            if not caixa:
+                # Criar caixa automaticamente se não existir
+                hoje = date.today()
+                caixa = CaixaObra(
+                    obra_id=obra_id,
+                    saldo_inicial=0,
+                    saldo_atual=0,
+                    mes_atual=hoje.month,
+                    ano_atual=hoje.year,
+                    status='Ativo'
+                )
+                db.session.add(caixa)
+                db.session.commit()
+            
+            # Calcular totais do mês atual
+            movimentacoes_mes = MovimentacaoCaixa.query.filter(
+                MovimentacaoCaixa.caixa_id == caixa.id,
+                db.extract('month', MovimentacaoCaixa.data) == caixa.mes_atual,
+                db.extract('year', MovimentacaoCaixa.data) == caixa.ano_atual
+            ).all()
+            
+            total_entradas_mes = sum(m.valor for m in movimentacoes_mes if m.tipo == 'Entrada')
+            total_saidas_mes = sum(m.valor for m in movimentacoes_mes if m.tipo == 'Saída')
+            
+            resultado = caixa.to_dict()
+            resultado['total_entradas_mes'] = total_entradas_mes
+            resultado['total_saidas_mes'] = total_saidas_mes
+            resultado['obra_nome'] = obra.nome
+            
+            return jsonify(resultado), 200
+        
+        elif request.method == 'POST':
+            # Criar/reinicializar caixa
+            data = request.get_json()
+            caixa = CaixaObra.query.filter_by(obra_id=obra_id).first()
+            
+            if caixa:
+                return jsonify({"erro": "Caixa já existe para esta obra"}), 400
+            
+            hoje = date.today()
+            caixa = CaixaObra(
+                obra_id=obra_id,
+                saldo_inicial=float(data.get('saldo_inicial', 0)),
+                saldo_atual=float(data.get('saldo_inicial', 0)),
+                mes_atual=hoje.month,
+                ano_atual=hoje.year,
+                status='Ativo'
+            )
+            
+            db.session.add(caixa)
+            db.session.commit()
+            
+            print(f"[LOG] ✅ Caixa criado para obra {obra_id}")
+            return jsonify(caixa.to_dict()), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] gerenciar_caixa_obra: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/caixa/movimentacoes', methods=['GET', 'POST'])
+@jwt_required()
+def gerenciar_movimentacoes_caixa(obra_id):
+    """
+    GET: Lista movimentações do caixa (com filtros opcionais)
+    POST: Adiciona nova movimentação
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Buscar caixa da obra
+        caixa = CaixaObra.query.filter_by(obra_id=obra_id).first()
+        if not caixa:
+            return jsonify({"erro": "Caixa não encontrado para esta obra"}), 404
+        
+        if request.method == 'GET':
+            # Parâmetros de filtro
+            mes = request.args.get('mes', type=int)
+            ano = request.args.get('ano', type=int)
+            tipo = request.args.get('tipo')  # Entrada ou Saída
+            
+            query = MovimentacaoCaixa.query.filter_by(caixa_id=caixa.id)
+            
+            if mes:
+                query = query.filter(db.extract('month', MovimentacaoCaixa.data) == mes)
+            if ano:
+                query = query.filter(db.extract('year', MovimentacaoCaixa.data) == ano)
+            if tipo:
+                query = query.filter_by(tipo=tipo)
+            
+            movimentacoes = query.order_by(MovimentacaoCaixa.data.desc()).all()
+            
+            return jsonify([m.to_dict() for m in movimentacoes]), 200
+        
+        elif request.method == 'POST':
+            data = request.get_json()
+            
+            # Validações
+            if 'tipo' not in data or data['tipo'] not in ['Entrada', 'Saída']:
+                return jsonify({"erro": "Tipo deve ser 'Entrada' ou 'Saída'"}), 400
+            
+            if 'valor' not in data or float(data['valor']) <= 0:
+                return jsonify({"erro": "Valor deve ser maior que zero"}), 400
+            
+            if 'descricao' not in data or not data['descricao'].strip():
+                return jsonify({"erro": "Descrição é obrigatória"}), 400
+            
+            # Processar data (usar atual se não fornecida)
+            data_movimentacao = datetime.now()
+            if 'data' in data and data['data']:
+                try:
+                    data_movimentacao = datetime.fromisoformat(data['data'].replace('Z', '+00:00'))
+                except:
+                    pass
+            
+            # Criar movimentação
+            movimentacao = MovimentacaoCaixa(
+                caixa_id=caixa.id,
+                data=data_movimentacao,
+                tipo=data['tipo'],
+                valor=float(data['valor']),
+                descricao=data['descricao'].strip(),
+                comprovante_url=data.get('comprovante_url'),
+                observacoes=data.get('observacoes'),
+                criado_por=current_user.id
+            )
+            
+            db.session.add(movimentacao)
+            
+            # Atualizar saldo do caixa
+            if data['tipo'] == 'Entrada':
+                caixa.saldo_atual += float(data['valor'])
+            else:  # Saída
+                caixa.saldo_atual -= float(data['valor'])
+            
+            db.session.commit()
+            
+            print(f"[LOG] ✅ Movimentação {data['tipo']} de R$ {data['valor']} registrada no caixa {caixa.id}")
+            return jsonify(movimentacao.to_dict()), 201
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] gerenciar_movimentacoes_caixa: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/caixa/movimentacoes/<int:mov_id>', methods=['PUT', 'DELETE'])
+@jwt_required()
+def editar_deletar_movimentacao(obra_id, mov_id):
+    """
+    PUT: Edita uma movimentação existente
+    DELETE: Deleta uma movimentação
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        caixa = CaixaObra.query.filter_by(obra_id=obra_id).first()
+        if not caixa:
+            return jsonify({"erro": "Caixa não encontrado"}), 404
+        
+        movimentacao = db.session.get(MovimentacaoCaixa, mov_id)
+        if not movimentacao or movimentacao.caixa_id != caixa.id:
+            return jsonify({"erro": "Movimentação não encontrada"}), 404
+        
+        if request.method == 'PUT':
+            data = request.get_json()
+            
+            # Reverter o impacto da movimentação antiga no saldo
+            if movimentacao.tipo == 'Entrada':
+                caixa.saldo_atual -= movimentacao.valor
+            else:
+                caixa.saldo_atual += movimentacao.valor
+            
+            # Atualizar campos
+            if 'tipo' in data and data['tipo'] in ['Entrada', 'Saída']:
+                movimentacao.tipo = data['tipo']
+            
+            if 'valor' in data and float(data['valor']) > 0:
+                movimentacao.valor = float(data['valor'])
+            
+            if 'descricao' in data:
+                movimentacao.descricao = data['descricao']
+            
+            if 'data' in data:
+                try:
+                    movimentacao.data = datetime.fromisoformat(data['data'].replace('Z', '+00:00'))
+                except:
+                    pass
+            
+            if 'comprovante_url' in data:
+                movimentacao.comprovante_url = data['comprovante_url']
+            
+            if 'observacoes' in data:
+                movimentacao.observacoes = data['observacoes']
+            
+            # Aplicar novo impacto no saldo
+            if movimentacao.tipo == 'Entrada':
+                caixa.saldo_atual += movimentacao.valor
+            else:
+                caixa.saldo_atual -= movimentacao.valor
+            
+            db.session.commit()
+            
+            print(f"[LOG] ✅ Movimentação {mov_id} atualizada")
+            return jsonify(movimentacao.to_dict()), 200
+        
+        elif request.method == 'DELETE':
+            # Reverter impacto no saldo
+            if movimentacao.tipo == 'Entrada':
+                caixa.saldo_atual -= movimentacao.valor
+            else:
+                caixa.saldo_atual += movimentacao.valor
+            
+            db.session.delete(movimentacao)
+            db.session.commit()
+            
+            print(f"[LOG] ✅ Movimentação {mov_id} deletada")
+            return jsonify({"mensagem": "Movimentação deletada com sucesso"}), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] editar_deletar_movimentacao: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/caixa/upload-comprovante', methods=['POST'])
+@jwt_required()
+def upload_comprovante_caixa(obra_id):
+    """Upload de imagem de comprovante (base64)"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        data = request.get_json()
+        
+        if 'imagem' not in data:
+            return jsonify({"erro": "Imagem não fornecida"}), 400
+        
+        # Processar base64
+        imagem_base64 = data['imagem']
+        if ',' in imagem_base64:
+            imagem_base64 = imagem_base64.split(',')[1]
+        
+        # Gerar nome único
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"comprovante_{obra_id}_{timestamp}.jpg"
+        
+        # Decodificar e salvar (aqui você pode salvar em S3, Google Cloud Storage, etc)
+        # Por enquanto, retornamos uma URL simulada
+        # Na produção, você deve implementar o upload real
+        
+        comprovante_url = f"/uploads/comprovantes/{filename}"
+        
+        # TODO: Implementar upload real para storage
+        # import boto3  # Para AWS S3
+        # s3 = boto3.client('s3')
+        # s3.put_object(Bucket='seu-bucket', Key=filename, Body=base64.b64decode(imagem_base64))
+        
+        print(f"[LOG] ✅ Comprovante recebido para obra {obra_id}")
+        return jsonify({"comprovante_url": comprovante_url}), 200
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[ERRO] upload_comprovante_caixa: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/caixa/relatorio-pdf', methods=['POST'])
+@jwt_required()
+def gerar_relatorio_caixa_pdf(obra_id):
+    """Gera relatório PDF de prestação de contas do caixa"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        obra = db.session.get(Obra, obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        caixa = CaixaObra.query.filter_by(obra_id=obra_id).first()
+        if not caixa:
+            return jsonify({"erro": "Caixa não encontrado"}), 404
+        
+        data = request.get_json()
+        mes = int(data.get('mes', date.today().month))
+        ano = int(data.get('ano', date.today().year))
+        
+        # Buscar movimentações do período
+        movimentacoes = MovimentacaoCaixa.query.filter(
+            MovimentacaoCaixa.caixa_id == caixa.id,
+            db.extract('month', MovimentacaoCaixa.data) == mes,
+            db.extract('year', MovimentacaoCaixa.data) == ano
+        ).order_by(MovimentacaoCaixa.data).all()
+        
+        # Calcular totais
+        saldo_inicial = caixa.saldo_inicial if mes == 1 else caixa.saldo_atual  # Simplificado
+        total_entradas = sum(m.valor for m in movimentacoes if m.tipo == 'Entrada')
+        total_saidas = sum(m.valor for m in movimentacoes if m.tipo == 'Saída')
+        saldo_final = saldo_inicial + total_entradas - total_saidas
+        qtd_comprovantes = sum(1 for m in movimentacoes if m.comprovante_url)
+        
+        # Criar PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=2*cm, rightMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Função auxiliar
+        def formatar_real(valor):
+            return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+        
+        # Título
+        nome_mes = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 
+                    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][mes]
+        
+        titulo = Paragraph(f"<b>PRESTAÇÃO DE CONTAS - CAIXA DE OBRA</b>", styles['Title'])
+        elements.append(titulo)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Informações
+        info = f"<b>Obra:</b> {obra.nome}<br/>"
+        info += f"<b>Período:</b> {nome_mes}/{ano}<br/>"
+        info += f"<b>Responsável:</b> {current_user.nome}<br/>"
+        info += f"<b>Data do Relatório:</b> {date.today().strftime('%d/%m/%Y')}"
+        elements.append(Paragraph(info, styles['Normal']))
+        elements.append(Spacer(1, 1*cm))
+        
+        # Saldo inicial
+        data_saldo = [
+            ['SALDO INICIAL', formatar_real(saldo_inicial)]
+        ]
+        table_saldo = Table(data_saldo, colWidths=[12*cm, 5*cm])
+        table_saldo.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4CAF50')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ]))
+        elements.append(table_saldo)
+        elements.append(Spacer(1, 0.5*cm))
+        
+        # Entradas
+        if any(m.tipo == 'Entrada' for m in movimentacoes):
+            elements.append(Paragraph("<b>📥 ENTRADAS NO PERÍODO</b>", styles['Heading2']))
+            elements.append(Spacer(1, 0.3*cm))
+            
+            data_entradas = [['Data', 'Descrição', 'Valor']]
+            for m in movimentacoes:
+                if m.tipo == 'Entrada':
+                    data_entradas.append([
+                        m.data.strftime('%d/%m'),
+                        Paragraph(m.descricao[:60], styles['Normal']),
+                        formatar_real(m.valor)
+                    ])
+            
+            data_entradas.append(['', 'TOTAL ENTRADAS', formatar_real(total_entradas)])
+            
+            table_entradas = Table(data_entradas, colWidths=[2.5*cm, 11*cm, 3.5*cm])
+            table_entradas.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2196F3')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE', (0, 1), (-1, -2), 9),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#BBDEFB')),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ]))
+            elements.append(table_entradas)
+            elements.append(Spacer(1, 0.7*cm))
+        
+        # Saídas
+        if any(m.tipo == 'Saída' for m in movimentacoes):
+            elements.append(Paragraph("<b>📤 SAÍDAS NO PERÍODO</b>", styles['Heading2']))
+            elements.append(Spacer(1, 0.3*cm))
+            
+            data_saidas = [['Data', 'Descrição', 'Valor', 'Comp.']]
+            for m in movimentacoes:
+                if m.tipo == 'Saída':
+                    comprovante_icon = '📎' if m.comprovante_url else '─'
+                    data_saidas.append([
+                        m.data.strftime('%d/%m'),
+                        Paragraph(m.descricao[:60], styles['Normal']),
+                        formatar_real(m.valor),
+                        comprovante_icon
+                    ])
+            
+            data_saidas.append(['', 'TOTAL SAÍDAS', formatar_real(total_saidas), ''])
+            
+            table_saidas = Table(data_saidas, colWidths=[2.5*cm, 10*cm, 3.5*cm, 1*cm])
+            table_saidas.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f44336')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('ALIGN', (3, 0), (3, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE', (0, 1), (-1, -2), 9),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FFCDD2')),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+            ]))
+            elements.append(table_saidas)
+            elements.append(Spacer(1, 0.7*cm))
+        
+        # Saldo final
+        data_final = [
+            ['SALDO FINAL', formatar_real(saldo_final)]
+        ]
+        table_final = Table(data_final, colWidths=[12*cm, 5*cm])
+        table_final.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF9800')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ]))
+        elements.append(table_final)
+        elements.append(Spacer(1, 1*cm))
+        
+        # Rodapé
+        rodape = f"Total de comprovantes anexos: {qtd_comprovantes}<br/>"
+        rodape += f"Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}<br/>"
+        rodape += f"Por: {current_user.nome}"
+        elements.append(Paragraph(rodape, styles['Normal']))
+        
+        # Construir PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        print(f"[LOG] ✅ Relatório PDF do caixa gerado para obra {obra_id}")
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f"Caixa_{obra.nome.replace(' ', '_')}_{nome_mes}_{ano}.pdf",
+            mimetype='application/pdf'
+        )
+    
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
