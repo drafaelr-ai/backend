@@ -542,14 +542,19 @@ class ParcelaIndividual(db.Model):
     __tablename__ = 'parcela_individual'
     
     id = db.Column(db.Integer, primary_key=True)
-    pagamento_parcelado_id = db.Column(db.Integer, db.ForeignKey('pagamento_parcelado_v2.id'), nullable=False)
+    pagamento_parcelado_id = db.Column(db.Integer, db.ForeignKey('pagamento_parcelado_v2.id'), nullable=False, index=True)  # OTIMIZAÇÃO: Índice adicionado
     numero_parcela = db.Column(db.Integer, nullable=False)  # 1, 2, 3...
     valor_parcela = db.Column(db.Float, nullable=False)
-    data_vencimento = db.Column(db.Date, nullable=False)
-    status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto, Pago
+    data_vencimento = db.Column(db.Date, nullable=False, index=True)  # OTIMIZAÇÃO: Índice adicionado
+    status = db.Column(db.String(20), nullable=False, default='Previsto', index=True)  # OTIMIZAÇÃO: Índice adicionado
     data_pagamento = db.Column(db.Date, nullable=True)
     forma_pagamento = db.Column(db.String(50), nullable=True)  # PIX, Boleto, TED, Dinheiro, etc
     observacao = db.Column(db.String(255), nullable=True)
+    
+    # OTIMIZAÇÃO: Índice composto para consultas mais eficientes
+    __table_args__ = (
+        db.Index('idx_parcela_pagamento_numero', 'pagamento_parcelado_id', 'numero_parcela'),
+    )
     
     pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
     
@@ -4551,6 +4556,9 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
 
             valor_parcela_padrao = pagamento.valor_parcela
             
+            # Preparar lista de parcelas para inserção em lote (OTIMIZAÇÃO)
+            parcelas_para_inserir = []
+            
             # Gerar cada parcela
             for i in range(pagamento.numero_parcelas):
                 numero_parcela = i + 1
@@ -4574,7 +4582,7 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
                 status = 'Pago' if i < pagamento.parcelas_pagas else 'Previsto'
                 data_pagamento = data_vencimento if status == 'Pago' else None
                 
-                # Criar parcela
+                # Criar parcela (adicionar à lista, não ao db ainda)
                 parcela = ParcelaIndividual(
                     pagamento_parcelado_id=pagamento_id,
                     numero_parcela=numero_parcela,
@@ -4585,9 +4593,12 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
                     forma_pagamento=None,
                     observacao=None
                 )
-                db.session.add(parcela)
+                parcelas_para_inserir.append(parcela)
             
+            # OTIMIZAÇÃO: Inserir todas as parcelas de uma vez (bulk insert)
+            db.session.bulk_save_objects(parcelas_para_inserir)
             db.session.commit()
+            print(f"--- [LOG] {len(parcelas_para_inserir)} parcelas geradas em lote (bulk insert) ---")
             
             # Recarregar parcelas geradas
             parcelas = ParcelaIndividual.query.filter_by(
