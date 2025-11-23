@@ -5248,13 +5248,15 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             cell_style.leading = 10
             
             for pag in pagamentos_resumo:
-                # Usar Paragraph para permitir quebra de linha nas colunas PIX e Status
+                # Usar Paragraph para permitir quebra de linha em todas as colunas de texto
+                descricao_para = Paragraph(pag['descricao'], cell_style)
+                fornecedor_para = Paragraph(pag['fornecedor'], cell_style)
                 pix_para = Paragraph(pag['pix'] if pag['pix'] != '-' else '-', cell_style)
                 status_para = Paragraph(pag['status'], cell_style)
                 
                 data_resumo.append([
-                    pag['descricao'][:25],
-                    pag['fornecedor'][:15],
+                    descricao_para,  # Usar Paragraph para quebra automática
+                    fornecedor_para,  # Usar Paragraph para quebra automática
                     pix_para,  # Usar Paragraph para quebra automática
                     formatar_real(pag['valor']),
                     pag['vencimento'].strftime('%d/%m/%Y'),
@@ -5262,11 +5264,12 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 ])
             
             # Ajustar larguras das colunas (agora são 6 colunas)
-            table = Table(data_resumo, colWidths=[4.5*cm, 2.5*cm, 3*cm, 2.5*cm, 2.5*cm, 2*cm])
+            table = Table(data_resumo, colWidths=[5*cm, 3*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff6f00')),  # Laranja escuro
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Alinhamento vertical no topo
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
@@ -5286,21 +5289,31 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             
             data_futuros = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento']]
             
+            # Estilo para células com quebra de linha
+            cell_style = styles['Normal']
+            cell_style.fontSize = 8
+            cell_style.leading = 10
+            
             # Adicionar pagamentos futuros (após 7 dias)
             for pag in pagamentos_futuros_normais:
+                # Usar Paragraph para permitir quebra de linha
+                descricao_para = Paragraph(pag['descricao'], cell_style)
+                fornecedor_para = Paragraph(pag['fornecedor'], cell_style)
+                
                 data_futuros.append([
-                    pag['descricao'][:30],
-                    pag['fornecedor'][:18],
+                    descricao_para,  # Usar Paragraph para quebra automática
+                    fornecedor_para,  # Usar Paragraph para quebra automática
                     formatar_real(pag['valor']),
                     pag['vencimento'].strftime('%d/%m/%Y')
                 ])
             
             # Ajustar larguras sem coluna Tipo e Status
-            table = Table(data_futuros, colWidths=[7*cm, 4*cm, 3*cm, 3*cm])
+            table = Table(data_futuros, colWidths=[7.5*cm, 4*cm, 2.5*cm, 3*cm])
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Alinhamento vertical no topo
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
