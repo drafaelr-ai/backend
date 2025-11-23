@@ -6496,8 +6496,11 @@ def marcar_multiplos_como_pago(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
         dados = request.json
-        itens_selecionados = dados.get('itens', [])  # Lista de {tipo: 'futuro'|'parcela', id: X}
+        itens_selecionados = dados.get('itens', [])  # Lista de {tipo: 'futuro'|'parcela'|'servico', id: X}
         data_pagamento = dados.get('data_pagamento')
+        
+        print(f"--- [LOG] Total de itens recebidos: {len(itens_selecionados)} ---")
+        print(f"--- [LOG] Itens: {itens_selecionados} ---")
         
         if data_pagamento:
             data_pagamento = date.fromisoformat(data_pagamento)
@@ -6510,204 +6513,315 @@ def marcar_multiplos_como_pago(obra_id):
             tipo_item = item.get('tipo')
             item_id = item.get('id')
             
+            print(f"--- [LOG] Processando item: tipo={tipo_item}, id={item_id} ---")
+            
             try:
                 if tipo_item == 'futuro':
                     # ===== LÓGICA CORRIGIDA: Verificar se tem vínculo com serviço =====
-                    pagamento = PagamentoFuturo.query.get(item_id)
-                    if pagamento and pagamento.obra_id == obra_id:
-                        
-                        # CASO 1: Pagamento vinculado a SERVIÇO
-                        if pagamento.servico_id:
-                            servico = Servico.query.get(pagamento.servico_id)
-                            if servico:
-                                # Determinar tipo_pagamento
-                                if pagamento.tipo == 'Mão de Obra':
-                                    tipo_pagamento = 'mao_de_obra'
-                                elif pagamento.tipo == 'Material':
-                                    tipo_pagamento = 'material'
-                                else:
-                                    tipo_pagamento = 'material'  # default
-                                
-                                # Criar PagamentoServico
-                                novo_pag_servico = PagamentoServico(
-                                    servico_id=pagamento.servico_id,
-                                    tipo_pagamento=tipo_pagamento,
-                                    valor_total=pagamento.valor,
-                                    valor_pago=pagamento.valor,  # Marcar como totalmente pago
-                                    data=data_pagamento,
-                                    data_vencimento=pagamento.data_vencimento,
-                                    status='Pago',
-                                    prioridade=0,
-                                    fornecedor=pagamento.fornecedor
-                                )
-                                db.session.add(novo_pag_servico)
-                                db.session.flush()
-                                
-                                # Recalcular percentual do serviço
-                                pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
-                                pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
-                                pagamentos_material = [p for p in pagamentos_serv if p.tipo_pagamento == 'material']
-                                
-                                if servico.valor_global_mao_de_obra > 0:
-                                    total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
-                                    servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
-                                
-                                if servico.valor_global_material > 0:
-                                    total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
-                                    servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
-                                
-                                # DELETE o PagamentoFuturo
-                                db.session.delete(pagamento)
-                                
-                                resultados.append({
-                                    "tipo": "futuro",
-                                    "id": item_id,
-                                    "status": "success",
-                                    "mensagem": f"Pagamento '{pagamento.descricao}' vinculado ao serviço '{servico.nome}' e marcado como pago",
-                                    "pagamento_servico_id": novo_pag_servico.id
-                                })
-                            else:
-                                resultados.append({
-                                    "tipo": "futuro",
-                                    "id": item_id,
-                                    "status": "error",
-                                    "mensagem": "Serviço vinculado não encontrado"
-                                })
-                        
-                        # CASO 2: Pagamento SEM vínculo com serviço
-                        else:
-                            # Criar Lançamento no Histórico
-                            novo_lancamento = Lancamento(
-                                obra_id=pagamento.obra_id,
-                                tipo=pagamento.tipo or 'Despesa',
-                                descricao=pagamento.descricao,
-                                valor_total=pagamento.valor,
-                                valor_pago=pagamento.valor,
-                                data=data_pagamento,
-                                data_vencimento=pagamento.data_vencimento,
-                                status='Pago',
-                                pix=pagamento.pix,
-                                prioridade=0,
-                                fornecedor=pagamento.fornecedor,
-                                servico_id=None
-                            )
-                            db.session.add(novo_lancamento)
-                            
-                            # DELETE o PagamentoFuturo
-                            db.session.delete(pagamento)
-                            
-                            resultados.append({
-                                "tipo": "futuro",
-                                "id": item_id,
-                                "status": "success",
-                                "mensagem": f"Pagamento futuro '{pagamento.descricao}' movido para o histórico",
-                                "lancamento_id": novo_lancamento.id
-                            })
-                    else:
+                    pagamento = db.session.get(PagamentoFuturo, item_id)
+                    
+                    if not pagamento:
+                        erro_msg = f"Pagamento futuro ID {item_id} não encontrado no banco"
+                        print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "futuro",
                             "id": item_id,
                             "status": "error",
-                            "mensagem": "Pagamento futuro não encontrado"
+                            "mensagem": erro_msg
+                        })
+                        continue
+                    
+                    if pagamento.obra_id != obra_id:
+                        erro_msg = f"Pagamento futuro ID {item_id} não pertence à obra {obra_id}"
+                        print(f"--- [ERRO] {erro_msg} ---")
+                        resultados.append({
+                            "tipo": "futuro",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Pagamento não pertence a esta obra"
+                        })
+                        continue
+                    
+                    # CASO 1: Pagamento vinculado a SERVIÇO
+                    if pagamento.servico_id:
+                        servico = db.session.get(Servico, pagamento.servico_id)
+                        if not servico:
+                            erro_msg = f"Serviço ID {pagamento.servico_id} não encontrado"
+                            print(f"--- [ERRO] {erro_msg} ---")
+                            resultados.append({
+                                "tipo": "futuro",
+                                "id": item_id,
+                                "status": "error",
+                                "mensagem": "Serviço vinculado não encontrado"
+                            })
+                            continue
+                        
+                        # Determinar tipo_pagamento
+                        if pagamento.tipo == 'Mão de Obra':
+                            tipo_pagamento = 'mao_de_obra'
+                        elif pagamento.tipo == 'Material':
+                            tipo_pagamento = 'material'
+                        else:
+                            tipo_pagamento = 'material'  # default
+                        
+                        # Criar PagamentoServico
+                        novo_pag_servico = PagamentoServico(
+                            servico_id=pagamento.servico_id,
+                            tipo_pagamento=tipo_pagamento,
+                            valor_total=pagamento.valor,
+                            valor_pago=pagamento.valor,  # Marcar como totalmente pago
+                            data=data_pagamento,
+                            data_vencimento=pagamento.data_vencimento,
+                            status='Pago',
+                            prioridade=0,
+                            fornecedor=pagamento.fornecedor,
+                            pix=pagamento.pix
+                        )
+                        db.session.add(novo_pag_servico)
+                        db.session.flush()
+                        
+                        # Recalcular percentual do serviço
+                        pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+                        pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
+                        pagamentos_material = [p for p in pagamentos_serv if p.tipo_pagamento == 'material']
+                        
+                        if servico.valor_global_mao_de_obra > 0:
+                            total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                            servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+                        
+                        if servico.valor_global_material > 0:
+                            total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                            servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                        
+                        # DELETE o PagamentoFuturo
+                        db.session.delete(pagamento)
+                        
+                        print(f"--- [LOG] ✅ Pagamento futuro ID {item_id} vinculado ao serviço '{servico.nome}' ---")
+                        resultados.append({
+                            "tipo": "futuro",
+                            "id": item_id,
+                            "status": "success",
+                            "mensagem": f"Pagamento '{pagamento.descricao}' vinculado ao serviço '{servico.nome}' e marcado como pago",
+                            "pagamento_servico_id": novo_pag_servico.id
+                        })
+                    
+                    # CASO 2: Pagamento SEM vínculo com serviço
+                    else:
+                        # Criar Lançamento no Histórico
+                        novo_lancamento = Lancamento(
+                            obra_id=pagamento.obra_id,
+                            tipo=pagamento.tipo or 'Despesa',
+                            descricao=pagamento.descricao,
+                            valor_total=pagamento.valor,
+                            valor_pago=pagamento.valor,
+                            data=data_pagamento,
+                            data_vencimento=pagamento.data_vencimento,
+                            status='Pago',
+                            pix=pagamento.pix,
+                            prioridade=0,
+                            fornecedor=pagamento.fornecedor,
+                            servico_id=None
+                        )
+                        db.session.add(novo_lancamento)
+                        db.session.flush()
+                        
+                        # DELETE o PagamentoFuturo
+                        db.session.delete(pagamento)
+                        
+                        print(f"--- [LOG] ✅ Pagamento futuro ID {item_id} movido para histórico (Lançamento ID {novo_lancamento.id}) ---")
+                        resultados.append({
+                            "tipo": "futuro",
+                            "id": item_id,
+                            "status": "success",
+                            "mensagem": f"Pagamento futuro '{pagamento.descricao}' movido para o histórico",
+                            "lancamento_id": novo_lancamento.id
                         })
                 
                 elif tipo_item == 'parcela':
                     # Marcar parcela como paga
-                    parcela = ParcelaIndividual.query.get(item_id)
-                    if parcela:
-                        pag_parcelado = PagamentoParcelado.query.get(parcela.pagamento_parcelado_id)
-                        if pag_parcelado and pag_parcelado.obra_id == obra_id:
-                            parcela.status = 'Pago'
-                            parcela.data_pagamento = data_pagamento
-                            
-                            # Atualizar contador de parcelas pagas
-                            parcelas_pagas = ParcelaIndividual.query.filter_by(
-                                pagamento_parcelado_id=pag_parcelado.id,
-                                status='Pago'
-                            ).count()
-                            pag_parcelado.parcelas_pagas = parcelas_pagas
-                            
-                            # Se todas as parcelas foram pagas, marcar como Concluído
-                            if parcelas_pagas >= pag_parcelado.numero_parcelas:
-                                pag_parcelado.status = 'Concluído'
-                            
-                            resultados.append({
-                                "tipo": "parcela",
-                                "id": item_id,
-                                "status": "success",
-                                "mensagem": f"Parcela {parcela.numero_parcela} marcada como paga"
-                            })
-                        else:
-                            resultados.append({
-                                "tipo": "parcela",
-                                "id": item_id,
-                                "status": "error",
-                                "mensagem": "Pagamento parcelado não encontrado"
-                            })
-                    else:
+                    parcela = db.session.get(ParcelaIndividual, item_id)
+                    
+                    if not parcela:
+                        erro_msg = f"Parcela ID {item_id} não encontrada no banco"
+                        print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "parcela",
                             "id": item_id,
                             "status": "error",
                             "mensagem": "Parcela não encontrada"
                         })
+                        continue
+                    
+                    pag_parcelado = db.session.get(PagamentoParcelado, parcela.pagamento_parcelado_id)
+                    
+                    if not pag_parcelado:
+                        erro_msg = f"Pagamento parcelado ID {parcela.pagamento_parcelado_id} não encontrado"
+                        print(f"--- [ERRO] {erro_msg} ---")
+                        resultados.append({
+                            "tipo": "parcela",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Pagamento parcelado não encontrado"
+                        })
+                        continue
+                    
+                    if pag_parcelado.obra_id != obra_id:
+                        erro_msg = f"Pagamento parcelado não pertence à obra {obra_id}"
+                        print(f"--- [ERRO] {erro_msg} ---")
+                        resultados.append({
+                            "tipo": "parcela",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Pagamento não pertence a esta obra"
+                        })
+                        continue
+                    
+                    # Verificar se já está paga
+                    if parcela.status == 'Pago':
+                        print(f"--- [AVISO] Parcela ID {item_id} já está paga, pulando ---")
+                        resultados.append({
+                            "tipo": "parcela",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": f"Parcela {parcela.numero_parcela} já está paga"
+                        })
+                        continue
+                    
+                    parcela.status = 'Pago'
+                    parcela.data_pagamento = data_pagamento
+                    
+                    # Atualizar contador de parcelas pagas
+                    parcelas_pagas = ParcelaIndividual.query.filter_by(
+                        pagamento_parcelado_id=pag_parcelado.id,
+                        status='Pago'
+                    ).count()
+                    pag_parcelado.parcelas_pagas = parcelas_pagas
+                    
+                    # Se todas as parcelas foram pagas, marcar como Concluído
+                    if parcelas_pagas >= pag_parcelado.numero_parcelas:
+                        pag_parcelado.status = 'Concluído'
+                    
+                    print(f"--- [LOG] ✅ Parcela ID {item_id} marcada como paga ---")
+                    resultados.append({
+                        "tipo": "parcela",
+                        "id": item_id,
+                        "status": "success",
+                        "mensagem": f"Parcela {parcela.numero_parcela} marcada como paga"
+                    })
                 
                 elif tipo_item == 'servico':
                     # NOVO: Marcar pagamento de serviço como totalmente pago
-                    pagamento_servico = PagamentoServico.query.get(item_id)
-                    if pagamento_servico:
-                        servico = Servico.query.get(pagamento_servico.servico_id)
-                        if servico and servico.obra_id == obra_id:
-                            # Marcar como totalmente pago
-                            pagamento_servico.valor_pago = pagamento_servico.valor_total
-                            
-                            # Atualizar percentuais do serviço
-                            pagamentos = PagamentoServico.query.filter_by(servico_id=servico.id).all()
-                            
-                            # Separar por tipo
-                            pagamentos_mao_de_obra = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
-                            pagamentos_material = [p for p in pagamentos if p.tipo_pagamento == 'material']
-                            
-                            # Calcular percentuais
-                            if servico.valor_global_mao_de_obra > 0:
-                                total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
-                                servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
-                            
-                            if servico.valor_global_material > 0:
-                                total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
-                                servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
-                            
-                            resultados.append({
-                                "tipo": "servico",
-                                "id": item_id,
-                                "status": "success",
-                                "mensagem": f"Pagamento do serviço '{servico.nome}' marcado como pago"
-                            })
-                        else:
-                            resultados.append({
-                                "tipo": "servico",
-                                "id": item_id,
-                                "status": "error",
-                                "mensagem": "Serviço não encontrado ou acesso negado"
-                            })
-                    else:
+                    pagamento_servico = db.session.get(PagamentoServico, item_id)
+                    
+                    if not pagamento_servico:
+                        erro_msg = f"Pagamento de serviço ID {item_id} não encontrado"
+                        print(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "servico",
                             "id": item_id,
                             "status": "error",
                             "mensagem": "Pagamento de serviço não encontrado"
                         })
+                        continue
+                    
+                    servico = db.session.get(Servico, pagamento_servico.servico_id)
+                    
+                    if not servico:
+                        erro_msg = f"Serviço ID {pagamento_servico.servico_id} não encontrado"
+                        print(f"--- [ERRO] {erro_msg} ---")
+                        resultados.append({
+                            "tipo": "servico",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Serviço não encontrado"
+                        })
+                        continue
+                    
+                    if servico.obra_id != obra_id:
+                        erro_msg = f"Serviço não pertence à obra {obra_id}"
+                        print(f"--- [ERRO] {erro_msg} ---")
+                        resultados.append({
+                            "tipo": "servico",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Serviço não pertence a esta obra"
+                        })
+                        continue
+                    
+                    # Verificar se já está totalmente pago
+                    if pagamento_servico.valor_pago >= pagamento_servico.valor_total:
+                        print(f"--- [AVISO] Pagamento de serviço ID {item_id} já está totalmente pago ---")
+                        resultados.append({
+                            "tipo": "servico",
+                            "id": item_id,
+                            "status": "error",
+                            "mensagem": "Pagamento já está totalmente pago"
+                        })
+                        continue
+                    
+                    # Marcar como totalmente pago
+                    pagamento_servico.valor_pago = pagamento_servico.valor_total
+                    pagamento_servico.data = data_pagamento
+                    pagamento_servico.status = 'Pago'
+                    
+                    # Atualizar percentuais do serviço
+                    pagamentos = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+                    
+                    # Separar por tipo
+                    pagamentos_mao_de_obra = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
+                    pagamentos_material = [p for p in pagamentos if p.tipo_pagamento == 'material']
+                    
+                    # Calcular percentuais
+                    if servico.valor_global_mao_de_obra > 0:
+                        total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                        servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+                    
+                    if servico.valor_global_material > 0:
+                        total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                        servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                    
+                    print(f"--- [LOG] ✅ Pagamento de serviço ID {item_id} marcado como pago ---")
+                    resultados.append({
+                        "tipo": "servico",
+                        "id": item_id,
+                        "status": "success",
+                        "mensagem": f"Pagamento do serviço '{servico.nome}' marcado como pago"
+                    })
+                
+                else:
+                    erro_msg = f"Tipo de item inválido: '{tipo_item}'"
+                    print(f"--- [ERRO] {erro_msg} ---")
+                    resultados.append({
+                        "tipo": tipo_item,
+                        "id": item_id,
+                        "status": "error",
+                        "mensagem": "Tipo de item inválido (esperado: 'futuro', 'parcela' ou 'servico')"
+                    })
             
             except Exception as e:
+                error_details = traceback.format_exc()
+                erro_msg = f"Erro ao processar item tipo={tipo_item}, id={item_id}: {str(e)}"
+                print(f"--- [ERRO] {erro_msg} ---")
+                print(error_details)
                 resultados.append({
                     "tipo": tipo_item,
                     "id": item_id,
                     "status": "error",
-                    "mensagem": str(e)
+                    "mensagem": f"Erro: {str(e)}"
                 })
         
         db.session.commit()
-        print(f"--- [LOG] {len([r for r in resultados if r['status'] == 'success'])} itens marcados como pagos ---")
+        
+        sucessos = len([r for r in resultados if r['status'] == 'success'])
+        erros = len([r for r in resultados if r['status'] == 'error'])
+        print(f"--- [LOG] ✅ {sucessos} item(ns) marcado(s) como pago | ❌ {erros} erro(s) ---")
+        
+        # Listar os erros no log
+        if erros > 0:
+            print("--- [LOG] Detalhes dos erros: ---")
+            for r in resultados:
+                if r['status'] == 'error':
+                    print(f"  - Tipo: {r['tipo']}, ID: {r['id']}, Erro: {r['mensagem']}")
         
         return jsonify({
             "mensagem": "Processamento concluído",
@@ -6717,7 +6831,7 @@ def marcar_multiplos_como_pago(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
+        print(f"--- [ERRO FATAL] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DO ENDPOINT MARCAR MÚLTIPLOS COMO PAGO ---
 
