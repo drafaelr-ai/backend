@@ -9036,7 +9036,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
         
         # Entradas
         if any(m.tipo == 'Entrada' for m in movimentacoes):
-            elements.append(Paragraph("<b>📥 ENTRADAS NO PERÍODO</b>", styles['Heading2']))
+            elements.append(Paragraph("<b>ENTRADAS NO PERIODO</b>", styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
             data_entradas = [['Data', 'Descrição', 'Valor']]
@@ -9068,13 +9068,13 @@ def gerar_relatorio_caixa_pdf(obra_id):
         
         # Saídas
         if any(m.tipo == 'Saída' for m in movimentacoes):
-            elements.append(Paragraph("<b>📤 SAÍDAS NO PERÍODO</b>", styles['Heading2']))
+            elements.append(Paragraph("<b>SAIDAS NO PERIODO</b>", styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
             data_saidas = [['Data', 'Descrição', 'Valor', 'Comp.']]
             for m in movimentacoes:
                 if m.tipo == 'Saída':
-                    comprovante_icon = '📎' if m.comprovante_url else '─'
+                    comprovante_icon = 'Sim' if m.comprovante_url else '-'
                     data_saidas.append([
                         m.data.strftime('%d/%m'),
                         Paragraph(m.descricao[:60], styles['Normal']),
