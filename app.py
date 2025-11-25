@@ -8959,37 +8959,45 @@ def upload_comprovante_caixa(obra_id):
 @app.route('/obras/<int:obra_id>/caixa/relatorio-pdf', methods=['POST'])
 @jwt_required()
 def gerar_relatorio_caixa_pdf(obra_id):
-    """Gera relatório PDF de prestação de contas do caixa"""
+    """Gera relatorio PDF de prestacao de contas do caixa"""
     try:
+        print(f"[LOG] Iniciando geracao de PDF do caixa para obra {obra_id}")
+        
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado"}), 403
         
         obra = db.session.get(Obra, obra_id)
         if not obra:
-            return jsonify({"erro": "Obra não encontrada"}), 404
+            return jsonify({"erro": "Obra nao encontrada"}), 404
         
         caixa = CaixaObra.query.filter_by(obra_id=obra_id).first()
         if not caixa:
-            return jsonify({"erro": "Caixa não encontrado"}), 404
+            return jsonify({"erro": "Caixa nao encontrado"}), 404
         
-        data = request.get_json()
+        data = request.get_json() or {}
         mes = int(data.get('mes', date.today().month))
         ano = int(data.get('ano', date.today().year))
         
-        # Buscar movimentações do período
+        print(f"[LOG] Buscando movimentacoes para mes={mes}, ano={ano}")
+        
+        # Buscar movimentacoes do periodo
         movimentacoes = MovimentacaoCaixa.query.filter(
             MovimentacaoCaixa.caixa_id == caixa.id,
             db.extract('month', MovimentacaoCaixa.data) == mes,
             db.extract('year', MovimentacaoCaixa.data) == ano
         ).order_by(MovimentacaoCaixa.data).all()
         
+        print(f"[LOG] Encontradas {len(movimentacoes)} movimentacoes")
+        
         # Calcular totais
-        saldo_inicial = caixa.saldo_inicial if mes == 1 else caixa.saldo_atual  # Simplificado
-        total_entradas = sum(m.valor for m in movimentacoes if m.tipo == 'Entrada')
-        total_saidas = sum(m.valor for m in movimentacoes if m.tipo == 'Saída')
+        saldo_inicial = float(caixa.saldo_inicial or 0)
+        total_entradas = sum(float(m.valor or 0) for m in movimentacoes if m.tipo == 'Entrada')
+        total_saidas = sum(float(m.valor or 0) for m in movimentacoes if m.tipo == 'Saída')
         saldo_final = saldo_inicial + total_entradas - total_saidas
         qtd_comprovantes = sum(1 for m in movimentacoes if m.comprovante_url)
+        
+        print(f"[LOG] Totais calculados: entradas={total_entradas}, saidas={total_saidas}")
         
         # Criar PDF
         buffer = io.BytesIO()
@@ -8997,23 +9005,55 @@ def gerar_relatorio_caixa_pdf(obra_id):
         elements = []
         styles = getSampleStyleSheet()
         
-        # Função auxiliar
+        # Funcao auxiliar para formatar valor
         def formatar_real(valor):
-            return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+            try:
+                return f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+            except:
+                return "R$ 0,00"
         
-        # Título
-        nome_mes = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 
-                    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'][mes]
+        # Funcao para limpar texto (remover caracteres problematicos)
+        def limpar_texto(texto):
+            if not texto:
+                return ""
+            # Substituir caracteres acentuados
+            substituicoes = {
+                'á': 'a', 'à': 'a', 'ã': 'a', 'â': 'a',
+                'é': 'e', 'ê': 'e',
+                'í': 'i',
+                'ó': 'o', 'ô': 'o', 'õ': 'o',
+                'ú': 'u',
+                'ç': 'c',
+                'Á': 'A', 'À': 'A', 'Ã': 'A', 'Â': 'A',
+                'É': 'E', 'Ê': 'E',
+                'Í': 'I',
+                'Ó': 'O', 'Ô': 'O', 'Õ': 'O',
+                'Ú': 'U',
+                'Ç': 'C'
+            }
+            resultado = str(texto)
+            for orig, subst in substituicoes.items():
+                resultado = resultado.replace(orig, subst)
+            return resultado
         
-        titulo = Paragraph(f"<b>PRESTAÇÃO DE CONTAS - CAIXA DE OBRA</b>", styles['Title'])
+        # Nome do mes
+        nomes_meses = ['', 'Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho', 
+                    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+        nome_mes = nomes_meses[mes] if 1 <= mes <= 12 else 'Mes'
+        
+        # Titulo
+        titulo = Paragraph("<b>PRESTACAO DE CONTAS - CAIXA DE OBRA</b>", styles['Title'])
         elements.append(titulo)
         elements.append(Spacer(1, 0.5*cm))
         
-        # Informações
-        info = f"<b>Obra:</b> {obra.nome}<br/>"
-        info += f"<b>Período:</b> {nome_mes}/{ano}<br/>"
-        info += f"<b>Responsável:</b> {current_user.nome}<br/>"
-        info += f"<b>Data do Relatório:</b> {date.today().strftime('%d/%m/%Y')}"
+        # Informacoes
+        obra_nome_limpo = limpar_texto(obra.nome)
+        user_nome_limpo = limpar_texto(current_user.nome)
+        
+        info = f"<b>Obra:</b> {obra_nome_limpo}<br/>"
+        info += f"<b>Periodo:</b> {nome_mes}/{ano}<br/>"
+        info += f"<b>Responsavel:</b> {user_nome_limpo}<br/>"
+        info += f"<b>Data do Relatorio:</b> {date.today().strftime('%d/%m/%Y')}"
         elements.append(Paragraph(info, styles['Normal']))
         elements.append(Spacer(1, 1*cm))
         
@@ -9035,18 +9075,19 @@ def gerar_relatorio_caixa_pdf(obra_id):
         elements.append(Spacer(1, 0.5*cm))
         
         # Entradas
-        if any(m.tipo == 'Entrada' for m in movimentacoes):
+        entradas = [m for m in movimentacoes if m.tipo == 'Entrada']
+        if entradas:
             elements.append(Paragraph("<b>ENTRADAS NO PERIODO</b>", styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
-            data_entradas = [['Data', 'Descrição', 'Valor']]
-            for m in movimentacoes:
-                if m.tipo == 'Entrada':
-                    data_entradas.append([
-                        m.data.strftime('%d/%m'),
-                        Paragraph(m.descricao[:60], styles['Normal']),
-                        formatar_real(m.valor)
-                    ])
+            data_entradas = [['Data', 'Descricao', 'Valor']]
+            for m in entradas:
+                desc_limpa = limpar_texto(m.descricao or '')[:60]
+                data_entradas.append([
+                    m.data.strftime('%d/%m') if m.data else '-',
+                    desc_limpa,
+                    formatar_real(m.valor)
+                ])
             
             data_entradas.append(['', 'TOTAL ENTRADAS', formatar_real(total_entradas)])
             
@@ -9066,23 +9107,24 @@ def gerar_relatorio_caixa_pdf(obra_id):
             elements.append(table_entradas)
             elements.append(Spacer(1, 0.7*cm))
         
-        # Saídas
-        if any(m.tipo == 'Saída' for m in movimentacoes):
+        # Saidas
+        saidas = [m for m in movimentacoes if m.tipo == 'Saída']
+        if saidas:
             elements.append(Paragraph("<b>SAIDAS NO PERIODO</b>", styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
-            data_saidas = [['Data', 'Descrição', 'Valor', 'Comp.']]
-            for m in movimentacoes:
-                if m.tipo == 'Saída':
-                    comprovante_icon = 'Sim' if m.comprovante_url else '-'
-                    data_saidas.append([
-                        m.data.strftime('%d/%m'),
-                        Paragraph(m.descricao[:60], styles['Normal']),
-                        formatar_real(m.valor),
-                        comprovante_icon
-                    ])
+            data_saidas = [['Data', 'Descricao', 'Valor', 'Comp.']]
+            for m in saidas:
+                comprovante_icon = 'Sim' if m.comprovante_url else '-'
+                desc_limpa = limpar_texto(m.descricao or '')[:60]
+                data_saidas.append([
+                    m.data.strftime('%d/%m') if m.data else '-',
+                    desc_limpa,
+                    formatar_real(m.valor),
+                    comprovante_icon
+                ])
             
-            data_saidas.append(['', 'TOTAL SAÍDAS', formatar_real(total_saidas), ''])
+            data_saidas.append(['', 'TOTAL SAIDAS', formatar_real(total_saidas), ''])
             
             table_saidas = Table(data_saidas, colWidths=[2.5*cm, 10*cm, 3.5*cm, 1*cm])
             table_saidas.setStyle(TableStyle([
@@ -9118,29 +9160,33 @@ def gerar_relatorio_caixa_pdf(obra_id):
         elements.append(table_final)
         elements.append(Spacer(1, 1*cm))
         
-        # Rodapé
+        # Rodape
         rodape = f"Total de comprovantes anexos: {qtd_comprovantes}<br/>"
-        rodape += f"Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}<br/>"
-        rodape += f"Por: {current_user.nome}"
+        rodape += f"Gerado em: {datetime.now().strftime('%d/%m/%Y as %H:%M')}<br/>"
+        rodape += f"Por: {user_nome_limpo}"
         elements.append(Paragraph(rodape, styles['Normal']))
         
         # Construir PDF
+        print(f"[LOG] Construindo PDF...")
         doc.build(elements)
         buffer.seek(0)
         
-        print(f"[LOG] ✅ Relatório PDF do caixa gerado para obra {obra_id}")
+        print(f"[LOG] PDF do caixa gerado com sucesso para obra {obra_id}")
+        
+        # Nome do arquivo limpo
+        nome_arquivo = f"Caixa_{obra_nome_limpo.replace(' ', '_')}_{nome_mes}_{ano}.pdf"
         
         return send_file(
             buffer,
             as_attachment=True,
-            download_name=f"Caixa_{obra.nome.replace(' ', '_')}_{nome_mes}_{ano}.pdf",
+            download_name=nome_arquivo,
             mimetype='application/pdf'
         )
     
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": str(e), "detalhes": error_details}), 500
 
 
 # ==============================================================================
