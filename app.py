@@ -7533,8 +7533,8 @@ class CronogramaObra(db.Model):
     data_fim_real = db.Column(db.Date, nullable=True)  # Quando terminou DE FATO
     percentual_conclusao = db.Column(db.Float, nullable=False, default=0.0)  # Avanço físico REAL (você informa manualmente)
     
-    # ===== TIPO DE MEDIÇÃO (NOVO) =====
-    tipo_medicao = db.Column(db.String(20), default='empreitada')  # 'area' ou 'empreitada'
+    # ===== TIPO DE MEDIÇÃO =====
+    tipo_medicao = db.Column(db.String(20), default='empreitada')  # 'area', 'empreitada' ou 'etapas'
     area_total = db.Column(db.Float)  # Para modo 'area'
     area_executada = db.Column(db.Float, default=0)  # Para modo 'area'
     unidade_medida = db.Column(db.String(10), default='m²')  # m², m³, m, un, kg, L
@@ -7543,10 +7543,45 @@ class CronogramaObra(db.Model):
     created_at = db.Column(db.DateTime, default=func.now())
     updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
 
-    # Relacionamento já definido no modelo Obra com cascade
-    # obra = db.relationship('Obra', backref=db.backref('cronograma_items', lazy=True))
+    # Relacionamento com etapas (para tipo_medicao='etapas')
+    etapas = db.relationship('CronogramaEtapa', backref='cronograma', lazy=True, cascade="all, delete-orphan", order_by="CronogramaEtapa.ordem")
+
+    def calcular_percentual_por_etapas(self):
+        """Calcula o percentual de conclusão baseado nas etapas (média ponderada por duração)"""
+        if not self.etapas:
+            return 0.0
+        
+        total_dias = 0
+        soma_ponderada = 0
+        
+        for etapa in self.etapas:
+            dias = etapa.duracao_dias or 1
+            total_dias += dias
+            soma_ponderada += (etapa.percentual_conclusao or 0) * dias
+        
+        if total_dias == 0:
+            return 0.0
+        
+        return round(soma_ponderada / total_dias, 2)
+
+    def atualizar_datas_por_etapas(self):
+        """Atualiza as datas do serviço baseado nas etapas"""
+        if not self.etapas:
+            return
+        
+        etapas_ordenadas = sorted(self.etapas, key=lambda e: e.ordem)
+        if etapas_ordenadas:
+            # Data início = primeira etapa
+            self.data_inicio = etapas_ordenadas[0].data_inicio
+            # Data fim = última etapa
+            self.data_fim_prevista = etapas_ordenadas[-1].data_fim
 
     def to_dict(self):
+        # Se tipo_medicao for 'etapas', calcular percentual automaticamente
+        percentual = self.percentual_conclusao
+        if self.tipo_medicao == 'etapas' and self.etapas:
+            percentual = self.calcular_percentual_por_etapas()
+        
         return {
             'id': self.id,
             'obra_id': self.obra_id,
@@ -7558,12 +7593,62 @@ class CronogramaObra(db.Model):
             # EXECUÇÃO REAL
             'data_inicio_real': self.data_inicio_real.isoformat() if self.data_inicio_real else None,
             'data_fim_real': self.data_fim_real.isoformat() if self.data_fim_real else None,
-            'percentual_conclusao': float(self.percentual_conclusao),
-            # TIPO DE MEDIÇÃO (NOVO)
+            'percentual_conclusao': float(percentual),
+            # TIPO DE MEDIÇÃO
             'tipo_medicao': self.tipo_medicao,
             'area_total': self.area_total,
             'area_executada': self.area_executada,
             'unidade_medida': self.unidade_medida,
+            'observacoes': self.observacoes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            # ETAPAS (se houver)
+            'etapas': [etapa.to_dict() for etapa in self.etapas] if self.etapas else [],
+        }
+
+
+class CronogramaEtapa(db.Model):
+    """Etapas de um serviço do cronograma (para tipo_medicao='etapas')"""
+    __tablename__ = 'cronograma_etapa'
+
+    id = db.Column(db.Integer, primary_key=True)
+    cronograma_id = db.Column(db.Integer, db.ForeignKey('cronograma_obra.id'), nullable=False)
+    
+    nome = db.Column(db.String(200), nullable=False)  # Ex: "Escavação", "Estrutura"
+    ordem = db.Column(db.Integer, nullable=False, default=1)
+    
+    # Duração e datas
+    duracao_dias = db.Column(db.Integer, nullable=False, default=1)
+    data_inicio = db.Column(db.Date, nullable=False)
+    data_fim = db.Column(db.Date, nullable=False)  # Calculado: data_inicio + duracao_dias
+    
+    # Flag para indicar se data_inicio foi ajustada manualmente
+    inicio_ajustado_manualmente = db.Column(db.Boolean, default=False)
+    
+    # Execução
+    percentual_conclusao = db.Column(db.Float, nullable=False, default=0.0)
+    
+    observacoes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=func.now())
+    updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
+
+    def calcular_data_fim(self):
+        """Calcula data_fim baseado em data_inicio + duracao_dias"""
+        if self.data_inicio and self.duracao_dias:
+            self.data_fim = self.data_inicio + timedelta(days=self.duracao_dias - 1)
+        return self.data_fim
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'cronograma_id': self.cronograma_id,
+            'nome': self.nome,
+            'ordem': self.ordem,
+            'duracao_dias': self.duracao_dias,
+            'data_inicio': self.data_inicio.isoformat() if self.data_inicio else None,
+            'data_fim': self.data_fim.isoformat() if self.data_fim else None,
+            'inicio_ajustado_manualmente': self.inicio_ajustado_manualmente,
+            'percentual_conclusao': float(self.percentual_conclusao),
             'observacoes': self.observacoes,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -7983,6 +8068,381 @@ def delete_cronograma(cronograma_id):
         db.session.rollback()
         print(f"[ERRO] delete_cronograma: {str(e)}")
         return jsonify({'error': 'Erro ao excluir etapa'}), 500
+
+
+# ==============================================================================
+# ENDPOINTS DE ETAPAS DO CRONOGRAMA
+# ==============================================================================
+
+def recalcular_datas_etapas(cronograma_id):
+    """
+    Recalcula as datas das etapas em cascata.
+    - Etapa 1: mantém data_inicio definida
+    - Etapa 2+: data_inicio = data_fim anterior + 1 dia (se não foi ajustada manualmente)
+    - Todas: data_fim = data_inicio + duracao_dias - 1
+    """
+    etapas = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem).all()
+    
+    if not etapas:
+        return
+    
+    for i, etapa in enumerate(etapas):
+        if i == 0:
+            # Primeira etapa: só recalcular data_fim
+            etapa.calcular_data_fim()
+        else:
+            # Etapas seguintes
+            etapa_anterior = etapas[i - 1]
+            
+            # Se não foi ajustada manualmente, herda do anterior
+            if not etapa.inicio_ajustado_manualmente:
+                etapa.data_inicio = etapa_anterior.data_fim + timedelta(days=1)
+            
+            # Sempre recalcular data_fim
+            etapa.calcular_data_fim()
+    
+    # Atualizar datas do cronograma pai
+    cronograma = CronogramaObra.query.get(cronograma_id)
+    if cronograma:
+        cronograma.atualizar_datas_por_etapas()
+        # Atualizar percentual se tipo for 'etapas'
+        if cronograma.tipo_medicao == 'etapas':
+            cronograma.percentual_conclusao = cronograma.calcular_percentual_por_etapas()
+
+
+@app.route('/cronograma/<int:cronograma_id>/etapas', methods=['GET'])
+@jwt_required()
+def get_etapas_cronograma(cronograma_id):
+    """Lista todas as etapas de um item do cronograma"""
+    try:
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not cronograma:
+            return jsonify({'error': 'Cronograma não encontrado'}), 404
+        
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        etapas = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem).all()
+        return jsonify([etapa.to_dict() for etapa in etapas]), 200
+    except Exception as e:
+        print(f"[ERRO] get_etapas_cronograma: {str(e)}")
+        return jsonify({'error': 'Erro ao buscar etapas'}), 500
+
+
+@app.route('/cronograma/<int:cronograma_id>/etapas', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
+def create_etapa_cronograma(cronograma_id):
+    """Cria uma nova etapa no cronograma"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not cronograma:
+            return jsonify({'error': 'Cronograma não encontrado'}), 404
+        
+        if not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        data = request.json
+        
+        # Campos obrigatórios
+        if 'nome' not in data:
+            return jsonify({'error': 'Campo obrigatório: nome'}), 400
+        
+        # Determinar ordem (última + 1)
+        ultima_etapa = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem.desc()).first()
+        nova_ordem = (ultima_etapa.ordem + 1) if ultima_etapa else 1
+        
+        # Determinar data_inicio
+        duracao_dias = int(data.get('duracao_dias', 1))
+        
+        if 'data_inicio' in data and data['data_inicio']:
+            # Data definida manualmente
+            data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+            inicio_ajustado = True
+        elif ultima_etapa:
+            # Herdar da etapa anterior
+            data_inicio = ultima_etapa.data_fim + timedelta(days=1)
+            inicio_ajustado = False
+        else:
+            # Primeira etapa: usar data do cronograma pai
+            data_inicio = cronograma.data_inicio
+            inicio_ajustado = False
+        
+        # Calcular data_fim
+        data_fim = data_inicio + timedelta(days=duracao_dias - 1)
+        
+        nova_etapa = CronogramaEtapa(
+            cronograma_id=cronograma_id,
+            nome=data['nome'],
+            ordem=data.get('ordem', nova_ordem),
+            duracao_dias=duracao_dias,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
+            inicio_ajustado_manualmente=inicio_ajustado,
+            percentual_conclusao=float(data.get('percentual_conclusao', 0)),
+            observacoes=data.get('observacoes')
+        )
+        
+        db.session.add(nova_etapa)
+        
+        # Atualizar tipo do cronograma para 'etapas' se ainda não for
+        if cronograma.tipo_medicao != 'etapas':
+            cronograma.tipo_medicao = 'etapas'
+        
+        db.session.commit()
+        
+        # Recalcular datas e percentuais
+        recalcular_datas_etapas(cronograma_id)
+        db.session.commit()
+        
+        print(f"[LOG] Etapa criada: ID={nova_etapa.id}, Nome={nova_etapa.nome}, Cronograma={cronograma_id}")
+        return jsonify(nova_etapa.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] create_etapa_cronograma: {str(e)}\n{error_details}")
+        return jsonify({'error': 'Erro ao criar etapa'}), 500
+
+
+@app.route('/cronograma/<int:cronograma_id>/etapas/<int:etapa_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
+def update_etapa_cronograma(cronograma_id, etapa_id):
+    """Atualiza uma etapa do cronograma"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'PUT, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        if not etapa or etapa.cronograma_id != cronograma_id:
+            return jsonify({'error': 'Etapa não encontrada'}), 404
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        data = request.json
+        
+        if 'nome' in data:
+            etapa.nome = data['nome']
+        
+        if 'ordem' in data:
+            etapa.ordem = int(data['ordem'])
+        
+        if 'duracao_dias' in data:
+            etapa.duracao_dias = int(data['duracao_dias'])
+        
+        if 'data_inicio' in data and data['data_inicio']:
+            etapa.data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+            etapa.inicio_ajustado_manualmente = True
+        
+        if 'percentual_conclusao' in data:
+            etapa.percentual_conclusao = max(0, min(100, float(data['percentual_conclusao'])))
+        
+        if 'observacoes' in data:
+            etapa.observacoes = data['observacoes']
+        
+        # Resetar ajuste manual se solicitado
+        if data.get('resetar_ajuste_manual'):
+            etapa.inicio_ajustado_manualmente = False
+        
+        etapa.updated_at = datetime.utcnow()
+        db.session.commit()
+        
+        # Recalcular datas em cascata
+        recalcular_datas_etapas(cronograma_id)
+        db.session.commit()
+        
+        # Recarregar etapa atualizada
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        
+        print(f"[LOG] Etapa atualizada: ID={etapa_id}, Nome={etapa.nome}")
+        return jsonify(etapa.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"[ERRO] update_etapa_cronograma: {str(e)}\n{error_details}")
+        return jsonify({'error': 'Erro ao atualizar etapa'}), 500
+
+
+@app.route('/cronograma/<int:cronograma_id>/etapas/<int:etapa_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required(optional=True)
+def delete_etapa_cronograma(cronograma_id, etapa_id):
+    """Exclui uma etapa do cronograma"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        if not etapa or etapa.cronograma_id != cronograma_id:
+            return jsonify({'error': 'Etapa não encontrada'}), 404
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        nome_etapa = etapa.nome
+        db.session.delete(etapa)
+        db.session.commit()
+        
+        # Recalcular datas das etapas restantes
+        recalcular_datas_etapas(cronograma_id)
+        db.session.commit()
+        
+        print(f"[LOG] Etapa excluída: ID={etapa_id}, Nome={nome_etapa}")
+        return jsonify({'message': 'Etapa excluída com sucesso'}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] delete_etapa_cronograma: {str(e)}")
+        return jsonify({'error': 'Erro ao excluir etapa'}), 500
+
+
+@app.route('/cronograma/<int:cronograma_id>/etapas/reordenar', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
+def reordenar_etapas_cronograma(cronograma_id):
+    """Reordena as etapas do cronograma"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'PUT, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not cronograma:
+            return jsonify({'error': 'Cronograma não encontrado'}), 404
+        
+        if not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        data = request.json
+        # Espera: {"ordem": [{"id": 1, "ordem": 1}, {"id": 2, "ordem": 2}, ...]}
+        
+        if 'ordem' not in data:
+            return jsonify({'error': 'Campo obrigatório: ordem'}), 400
+        
+        for item in data['ordem']:
+            etapa = CronogramaEtapa.query.get(item['id'])
+            if etapa and etapa.cronograma_id == cronograma_id:
+                etapa.ordem = item['ordem']
+                # Resetar ajuste manual para recalcular em cascata
+                if item.get('resetar_ajuste'):
+                    etapa.inicio_ajustado_manualmente = False
+        
+        db.session.commit()
+        
+        # Recalcular datas
+        recalcular_datas_etapas(cronograma_id)
+        db.session.commit()
+        
+        return jsonify({'message': 'Etapas reordenadas com sucesso'}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] reordenar_etapas_cronograma: {str(e)}")
+        return jsonify({'error': 'Erro ao reordenar etapas'}), 500
+
+
+# ==============================================================================
+# ROTA TEMPORÁRIA DE MIGRATION - CRIAR TABELA cronograma_etapa
+# ==============================================================================
+@app.route('/admin/migrate-create-cronograma-etapa', methods=['GET'])
+@jwt_required()
+@check_permission(roles=['master'])
+def migrate_create_cronograma_etapa():
+    """
+    ROTA TEMPORÁRIA - Cria tabela cronograma_etapa
+    Apenas usuários MASTER podem executar
+    Acesse: https://seu-backend.railway.app/admin/migrate-create-cronograma-etapa
+    """
+    try:
+        resultados = []
+        
+        # Criar tabela
+        try:
+            db.session.execute(db.text("""
+                CREATE TABLE IF NOT EXISTS cronograma_etapa (
+                    id SERIAL PRIMARY KEY,
+                    cronograma_id INTEGER NOT NULL REFERENCES cronograma_obra(id) ON DELETE CASCADE,
+                    nome VARCHAR(200) NOT NULL,
+                    ordem INTEGER NOT NULL DEFAULT 1,
+                    duracao_dias INTEGER NOT NULL DEFAULT 1,
+                    data_inicio DATE NOT NULL,
+                    data_fim DATE NOT NULL,
+                    inicio_ajustado_manualmente BOOLEAN DEFAULT FALSE,
+                    percentual_conclusao FLOAT NOT NULL DEFAULT 0.0,
+                    observacoes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            db.session.commit()
+            resultados.append("✅ Tabela cronograma_etapa criada com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Tabela cronograma_etapa já existe (OK)")
+            else:
+                resultados.append(f"❌ Erro ao criar tabela: {str(e)}")
+        
+        # Criar índice
+        try:
+            db.session.execute(db.text("""
+                CREATE INDEX IF NOT EXISTS idx_cronograma_etapa_cronograma_id 
+                ON cronograma_etapa(cronograma_id);
+            """))
+            db.session.commit()
+            resultados.append("✅ Índice criado com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ Índice: {str(e)}")
+        
+        return jsonify({
+            "status": "Migration executada",
+            "resultados": resultados
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
 
 # ==============================================================================
 # ROTA TEMPORÁRIA DE MIGRATION - ADICIONAR servico_id
