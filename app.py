@@ -7858,6 +7858,403 @@ def exportar_cronograma_fisico_pdf(obra_id):
     return gerar_relatorio_cronograma_pdf(obra_id)
 
 
+@app.route('/obras/<int:obra_id>/cronograma-obra/relatorio-pdf', methods=['GET'])
+@jwt_required()
+def gerar_relatorio_cronograma_obra_pdf(obra_id):
+    """
+    Gera relatório PDF completo do Cronograma de Obras
+    Inclui: status, etapas, medições por área, análise EVM
+    """
+    try:
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        # Buscar obra
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({'error': 'Obra não encontrada'}), 404
+        
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        # Buscar cronograma
+        cronograma_items = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
+        
+        # Criar PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=1.5*cm, leftMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Estilos customizados
+        from reportlab.lib.styles import ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+        
+        style_title = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            spaceAfter=20,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor('#2d3748')
+        )
+        
+        style_subtitle = ParagraphStyle(
+            'CustomSubtitle',
+            parent=styles['Heading2'],
+            fontSize=14,
+            spaceBefore=15,
+            spaceAfter=10,
+            textColor=colors.HexColor('#4a5568')
+        )
+        
+        style_normal = ParagraphStyle(
+            'CustomNormal',
+            parent=styles['Normal'],
+            fontSize=10,
+            spaceAfter=5
+        )
+        
+        style_small = ParagraphStyle(
+            'CustomSmall',
+            parent=styles['Normal'],
+            fontSize=8,
+            textColor=colors.HexColor('#718096')
+        )
+        
+        # ==================== CABEÇALHO ====================
+        elements.append(Paragraph("🏗️ OBRALY", style_title))
+        elements.append(Paragraph("RELATÓRIO DE CRONOGRAMA DE OBRAS", ParagraphStyle(
+            'SubTitle', parent=styles['Heading2'], fontSize=14, alignment=TA_CENTER, textColor=colors.HexColor('#4f46e5')
+        )))
+        elements.append(Spacer(1, 10))
+        
+        # Info da obra
+        hoje = datetime.now().strftime('%d/%m/%Y às %H:%M')
+        header_data = [
+            ['Obra:', obra.nome, 'Data:', hoje],
+            ['Gerado por:', current_user.username if current_user else 'Sistema', '', '']
+        ]
+        header_table = Table(header_data, colWidths=[2.5*cm, 7*cm, 2.5*cm, 5*cm])
+        header_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#4a5568')),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(header_table)
+        elements.append(Spacer(1, 15))
+        
+        # ==================== RESUMO EXECUTIVO ====================
+        elements.append(Paragraph("📊 RESUMO EXECUTIVO", style_subtitle))
+        
+        # Calcular estatísticas
+        total_servicos = len(cronograma_items)
+        concluidos = sum(1 for s in cronograma_items if s.percentual_conclusao >= 100)
+        hoje_date = date.today()
+        atrasados = sum(1 for s in cronograma_items if s.data_fim_prevista and s.data_fim_prevista < hoje_date and s.percentual_conclusao < 100)
+        em_andamento = sum(1 for s in cronograma_items if s.data_inicio_real and s.percentual_conclusao < 100 and (not s.data_fim_prevista or s.data_fim_prevista >= hoje_date))
+        a_iniciar = total_servicos - concluidos - atrasados - em_andamento
+        
+        # Progresso geral
+        if total_servicos > 0:
+            progresso_geral = sum(s.percentual_conclusao for s in cronograma_items) / total_servicos
+        else:
+            progresso_geral = 0
+        
+        resumo_data = [
+            ['Total de Serviços:', str(total_servicos), 'Concluídos:', str(concluidos)],
+            ['Em Andamento:', str(em_andamento), 'A Iniciar:', str(a_iniciar)],
+            ['Atrasados:', str(atrasados), 'Progresso Geral:', f'{progresso_geral:.1f}%']
+        ]
+        resumo_table = Table(resumo_data, colWidths=[3.5*cm, 3*cm, 3.5*cm, 3*cm])
+        resumo_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f7fafc')),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ]))
+        elements.append(resumo_table)
+        elements.append(Spacer(1, 20))
+        
+        # ==================== DETALHES POR SERVIÇO ====================
+        elements.append(Paragraph("📋 DETALHES POR SERVIÇO", style_subtitle))
+        elements.append(Spacer(1, 10))
+        
+        for idx, servico in enumerate(cronograma_items, 1):
+            # Determinar status
+            percentual = servico.percentual_conclusao
+            if percentual >= 100:
+                status = "✅ CONCLUÍDO"
+                status_color = colors.HexColor('#28a745')
+            elif servico.data_fim_prevista and servico.data_fim_prevista < hoje_date:
+                status = "⚠️ ATRASADO"
+                status_color = colors.HexColor('#dc3545')
+            elif servico.data_inicio_real:
+                status = "🔄 EM ANDAMENTO"
+                status_color = colors.HexColor('#007bff')
+            else:
+                status = "⏳ A INICIAR"
+                status_color = colors.HexColor('#6c757d')
+            
+            # Tipo de medição
+            if servico.tipo_medicao == 'etapas':
+                tipo_texto = "📋 Por Etapas"
+            elif servico.tipo_medicao == 'area':
+                tipo_texto = f"📐 Por Área ({servico.unidade_medida})"
+            else:
+                tipo_texto = "🔧 Empreitada"
+            
+            # Cabeçalho do serviço
+            servico_header = [
+                [f'#{idx}  {servico.servico_nome}', status, tipo_texto]
+            ]
+            servico_header_table = Table(servico_header, colWidths=[9*cm, 4*cm, 4*cm])
+            servico_header_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (0, 0), 12),
+                ('FONTSIZE', (1, 0), (2, 0), 10),
+                ('TEXTCOLOR', (1, 0), (1, 0), status_color),
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f0f4f8')),
+                ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#4f46e5')),
+                ('TOPPADDING', (0, 0), (-1, -1), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+                ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ]))
+            elements.append(servico_header_table)
+            
+            # Cronograma
+            data_inicio = servico.data_inicio.strftime('%d/%m/%Y') if servico.data_inicio else '-'
+            data_fim = servico.data_fim_prevista.strftime('%d/%m/%Y') if servico.data_fim_prevista else '-'
+            data_inicio_real = servico.data_inicio_real.strftime('%d/%m/%Y') if servico.data_inicio_real else '-'
+            data_fim_real = servico.data_fim_real.strftime('%d/%m/%Y') if servico.data_fim_real else '-'
+            
+            cronograma_data = [
+                ['📅 CRONOGRAMA', '', '', ''],
+                ['Início Previsto:', data_inicio, 'Término Previsto:', data_fim],
+                ['Início Real:', data_inicio_real, 'Término Real:', data_fim_real]
+            ]
+            cronograma_table = Table(cronograma_data, colWidths=[3.5*cm, 4.75*cm, 3.5*cm, 4.75*cm])
+            cronograma_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+                ('SPAN', (0, 0), (-1, 0)),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e2e8f0')),
+                ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+                ('FONTNAME', (2, 1), (2, -1), 'Helvetica-Bold'),
+                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+                ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ]))
+            elements.append(cronograma_table)
+            
+            # Execução
+            barra_progresso = '█' * int(percentual / 5) + '░' * (20 - int(percentual / 5))
+            
+            # Se for por área
+            if servico.tipo_medicao == 'area' and servico.area_total:
+                area_exec = servico.area_executada or 0
+                exec_data = [
+                    ['📈 EXECUÇÃO', '', ''],
+                    ['Progresso:', f'{barra_progresso} {percentual:.1f}%', ''],
+                    ['Área Executada:', f'{area_exec} de {servico.area_total} {servico.unidade_medida}', f'({(area_exec/servico.area_total*100):.1f}%)']
+                ]
+            else:
+                exec_data = [
+                    ['📈 EXECUÇÃO', '', ''],
+                    ['Progresso:', f'{barra_progresso} {percentual:.1f}%', '']
+                ]
+            
+            exec_table = Table(exec_data, colWidths=[3.5*cm, 10*cm, 3*cm])
+            exec_table.setStyle(TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+                ('SPAN', (0, 0), (-1, 0)),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e2e8f0')),
+                ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ]))
+            elements.append(exec_table)
+            
+            # ETAPAS (se houver)
+            try:
+                etapas_list = servico.etapas.order_by(CronogramaEtapa.ordem).all() if servico.etapas else []
+                if etapas_list:
+                    etapas_header = [['📋 ETAPAS', '', '', '', '']]
+                    etapas_data = [['#', 'Etapa', 'Duração', 'Período', 'Status']]
+                    
+                    for i, etapa in enumerate(etapas_list, 1):
+                        etapa_inicio = etapa.data_inicio.strftime('%d/%m') if etapa.data_inicio else '-'
+                        etapa_fim = etapa.data_fim.strftime('%d/%m') if etapa.data_fim else '-'
+                        
+                        if etapa.percentual_conclusao >= 100:
+                            etapa_status = '✅ 100%'
+                        elif etapa.percentual_conclusao > 0:
+                            etapa_status = f'🔄 {etapa.percentual_conclusao:.0f}%'
+                        else:
+                            etapa_status = '⏳ 0%'
+                        
+                        etapas_data.append([
+                            str(i),
+                            etapa.nome[:25] + '...' if len(etapa.nome) > 25 else etapa.nome,
+                            f'{etapa.duracao_dias} dias',
+                            f'{etapa_inicio} → {etapa_fim}',
+                            etapa_status
+                        ])
+                    
+                    etapas_table = Table(etapas_header + etapas_data, colWidths=[1*cm, 6*cm, 2.5*cm, 4*cm, 3*cm])
+                    etapas_table.setStyle(TableStyle([
+                        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                        ('FONTSIZE', (0, 0), (-1, -1), 8),
+                        ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+                        ('SPAN', (0, 0), (-1, 0)),
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e2e8f0')),
+                        ('BACKGROUND', (0, 1), (-1, 1), colors.HexColor('#f0f4f8')),
+                        ('FONTNAME', (0, 1), (-1, 1), 'Helvetica-Bold'),
+                        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+                        ('INNERGRID', (0, 1), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+                        ('TOPPADDING', (0, 0), (-1, -1), 4),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+                        ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                        ('ALIGN', (0, 1), (0, -1), 'CENTER'),
+                        ('ALIGN', (2, 1), (2, -1), 'CENTER'),
+                        ('ALIGN', (4, 1), (4, -1), 'CENTER'),
+                    ]))
+                    elements.append(etapas_table)
+            except Exception as e:
+                print(f"[AVISO] Erro ao carregar etapas para PDF: {str(e)}")
+            
+            # ANÁLISE EVM
+            try:
+                # Buscar dados financeiros
+                servico_db = Servico.query.filter_by(obra_id=obra_id, nome=servico.servico_nome).first()
+                if servico_db:
+                    valor_total = (servico_db.valor_global_mao_de_obra or 0) + (servico_db.valor_global_material or 0)
+                    
+                    # Buscar pagamentos
+                    pagamentos = PagamentoServico.query.filter_by(servico_id=servico_db.id).all()
+                    valor_pago = sum(p.valor_pago or 0 for p in pagamentos)
+                    
+                    if valor_total > 0:
+                        percentual_pago = (valor_pago / valor_total) * 100
+                        percentual_exec = percentual
+                        diferenca = percentual_exec - percentual_pago
+                        
+                        if diferenca >= 5:
+                            evm_status = "🟢 ADIANTADO"
+                            evm_color = colors.HexColor('#28a745')
+                        elif diferenca >= -5:
+                            evm_status = "🔵 NO PRAZO"
+                            evm_color = colors.HexColor('#007bff')
+                        elif diferenca >= -15:
+                            evm_status = "🟡 ATENÇÃO"
+                            evm_color = colors.HexColor('#ffc107')
+                        else:
+                            evm_status = "🔴 CRÍTICO"
+                            evm_color = colors.HexColor('#dc3545')
+                        
+                        evm_data = [
+                            ['💰 ANÁLISE FINANCEIRA (EVM)', evm_status, ''],
+                            ['Total Orçado:', f'R$ {valor_total:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'), ''],
+                            ['Já Pago:', f'R$ {valor_pago:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.'), f'({percentual_pago:.1f}%)'],
+                            ['Pago vs Executado:', f'{percentual_pago:.0f}% pago | {percentual_exec:.0f}% executado', f'Diferença: {diferenca:+.0f}%']
+                        ]
+                        evm_table = Table(evm_data, colWidths=[4*cm, 8.5*cm, 4*cm])
+                        evm_table.setStyle(TableStyle([
+                            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+                            ('FONTSIZE', (0, 0), (-1, -1), 9),
+                            ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+                            ('TEXTCOLOR', (1, 0), (1, 0), evm_color),
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#fef3c7')),
+                            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#fffbeb')),
+                            ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+                            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#fbbf24')),
+                            ('TOPPADDING', (0, 0), (-1, -1), 5),
+                            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                        ]))
+                        elements.append(evm_table)
+            except Exception as e:
+                print(f"[AVISO] Erro ao calcular EVM para PDF: {str(e)}")
+            
+            # Observações
+            if servico.observacoes:
+                obs_data = [['📝 Observações:', servico.observacoes[:200]]]
+                obs_table = Table(obs_data, colWidths=[3.5*cm, 13*cm])
+                obs_table.setStyle(TableStyle([
+                    ('FONTNAME', (0, 0), (0, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#718096')),
+                    ('TOPPADDING', (0, 0), (-1, -1), 5),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                ]))
+                elements.append(obs_table)
+            
+            elements.append(Spacer(1, 15))
+        
+        # ==================== LEGENDA ====================
+        elements.append(Paragraph("📋 LEGENDA", style_subtitle))
+        
+        legenda_data = [
+            ['STATUS', 'INDICADOR EVM'],
+            ['✅ Concluído - Serviço 100% executado', '🟢 ADIANTADO - Execução maior que pagamento (+5%)'],
+            ['🔄 Em Andamento - Em execução', '🔵 NO PRAZO - Proporcional (±5%)'],
+            ['⏳ A Iniciar - Não iniciado', '🟡 ATENÇÃO - Pagou mais (-5% a -15%)'],
+            ['⚠️ Atrasado - Passou do prazo', '🔴 CRÍTICO - Pagou muito mais (-15% ou mais)'],
+        ]
+        legenda_table = Table(legenda_data, colWidths=[8.5*cm, 8.5*cm])
+        legenda_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e2e8f0')),
+            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+            ('TOPPADDING', (0, 0), (-1, -1), 5),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(legenda_table)
+        
+        # Rodapé
+        elements.append(Spacer(1, 20))
+        elements.append(Paragraph(f"Gerado em: {hoje} - Obraly v1.0", ParagraphStyle(
+            'Footer', parent=styles['Normal'], fontSize=8, alignment=TA_CENTER, textColor=colors.HexColor('#a0aec0')
+        )))
+        
+        # Gerar PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        # Retornar arquivo
+        return send_file(
+            buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'cronograma_obras_{obra.nome}_{datetime.now().strftime("%Y%m%d_%H%M")}.pdf'
+        )
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[ERRO] gerar_relatorio_cronograma_obra_pdf: {str(e)}\n{error_details}")
+        return jsonify({'error': f'Erro ao gerar PDF: {str(e)}'}), 500
+
+
 @app.route('/cronograma', methods=['POST', 'OPTIONS'])
 @jwt_required(optional=True)
 def create_cronograma():
