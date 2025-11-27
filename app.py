@@ -7937,6 +7937,22 @@ def get_servico_financeiro(obra_id):
         return jsonify({'erro': 'Erro ao buscar dados financeiros do serviço'}), 500
 
 
+@app.route('/obras/<int:obra_id>/cronograma', methods=['GET'])
+@jwt_required()
+def get_cronograma_obra_by_obra(obra_id):
+    """Busca cronograma da obra - rota alternativa"""
+    try:
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({'error': 'Obra não encontrada'}), 404
+        
+        cronograma_items = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
+        return jsonify([item.to_dict() for item in cronograma_items]), 200
+    except Exception as e:
+        print(f"[ERRO] get_cronograma_obra_by_obra: {str(e)}")
+        return jsonify({'error': 'Erro ao buscar cronograma'}), 500
+
+
 @app.route('/cronograma/<int:obra_id>', methods=['GET'])
 @jwt_required()
 def get_cronograma_obra(obra_id):
