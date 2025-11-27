@@ -7544,43 +7544,63 @@ class CronogramaObra(db.Model):
     updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
 
     # Relacionamento com etapas (para tipo_medicao='etapas')
-    etapas = db.relationship('CronogramaEtapa', backref='cronograma', lazy=True, cascade="all, delete-orphan", order_by="CronogramaEtapa.ordem")
+    # Usando lazy='dynamic' para evitar erro quando tabela não existe
+    etapas = db.relationship('CronogramaEtapa', backref='cronograma', lazy='dynamic', cascade="all, delete-orphan")
 
     def calcular_percentual_por_etapas(self):
         """Calcula o percentual de conclusão baseado nas etapas (média ponderada por duração)"""
-        if not self.etapas:
+        try:
+            etapas_list = self.etapas.order_by(CronogramaEtapa.ordem).all() if self.etapas else []
+            if not etapas_list:
+                return 0.0
+            
+            total_dias = 0
+            soma_ponderada = 0
+            
+            for etapa in etapas_list:
+                dias = etapa.duracao_dias or 1
+                total_dias += dias
+                soma_ponderada += (etapa.percentual_conclusao or 0) * dias
+            
+            if total_dias == 0:
+                return 0.0
+            
+            return round(soma_ponderada / total_dias, 2)
+        except Exception as e:
+            print(f"[AVISO] Erro ao calcular percentual por etapas: {str(e)}")
             return 0.0
-        
-        total_dias = 0
-        soma_ponderada = 0
-        
-        for etapa in self.etapas:
-            dias = etapa.duracao_dias or 1
-            total_dias += dias
-            soma_ponderada += (etapa.percentual_conclusao or 0) * dias
-        
-        if total_dias == 0:
-            return 0.0
-        
-        return round(soma_ponderada / total_dias, 2)
 
     def atualizar_datas_por_etapas(self):
         """Atualiza as datas do serviço baseado nas etapas"""
-        if not self.etapas:
-            return
-        
-        etapas_ordenadas = sorted(self.etapas, key=lambda e: e.ordem)
-        if etapas_ordenadas:
-            # Data início = primeira etapa
-            self.data_inicio = etapas_ordenadas[0].data_inicio
-            # Data fim = última etapa
-            self.data_fim_prevista = etapas_ordenadas[-1].data_fim
+        try:
+            etapas_list = self.etapas.order_by(CronogramaEtapa.ordem).all() if self.etapas else []
+            if not etapas_list:
+                return
+            
+            if etapas_list:
+                # Data início = primeira etapa
+                self.data_inicio = etapas_list[0].data_inicio
+                # Data fim = última etapa
+                self.data_fim_prevista = etapas_list[-1].data_fim
+        except Exception as e:
+            print(f"[AVISO] Erro ao atualizar datas por etapas: {str(e)}")
 
     def to_dict(self):
         # Se tipo_medicao for 'etapas', calcular percentual automaticamente
         percentual = self.percentual_conclusao
-        if self.tipo_medicao == 'etapas' and self.etapas:
-            percentual = self.calcular_percentual_por_etapas()
+        etapas_list = []
+        
+        # Tentar carregar etapas (pode falhar se tabela não existir)
+        try:
+            etapas_query = self.etapas.order_by(CronogramaEtapa.ordem).all() if self.etapas else []
+            if etapas_query:
+                etapas_list = [etapa.to_dict() for etapa in etapas_query]
+                if self.tipo_medicao == 'etapas':
+                    percentual = self.calcular_percentual_por_etapas()
+        except Exception as e:
+            # Tabela cronograma_etapa pode não existir ainda
+            print(f"[AVISO] Não foi possível carregar etapas: {str(e)}")
+            etapas_list = []
         
         return {
             'id': self.id,
@@ -7603,7 +7623,7 @@ class CronogramaObra(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             # ETAPAS (se houver)
-            'etapas': [etapa.to_dict() for etapa in self.etapas] if self.etapas else [],
+            'etapas': etapas_list,
         }
 
 
@@ -8081,33 +8101,36 @@ def recalcular_datas_etapas(cronograma_id):
     - Etapa 2+: data_inicio = data_fim anterior + 1 dia (se não foi ajustada manualmente)
     - Todas: data_fim = data_inicio + duracao_dias - 1
     """
-    etapas = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem).all()
-    
-    if not etapas:
-        return
-    
-    for i, etapa in enumerate(etapas):
-        if i == 0:
-            # Primeira etapa: só recalcular data_fim
-            etapa.calcular_data_fim()
-        else:
-            # Etapas seguintes
-            etapa_anterior = etapas[i - 1]
-            
-            # Se não foi ajustada manualmente, herda do anterior
-            if not etapa.inicio_ajustado_manualmente:
-                etapa.data_inicio = etapa_anterior.data_fim + timedelta(days=1)
-            
-            # Sempre recalcular data_fim
-            etapa.calcular_data_fim()
-    
-    # Atualizar datas do cronograma pai
-    cronograma = CronogramaObra.query.get(cronograma_id)
-    if cronograma:
-        cronograma.atualizar_datas_por_etapas()
-        # Atualizar percentual se tipo for 'etapas'
-        if cronograma.tipo_medicao == 'etapas':
-            cronograma.percentual_conclusao = cronograma.calcular_percentual_por_etapas()
+    try:
+        etapas = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem).all()
+        
+        if not etapas:
+            return
+        
+        for i, etapa in enumerate(etapas):
+            if i == 0:
+                # Primeira etapa: só recalcular data_fim
+                etapa.calcular_data_fim()
+            else:
+                # Etapas seguintes
+                etapa_anterior = etapas[i - 1]
+                
+                # Se não foi ajustada manualmente, herda do anterior
+                if not etapa.inicio_ajustado_manualmente:
+                    etapa.data_inicio = etapa_anterior.data_fim + timedelta(days=1)
+                
+                # Sempre recalcular data_fim
+                etapa.calcular_data_fim()
+        
+        # Atualizar datas do cronograma pai
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if cronograma:
+            cronograma.atualizar_datas_por_etapas()
+            # Atualizar percentual se tipo for 'etapas'
+            if cronograma.tipo_medicao == 'etapas':
+                cronograma.percentual_conclusao = cronograma.calcular_percentual_por_etapas()
+    except Exception as e:
+        print(f"[AVISO] Erro ao recalcular datas das etapas: {str(e)}")
 
 
 @app.route('/cronograma/<int:cronograma_id>/etapas', methods=['GET'])
@@ -8384,6 +8407,67 @@ def reordenar_etapas_cronograma(cronograma_id):
 # ==============================================================================
 # ROTA TEMPORÁRIA DE MIGRATION - CRIAR TABELA cronograma_etapa
 # ==============================================================================
+
+# ROTA SEM AUTENTICAÇÃO - Use uma única vez e depois remova!
+@app.route('/setup/create-cronograma-etapa-table', methods=['GET'])
+def setup_create_cronograma_etapa():
+    """
+    ROTA TEMPORÁRIA SEM AUTENTICAÇÃO - Cria tabela cronograma_etapa
+    Acesse: https://seu-backend.railway.app/setup/create-cronograma-etapa-table
+    REMOVA ESTA ROTA APÓS USAR!
+    """
+    try:
+        resultados = []
+        
+        # Criar tabela
+        try:
+            db.session.execute(db.text("""
+                CREATE TABLE IF NOT EXISTS cronograma_etapa (
+                    id SERIAL PRIMARY KEY,
+                    cronograma_id INTEGER NOT NULL REFERENCES cronograma_obra(id) ON DELETE CASCADE,
+                    nome VARCHAR(200) NOT NULL,
+                    ordem INTEGER NOT NULL DEFAULT 1,
+                    duracao_dias INTEGER NOT NULL DEFAULT 1,
+                    data_inicio DATE NOT NULL,
+                    data_fim DATE NOT NULL,
+                    inicio_ajustado_manualmente BOOLEAN DEFAULT FALSE,
+                    percentual_conclusao FLOAT NOT NULL DEFAULT 0.0,
+                    observacoes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            db.session.commit()
+            resultados.append("✅ Tabela cronograma_etapa criada com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Tabela cronograma_etapa já existe (OK)")
+            else:
+                resultados.append(f"❌ Erro ao criar tabela: {str(e)}")
+        
+        # Criar índice
+        try:
+            db.session.execute(db.text("""
+                CREATE INDEX IF NOT EXISTS idx_cronograma_etapa_cronograma_id 
+                ON cronograma_etapa(cronograma_id);
+            """))
+            db.session.commit()
+            resultados.append("✅ Índice criado com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ Índice: {str(e)}")
+        
+        return jsonify({
+            "status": "Migration executada com sucesso!",
+            "resultados": resultados,
+            "aviso": "REMOVA esta rota do código após usar!"
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/admin/migrate-create-cronograma-etapa', methods=['GET'])
 @jwt_required()
 @check_permission(roles=['master'])
