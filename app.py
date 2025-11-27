@@ -8096,7 +8096,8 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
             try:
                 etapas_list = servico.etapas.order_by(CronogramaEtapa.ordem).all() if servico.etapas else []
                 if etapas_list:
-                    etapas_header = [['📋 ETAPAS', '', '', '', '']]
+                    total_dias_etapas = sum(e.duracao_dias or 0 for e in etapas_list)
+                    etapas_header = [[f'📋 ETAPAS ({len(etapas_list)}) - {total_dias_etapas} dias', '', '', '', '']]
                     etapas_data = [['#', 'Etapa', 'Duração', 'Período', 'Status']]
                     
                     for i, etapa in enumerate(etapas_list, 1):
