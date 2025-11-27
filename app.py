@@ -7628,19 +7628,122 @@ class CronogramaObra(db.Model):
 
 
 class CronogramaEtapa(db.Model):
-    """Etapas de um serviço do cronograma (para tipo_medicao='etapas')"""
+    """Etapas principais de um serviço (ex: Etapa 1 - Primeira Fase, Etapa 2 - Revestimento)"""
     __tablename__ = 'cronograma_etapa'
 
     id = db.Column(db.Integer, primary_key=True)
     cronograma_id = db.Column(db.Integer, db.ForeignKey('cronograma_obra.id'), nullable=False)
     
-    nome = db.Column(db.String(200), nullable=False)  # Ex: "Escavação", "Estrutura"
+    nome = db.Column(db.String(200), nullable=False)  # Ex: "Primeira Fase", "Revestimento"
+    ordem = db.Column(db.Integer, nullable=False, default=1)
+    
+    # Condição de início (relacionamento com etapa anterior)
+    etapa_anterior_id = db.Column(db.Integer, db.ForeignKey('cronograma_etapa.id'), nullable=True)
+    tipo_condicao = db.Column(db.String(20), default='apos_termino')  # 'apos_termino', 'dias_apos', 'dias_antes', 'manual'
+    dias_offset = db.Column(db.Integer, default=0)  # Dias de offset (+5, -3, etc)
+    
+    # Datas (calculadas a partir das subetapas ou manualmente)
+    data_inicio = db.Column(db.Date, nullable=True)
+    data_fim = db.Column(db.Date, nullable=True)
+    
+    # Flag para indicar se data_inicio foi ajustada manualmente
+    inicio_ajustado_manualmente = db.Column(db.Boolean, default=False)
+    
+    # Execução (calculada como média das subetapas)
+    percentual_conclusao = db.Column(db.Float, nullable=False, default=0.0)
+    
+    observacoes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=func.now())
+    updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
+
+    # Relacionamentos
+    subetapas = db.relationship('CronogramaSubetapa', backref='etapa', lazy='dynamic', cascade="all, delete-orphan")
+    etapa_anterior = db.relationship('CronogramaEtapa', remote_side=[id], backref='etapas_dependentes')
+
+    def calcular_datas_por_subetapas(self):
+        """Calcula data_inicio e data_fim baseado nas subetapas"""
+        try:
+            subs = self.subetapas.order_by(CronogramaSubetapa.ordem).all()
+            if subs:
+                self.data_inicio = subs[0].data_inicio
+                self.data_fim = subs[-1].data_fim
+        except:
+            pass
+
+    def calcular_percentual_por_subetapas(self):
+        """Calcula o percentual de conclusão baseado nas subetapas (média ponderada por duração)"""
+        try:
+            subs = self.subetapas.all()
+            if not subs:
+                return self.percentual_conclusao or 0.0
+            
+            total_dias = 0
+            soma_ponderada = 0
+            
+            for sub in subs:
+                dias = sub.duracao_dias or 1
+                total_dias += dias
+                soma_ponderada += (sub.percentual_conclusao or 0) * dias
+            
+            if total_dias == 0:
+                return 0.0
+            
+            return round(soma_ponderada / total_dias, 2)
+        except:
+            return 0.0
+
+    def total_dias(self):
+        """Retorna o total de dias de todas as subetapas"""
+        try:
+            subs = self.subetapas.all()
+            return sum(s.duracao_dias or 0 for s in subs)
+        except:
+            return 0
+
+    def to_dict(self):
+        try:
+            subetapas_list = [s.to_dict() for s in self.subetapas.order_by(CronogramaSubetapa.ordem).all()]
+        except:
+            subetapas_list = []
+        
+        return {
+            'id': self.id,
+            'cronograma_id': self.cronograma_id,
+            'nome': self.nome,
+            'ordem': self.ordem,
+            # Condição de início
+            'etapa_anterior_id': self.etapa_anterior_id,
+            'tipo_condicao': self.tipo_condicao,
+            'dias_offset': self.dias_offset,
+            # Datas
+            'data_inicio': self.data_inicio.isoformat() if self.data_inicio else None,
+            'data_fim': self.data_fim.isoformat() if self.data_fim else None,
+            'inicio_ajustado_manualmente': self.inicio_ajustado_manualmente,
+            # Execução
+            'percentual_conclusao': float(self.calcular_percentual_por_subetapas()),
+            'total_dias': self.total_dias(),
+            'observacoes': self.observacoes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            # Subetapas
+            'subetapas': subetapas_list,
+        }
+
+
+class CronogramaSubetapa(db.Model):
+    """Subetapas dentro de uma etapa (ex: Escavação, Tubulação, Armadura)"""
+    __tablename__ = 'cronograma_subetapa'
+
+    id = db.Column(db.Integer, primary_key=True)
+    etapa_id = db.Column(db.Integer, db.ForeignKey('cronograma_etapa.id'), nullable=False)
+    
+    nome = db.Column(db.String(200), nullable=False)  # Ex: "Escavação e Regularização"
     ordem = db.Column(db.Integer, nullable=False, default=1)
     
     # Duração e datas
     duracao_dias = db.Column(db.Integer, nullable=False, default=1)
     data_inicio = db.Column(db.Date, nullable=False)
-    data_fim = db.Column(db.Date, nullable=False)  # Calculado: data_inicio + duracao_dias
+    data_fim = db.Column(db.Date, nullable=False)  # Calculado: data_inicio + duracao_dias - 1
     
     # Flag para indicar se data_inicio foi ajustada manualmente
     inicio_ajustado_manualmente = db.Column(db.Boolean, default=False)
@@ -7661,7 +7764,7 @@ class CronogramaEtapa(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
-            'cronograma_id': self.cronograma_id,
+            'etapa_id': self.etapa_id,
             'nome': self.nome,
             'ordem': self.ordem,
             'duracao_dias': self.duracao_dias,
@@ -8803,8 +8906,468 @@ def reordenar_etapas_cronograma(cronograma_id):
 
 
 # ==============================================================================
-# ROTA TEMPORÁRIA DE MIGRATION - CRIAR TABELA cronograma_etapa
+# ENDPOINTS DE SUBETAPAS DO CRONOGRAMA
 # ==============================================================================
+
+def recalcular_datas_subetapas(etapa_id):
+    """
+    Recalcula as datas das subetapas em cascata dentro de uma etapa.
+    Depois atualiza as datas da etapa pai.
+    """
+    try:
+        subetapas = CronogramaSubetapa.query.filter_by(etapa_id=etapa_id).order_by(CronogramaSubetapa.ordem).all()
+        
+        if not subetapas:
+            return
+        
+        for i, sub in enumerate(subetapas):
+            if i == 0:
+                # Primeira subetapa: só recalcular data_fim
+                sub.calcular_data_fim()
+            else:
+                # Subetapas seguintes
+                sub_anterior = subetapas[i - 1]
+                
+                # Se não foi ajustada manualmente, herda do anterior
+                if not sub.inicio_ajustado_manualmente:
+                    sub.data_inicio = sub_anterior.data_fim + timedelta(days=1)
+                
+                # Sempre recalcular data_fim
+                sub.calcular_data_fim()
+        
+        # Atualizar datas da etapa pai
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        if etapa:
+            etapa.calcular_datas_por_subetapas()
+            
+        db.session.commit()
+        
+        # Se a etapa tem cronograma pai, recalcular datas das etapas
+        if etapa and etapa.cronograma_id:
+            recalcular_datas_etapas_v2(etapa.cronograma_id)
+            
+    except Exception as e:
+        print(f"[AVISO] Erro ao recalcular datas das subetapas: {str(e)}")
+
+
+def recalcular_datas_etapas_v2(cronograma_id):
+    """
+    Recalcula as datas das etapas considerando condições de início.
+    Versão 2 com suporte a condições entre etapas.
+    """
+    try:
+        etapas = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem).all()
+        
+        if not etapas:
+            return
+        
+        for etapa in etapas:
+            # Primeiro, calcular datas baseado nas subetapas (se houver)
+            etapa.calcular_datas_por_subetapas()
+            
+            # Se tem etapa anterior e condição definida
+            if etapa.etapa_anterior_id and not etapa.inicio_ajustado_manualmente:
+                etapa_anterior = CronogramaEtapa.query.get(etapa.etapa_anterior_id)
+                if etapa_anterior and etapa_anterior.data_fim:
+                    
+                    if etapa.tipo_condicao == 'apos_termino':
+                        # D+1 após término
+                        nova_data_inicio = etapa_anterior.data_fim + timedelta(days=1)
+                    elif etapa.tipo_condicao == 'dias_apos':
+                        # X dias após término
+                        nova_data_inicio = etapa_anterior.data_fim + timedelta(days=(etapa.dias_offset or 0) + 1)
+                    elif etapa.tipo_condicao == 'dias_antes':
+                        # X dias antes do término (pode começar antes de terminar a anterior)
+                        nova_data_inicio = etapa_anterior.data_fim - timedelta(days=(etapa.dias_offset or 0))
+                    else:
+                        # Manual - não alterar
+                        nova_data_inicio = None
+                    
+                    if nova_data_inicio:
+                        # Calcular diferença para ajustar todas as subetapas
+                        if etapa.data_inicio:
+                            diferenca_dias = (nova_data_inicio - etapa.data_inicio).days
+                            if diferenca_dias != 0:
+                                # Ajustar primeira subetapa
+                                primeira_sub = CronogramaSubetapa.query.filter_by(etapa_id=etapa.id).order_by(CronogramaSubetapa.ordem).first()
+                                if primeira_sub and not primeira_sub.inicio_ajustado_manualmente:
+                                    primeira_sub.data_inicio = nova_data_inicio
+                                    recalcular_datas_subetapas(etapa.id)
+                        else:
+                            # Etapa sem data ainda
+                            primeira_sub = CronogramaSubetapa.query.filter_by(etapa_id=etapa.id).order_by(CronogramaSubetapa.ordem).first()
+                            if primeira_sub and not primeira_sub.inicio_ajustado_manualmente:
+                                primeira_sub.data_inicio = nova_data_inicio
+                                recalcular_datas_subetapas(etapa.id)
+            
+            # Atualizar percentual
+            etapa.percentual_conclusao = etapa.calcular_percentual_por_subetapas()
+        
+        # Atualizar datas e percentual do cronograma pai (serviço)
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if cronograma:
+            cronograma.atualizar_datas_por_etapas()
+            if cronograma.tipo_medicao == 'etapas':
+                cronograma.percentual_conclusao = cronograma.calcular_percentual_por_etapas()
+        
+        db.session.commit()
+        
+    except Exception as e:
+        print(f"[AVISO] Erro ao recalcular datas das etapas v2: {str(e)}")
+
+
+@app.route('/etapa/<int:etapa_id>/subetapas', methods=['GET'])
+@jwt_required()
+def get_subetapas(etapa_id):
+    """Lista todas as subetapas de uma etapa"""
+    try:
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        if not etapa:
+            return jsonify({'error': 'Etapa não encontrada'}), 404
+        
+        subetapas = CronogramaSubetapa.query.filter_by(etapa_id=etapa_id).order_by(CronogramaSubetapa.ordem).all()
+        return jsonify([s.to_dict() for s in subetapas]), 200
+    except Exception as e:
+        print(f"[ERRO] get_subetapas: {str(e)}")
+        return jsonify({'error': 'Erro ao buscar subetapas'}), 500
+
+
+@app.route('/etapa/<int:etapa_id>/subetapas', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
+def create_subetapa(etapa_id):
+    """Cria uma nova subetapa dentro de uma etapa"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        if not etapa:
+            return jsonify({'error': 'Etapa não encontrada'}), 404
+        
+        # Verificar acesso via cronograma
+        cronograma = CronogramaObra.query.get(etapa.cronograma_id)
+        if not cronograma or not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        data = request.json
+        
+        # Campos obrigatórios
+        if 'nome' not in data:
+            return jsonify({'error': 'Campo obrigatório: nome'}), 400
+        
+        # Determinar ordem (última + 1)
+        ultima_sub = CronogramaSubetapa.query.filter_by(etapa_id=etapa_id).order_by(CronogramaSubetapa.ordem.desc()).first()
+        nova_ordem = (ultima_sub.ordem + 1) if ultima_sub else 1
+        
+        # Determinar data_inicio
+        duracao_dias = int(data.get('duracao_dias', 1))
+        
+        if 'data_inicio' in data and data['data_inicio']:
+            # Data definida manualmente
+            data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+            inicio_ajustado = True
+        elif ultima_sub:
+            # Herdar da subetapa anterior
+            data_inicio = ultima_sub.data_fim + timedelta(days=1)
+            inicio_ajustado = False
+        elif etapa.data_inicio:
+            # Usar data da etapa pai
+            data_inicio = etapa.data_inicio
+            inicio_ajustado = False
+        else:
+            # Usar data de hoje
+            data_inicio = date.today()
+            inicio_ajustado = False
+        
+        # Calcular data_fim
+        data_fim = data_inicio + timedelta(days=duracao_dias - 1)
+        
+        nova_subetapa = CronogramaSubetapa(
+            etapa_id=etapa_id,
+            nome=data['nome'],
+            ordem=nova_ordem,
+            duracao_dias=duracao_dias,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
+            inicio_ajustado_manualmente=inicio_ajustado,
+            percentual_conclusao=float(data.get('percentual_conclusao', 0)),
+            observacoes=data.get('observacoes')
+        )
+        
+        db.session.add(nova_subetapa)
+        db.session.commit()
+        
+        # Recalcular datas da etapa e etapas seguintes
+        recalcular_datas_subetapas(etapa_id)
+        
+        return jsonify(nova_subetapa.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] create_subetapa: {str(e)}")
+        return jsonify({'error': f'Erro ao criar subetapa: {str(e)}'}), 500
+
+
+@app.route('/etapa/<int:etapa_id>/subetapas/<int:subetapa_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
+def update_subetapa(etapa_id, subetapa_id):
+    """Atualiza uma subetapa"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'PUT, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        subetapa = CronogramaSubetapa.query.get(subetapa_id)
+        if not subetapa or subetapa.etapa_id != etapa_id:
+            return jsonify({'error': 'Subetapa não encontrada'}), 404
+        
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        cronograma = CronogramaObra.query.get(etapa.cronograma_id)
+        if not cronograma or not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        data = request.json
+        
+        # Atualizar campos
+        if 'nome' in data:
+            subetapa.nome = data['nome']
+        if 'ordem' in data:
+            subetapa.ordem = data['ordem']
+        if 'duracao_dias' in data:
+            subetapa.duracao_dias = int(data['duracao_dias'])
+        if 'data_inicio' in data and data['data_inicio']:
+            subetapa.data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+            subetapa.inicio_ajustado_manualmente = True
+        if 'percentual_conclusao' in data:
+            subetapa.percentual_conclusao = float(data['percentual_conclusao'])
+        if 'observacoes' in data:
+            subetapa.observacoes = data['observacoes']
+        if data.get('resetar_ajuste_manual'):
+            subetapa.inicio_ajustado_manualmente = False
+        
+        # Recalcular data_fim
+        subetapa.calcular_data_fim()
+        
+        db.session.commit()
+        
+        # Recalcular datas em cascata
+        recalcular_datas_subetapas(etapa_id)
+        
+        return jsonify(subetapa.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] update_subetapa: {str(e)}")
+        return jsonify({'error': 'Erro ao atualizar subetapa'}), 500
+
+
+@app.route('/etapa/<int:etapa_id>/subetapas/<int:subetapa_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required(optional=True)
+def delete_subetapa(etapa_id, subetapa_id):
+    """Exclui uma subetapa"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        subetapa = CronogramaSubetapa.query.get(subetapa_id)
+        if not subetapa or subetapa.etapa_id != etapa_id:
+            return jsonify({'error': 'Subetapa não encontrada'}), 404
+        
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        cronograma = CronogramaObra.query.get(etapa.cronograma_id)
+        if not cronograma or not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        db.session.delete(subetapa)
+        db.session.commit()
+        
+        # Reordenar e recalcular
+        subetapas_restantes = CronogramaSubetapa.query.filter_by(etapa_id=etapa_id).order_by(CronogramaSubetapa.ordem).all()
+        for i, s in enumerate(subetapas_restantes, 1):
+            s.ordem = i
+        db.session.commit()
+        
+        recalcular_datas_subetapas(etapa_id)
+        
+        return jsonify({'message': 'Subetapa excluída com sucesso'}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] delete_subetapa: {str(e)}")
+        return jsonify({'error': 'Erro ao excluir subetapa'}), 500
+
+
+# Endpoint para criar nova etapa (com suporte a condições)
+@app.route('/cronograma/<int:cronograma_id>/etapas/nova', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
+def create_etapa_v2(cronograma_id):
+    """Cria uma nova etapa com suporte a condições de início"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not cronograma:
+            return jsonify({'error': 'Cronograma não encontrado'}), 404
+        
+        if not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        data = request.json
+        
+        # Campos obrigatórios
+        if 'nome' not in data:
+            return jsonify({'error': 'Campo obrigatório: nome'}), 400
+        
+        # Determinar ordem (última + 1)
+        ultima_etapa = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem.desc()).first()
+        nova_ordem = (ultima_etapa.ordem + 1) if ultima_etapa else 1
+        
+        # Determinar data_inicio baseado na condição
+        etapa_anterior_id = data.get('etapa_anterior_id')
+        tipo_condicao = data.get('tipo_condicao', 'apos_termino')
+        dias_offset = int(data.get('dias_offset', 0))
+        
+        data_inicio = None
+        inicio_ajustado = False
+        
+        if 'data_inicio' in data and data['data_inicio']:
+            # Data definida manualmente
+            data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+            inicio_ajustado = True
+            tipo_condicao = 'manual'
+        elif etapa_anterior_id:
+            etapa_anterior = CronogramaEtapa.query.get(etapa_anterior_id)
+            if etapa_anterior and etapa_anterior.data_fim:
+                if tipo_condicao == 'apos_termino':
+                    data_inicio = etapa_anterior.data_fim + timedelta(days=1)
+                elif tipo_condicao == 'dias_apos':
+                    data_inicio = etapa_anterior.data_fim + timedelta(days=dias_offset + 1)
+                elif tipo_condicao == 'dias_antes':
+                    data_inicio = etapa_anterior.data_fim - timedelta(days=dias_offset)
+        elif ultima_etapa and ultima_etapa.data_fim:
+            # Se não especificou, usar última etapa como referência
+            data_inicio = ultima_etapa.data_fim + timedelta(days=1)
+            etapa_anterior_id = ultima_etapa.id
+        else:
+            # Primeira etapa: usar data do cronograma ou hoje
+            data_inicio = cronograma.data_inicio or date.today()
+        
+        nova_etapa = CronogramaEtapa(
+            cronograma_id=cronograma_id,
+            nome=data['nome'],
+            ordem=nova_ordem,
+            etapa_anterior_id=etapa_anterior_id,
+            tipo_condicao=tipo_condicao,
+            dias_offset=dias_offset,
+            data_inicio=data_inicio,
+            data_fim=data_inicio,  # Será atualizado quando adicionar subetapas
+            inicio_ajustado_manualmente=inicio_ajustado,
+            percentual_conclusao=0,
+            observacoes=data.get('observacoes')
+        )
+        
+        db.session.add(nova_etapa)
+        db.session.commit()
+        
+        return jsonify(nova_etapa.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] create_etapa_v2: {str(e)}")
+        return jsonify({'error': f'Erro ao criar etapa: {str(e)}'}), 500
+
+
+# Endpoint para atualizar etapa (com suporte a condições)
+@app.route('/cronograma/<int:cronograma_id>/etapas/<int:etapa_id>/atualizar', methods=['PUT', 'OPTIONS'])
+@jwt_required(optional=True)
+def update_etapa_v2(cronograma_id, etapa_id):
+    """Atualiza uma etapa incluindo condições de início"""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'PUT, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': 'Usuário não autenticado'}), 401
+        
+        etapa = CronogramaEtapa.query.get(etapa_id)
+        if not etapa or etapa.cronograma_id != cronograma_id:
+            return jsonify({'error': 'Etapa não encontrada'}), 404
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not cronograma or not user_has_access_to_obra(current_user, cronograma.obra_id):
+            return jsonify({'error': 'Acesso negado'}), 403
+        
+        data = request.json
+        
+        # Atualizar campos
+        if 'nome' in data:
+            etapa.nome = data['nome']
+        if 'ordem' in data:
+            etapa.ordem = data['ordem']
+        if 'etapa_anterior_id' in data:
+            etapa.etapa_anterior_id = data['etapa_anterior_id']
+        if 'tipo_condicao' in data:
+            etapa.tipo_condicao = data['tipo_condicao']
+        if 'dias_offset' in data:
+            etapa.dias_offset = int(data['dias_offset'])
+        if 'observacoes' in data:
+            etapa.observacoes = data['observacoes']
+        if data.get('resetar_ajuste_manual'):
+            etapa.inicio_ajustado_manualmente = False
+        
+        db.session.commit()
+        
+        # Recalcular datas
+        recalcular_datas_etapas_v2(cronograma_id)
+        
+        return jsonify(etapa.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] update_etapa_v2: {str(e)}")
+        return jsonify({'error': 'Erro ao atualizar etapa'}), 500
 
 # ROTA SEM AUTENTICAÇÃO - Use uma única vez e depois remova!
 @app.route('/setup/create-cronograma-etapa-table', methods=['GET'])
@@ -8860,6 +9423,117 @@ def setup_create_cronograma_etapa():
             "status": "Migration executada com sucesso!",
             "resultados": resultados,
             "aviso": "REMOVA esta rota do código após usar!"
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+# MIGRATION V2 - Estrutura Etapas/Subetapas
+@app.route('/setup/migrate-etapas-subetapas', methods=['GET'])
+def setup_migrate_etapas_subetapas():
+    """
+    ROTA TEMPORÁRIA - Atualiza estrutura para Etapas/Subetapas
+    Acesse: https://seu-backend.railway.app/setup/migrate-etapas-subetapas
+    """
+    try:
+        resultados = []
+        
+        # 1. Adicionar novas colunas na tabela cronograma_etapa
+        novas_colunas = [
+            ("etapa_anterior_id", "INTEGER REFERENCES cronograma_etapa(id) ON DELETE SET NULL"),
+            ("tipo_condicao", "VARCHAR(20) DEFAULT 'apos_termino'"),
+            ("dias_offset", "INTEGER DEFAULT 0"),
+        ]
+        
+        for col_name, col_def in novas_colunas:
+            try:
+                db.session.execute(db.text(f"""
+                    ALTER TABLE cronograma_etapa ADD COLUMN IF NOT EXISTS {col_name} {col_def};
+                """))
+                db.session.commit()
+                resultados.append(f"✅ Coluna {col_name} adicionada em cronograma_etapa")
+            except Exception as e:
+                db.session.rollback()
+                if "already exists" in str(e).lower() or "duplicate column" in str(e).lower():
+                    resultados.append(f"⚠️ Coluna {col_name} já existe (OK)")
+                else:
+                    resultados.append(f"❌ Erro coluna {col_name}: {str(e)}")
+        
+        # 2. Tornar data_inicio e data_fim nullable em cronograma_etapa
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE cronograma_etapa ALTER COLUMN data_inicio DROP NOT NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ data_inicio agora aceita NULL")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ data_inicio: {str(e)}")
+        
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE cronograma_etapa ALTER COLUMN data_fim DROP NOT NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ data_fim agora aceita NULL")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ data_fim: {str(e)}")
+        
+        # 3. Tornar duracao_dias nullable (será calculado das subetapas)
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE cronograma_etapa ALTER COLUMN duracao_dias DROP NOT NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ duracao_dias agora aceita NULL")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ duracao_dias: {str(e)}")
+        
+        # 4. Criar tabela cronograma_subetapa
+        try:
+            db.session.execute(db.text("""
+                CREATE TABLE IF NOT EXISTS cronograma_subetapa (
+                    id SERIAL PRIMARY KEY,
+                    etapa_id INTEGER NOT NULL REFERENCES cronograma_etapa(id) ON DELETE CASCADE,
+                    nome VARCHAR(200) NOT NULL,
+                    ordem INTEGER NOT NULL DEFAULT 1,
+                    duracao_dias INTEGER NOT NULL DEFAULT 1,
+                    data_inicio DATE NOT NULL,
+                    data_fim DATE NOT NULL,
+                    inicio_ajustado_manualmente BOOLEAN DEFAULT FALSE,
+                    percentual_conclusao FLOAT NOT NULL DEFAULT 0.0,
+                    observacoes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """))
+            db.session.commit()
+            resultados.append("✅ Tabela cronograma_subetapa criada com sucesso")
+        except Exception as e:
+            db.session.rollback()
+            if "already exists" in str(e).lower():
+                resultados.append("⚠️ Tabela cronograma_subetapa já existe (OK)")
+            else:
+                resultados.append(f"❌ Erro ao criar tabela subetapa: {str(e)}")
+        
+        # 5. Criar índices
+        try:
+            db.session.execute(db.text("""
+                CREATE INDEX IF NOT EXISTS idx_cronograma_subetapa_etapa_id 
+                ON cronograma_subetapa(etapa_id);
+            """))
+            db.session.commit()
+            resultados.append("✅ Índice subetapa criado")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ Índice subetapa: {str(e)}")
+        
+        return jsonify({
+            "status": "Migration V2 (Etapas/Subetapas) executada!",
+            "resultados": resultados
         }), 200
     except Exception as e:
         db.session.rollback()
