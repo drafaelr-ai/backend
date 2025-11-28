@@ -704,7 +704,8 @@ class DiarioObra(db.Model):
     imagens = db.relationship('DiarioImagem', backref='entrada', lazy=True, cascade='all, delete-orphan')
     # criador = db.relationship('User', backref='entradas_diario', foreign_keys=[criado_por])
     
-    def to_dict(self):
+    def to_dict(self, include_images_base64=False):
+        """Retorna dict. Por padrao NAO inclui base64 das imagens"""
         return {
             'id': self.id,
             'obra_id': self.obra_id,
@@ -721,7 +722,8 @@ class DiarioObra(db.Model):
             'criado_por': self.criado_por,
             'criado_em': self.criado_em.isoformat() if self.criado_em else None,
             'atualizado_em': self.atualizado_em.isoformat() if self.atualizado_em else None,
-            'imagens': [img.to_dict() for img in self.imagens]
+            'fotos': [img.to_dict(include_base64=include_images_base64) for img in self.imagens],
+            'imagens': [img.to_dict(include_base64=include_images_base64) for img in self.imagens]
         }
 
 class DiarioImagem(db.Model):
@@ -736,7 +738,23 @@ class DiarioImagem(db.Model):
     ordem = db.Column(db.Integer, default=0)
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
     
-    def to_dict(self):
+    def to_dict(self, include_base64=False):
+        """Retorna dict. Por padrao NAO inclui base64 para economizar banda"""
+        result = {
+            'id': self.id,
+            'diario_id': self.diario_id,
+            'arquivo_nome': self.arquivo_nome,
+            'legenda': self.legenda,
+            'ordem': self.ordem,
+            'criado_em': self.criado_em.strftime('%Y-%m-%d %H:%M:%S') if self.criado_em else None,
+            'has_image': bool(self.arquivo_base64)
+        }
+        if include_base64:
+            result['arquivo_base64'] = self.arquivo_base64
+        return result
+    
+    def to_dict_full(self):
+        """Retorna dict COM base64 - usar apenas quando necessario"""
         return {
             'id': self.id,
             'diario_id': self.diario_id,
@@ -7081,6 +7099,28 @@ def adicionar_imagem_diario(entrada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
+@app.route('/diario/imagens/<int:imagem_id>', methods=['GET'])
+@jwt_required()
+def get_imagem_diario(imagem_id):
+    """Busca uma imagem do diario com base64"""
+    try:
+        imagem = db.session.get(DiarioImagem, imagem_id)
+        if not imagem:
+            return jsonify({"erro": "Imagem nao encontrada"}), 404
+        
+        entrada = db.session.get(DiarioObra, imagem.diario_id)
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, entrada.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        return jsonify(imagem.to_dict_full()), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] GET /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
 @app.route('/diario/imagens/<int:imagem_id>', methods=['DELETE'])
 @jwt_required()
 def deletar_imagem_diario(imagem_id):
@@ -10583,7 +10623,12 @@ def gerar_relatorio_caixa_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e), "detalhes": error_details}), 500
+        # Retornar erro mais detalhado para debug
+        return jsonify({
+            "erro": "Erro ao gerar relatorio PDF",
+            "mensagem": str(e),
+            "tipo": type(e).__name__
+        }), 500
 
 
 # ==============================================================================
