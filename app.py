@@ -1268,6 +1268,42 @@ def get_obra_detalhes(obra_id):
                 })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
+        
+        # --- INCLUIR PARCELAS INDIVIDUAIS PAGAS ---
+        parcelas_pagas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Pago'
+        ).all()
+        
+        for parcela in parcelas_pagas:
+            pag_parcelado = parcela.pagamento_parcelado
+            servico_nome = None
+            if pag_parcelado.servico_id:
+                servico = db.session.get(Servico, pag_parcelado.servico_id)
+                servico_nome = servico.nome if servico else None
+            
+            historico_unificado.append({
+                "id": f"parcela-{parcela.id}",
+                "tipo_registro": "parcela_individual",
+                "data": parcela.data_pagamento or parcela.data_vencimento,
+                "data_vencimento": parcela.data_vencimento,
+                "descricao": f"{pag_parcelado.descricao} ({parcela.numero_parcela}/{pag_parcelado.numero_parcelas})",
+                "tipo": pag_parcelado.segmento or "Material",
+                "valor_total": float(parcela.valor_parcela or 0.0),
+                "valor_pago": float(parcela.valor_parcela or 0.0),
+                "status": "Pago",
+                "pix": None,
+                "servico_id": pag_parcelado.servico_id,
+                "servico_nome": servico_nome,
+                "pagamento_parcelado_id": pag_parcelado.id,
+                "parcela_id": parcela.id,
+                "prioridade": 0,
+                "fornecedor": pag_parcelado.fornecedor
+            })
+        
+        # Re-ordenar após incluir parcelas
+        historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
+        
         for item in historico_unificado:
             if item['data']:
                 item['data'] = item['data'].isoformat()
@@ -1288,6 +1324,32 @@ def get_obra_detalhes(obra_id):
             )
             serv_dict['total_gastos_vinculados_mo'] = gastos_vinculados_mo
             serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
+            
+            # Incluir parcelas pagas de pagamentos parcelados vinculados ao serviço
+            parcelas_do_servico = ParcelaIndividual.query.join(PagamentoParcelado).filter(
+                PagamentoParcelado.servico_id == s.id,
+                ParcelaIndividual.status == 'Pago'
+            ).all()
+            
+            parcelas_list = []
+            for parcela in parcelas_do_servico:
+                pag = parcela.pagamento_parcelado
+                parcelas_list.append({
+                    "id": parcela.id,
+                    "data": (parcela.data_pagamento or parcela.data_vencimento).isoformat() if (parcela.data_pagamento or parcela.data_vencimento) else None,
+                    "tipo_pagamento": "mao_de_obra" if pag.segmento == "Mão de Obra" else "material",
+                    "fornecedor": pag.fornecedor,
+                    "valor_total": parcela.valor_parcela,
+                    "valor_pago": parcela.valor_parcela,
+                    "status": "Pago",
+                    "descricao": f"{pag.descricao} ({parcela.numero_parcela}/{pag.numero_parcelas})",
+                    "is_parcela": True
+                })
+            
+            # Adicionar parcelas ao histórico de pagamentos do serviço
+            if parcelas_list:
+                serv_dict['pagamentos'] = serv_dict.get('pagamentos', []) + parcelas_list
+            
             servicos_com_totais.append(serv_dict)
             
         # Busca orçamentos pendentes
