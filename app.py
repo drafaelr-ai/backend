@@ -10480,29 +10480,44 @@ def gerar_relatorio_caixa_pdf(obra_id):
         
         print(f"[LOG] Buscando movimentacoes para mes={mes}, ano={ano}")
         
-        # Buscar movimentacoes do periodo - CORRIGIDO: usar func.extract
-        try:
-            movimentacoes = MovimentacaoCaixa.query.filter(
-                MovimentacaoCaixa.caixa_id == caixa.id,
-                func.extract('month', MovimentacaoCaixa.data) == mes,
-                func.extract('year', MovimentacaoCaixa.data) == ano
-            ).order_by(MovimentacaoCaixa.data).all()
-        except Exception as e:
-            print(f"[ERRO] Erro na query de movimentacoes: {e}")
-            # Fallback: buscar todas e filtrar em Python
-            todas_movs = MovimentacaoCaixa.query.filter_by(caixa_id=caixa.id).all()
-            movimentacoes = [m for m in todas_movs if m.data and m.data.month == mes and m.data.year == ano]
+        # Buscar movimentacoes do periodo
+        todas_movs = MovimentacaoCaixa.query.filter_by(caixa_id=caixa.id).order_by(MovimentacaoCaixa.data).all()
+        movimentacoes = [m for m in todas_movs if m.data and m.data.month == mes and m.data.year == ano]
         
         print(f"[LOG] Encontradas {len(movimentacoes)} movimentacoes")
         
         # Calcular totais
         saldo_inicial = float(caixa.saldo_inicial or 0)
         total_entradas = sum(float(m.valor or 0) for m in movimentacoes if m.tipo == 'Entrada')
-        total_saidas = sum(float(m.valor or 0) for m in movimentacoes if m.tipo == 'Saída')
+        total_saidas = sum(float(m.valor or 0) for m in movimentacoes if m.tipo in ['Saida', 'Saída'])
         saldo_final = saldo_inicial + total_entradas - total_saidas
         qtd_comprovantes = sum(1 for m in movimentacoes if m.comprovante_url)
         
-        print(f"[LOG] Totais calculados: entradas={total_entradas}, saidas={total_saidas}")
+        print(f"[LOG] Totais: entradas={total_entradas}, saidas={total_saidas}")
+        
+        # Funcoes auxiliares
+        def formatar_real(valor):
+            try:
+                return f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+            except:
+                return "R$ 0,00"
+        
+        def limpar_texto(texto):
+            if not texto:
+                return ""
+            import unicodedata
+            # Normalizar e remover acentos
+            texto_norm = unicodedata.normalize('NFD', str(texto))
+            texto_limpo = ''.join(c for c in texto_norm if unicodedata.category(c) != 'Mn')
+            # Manter apenas ASCII
+            return ''.join(c if ord(c) < 128 else '' for c in texto_limpo)
+        
+        # Nome do mes
+        nomes_meses = ['', 'Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho', 
+                    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+        nome_mes = nomes_meses[mes] if 1 <= mes <= 12 else 'Mes'
+        
+        print(f"[LOG] Criando documento PDF...")
         
         # Criar PDF
         buffer = io.BytesIO()
@@ -10510,41 +10525,9 @@ def gerar_relatorio_caixa_pdf(obra_id):
         elements = []
         styles = getSampleStyleSheet()
         
-        # Funcao auxiliar para formatar valor
-        def formatar_real(valor):
-            try:
-                return f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-            except:
-                return "R$ 0,00"
-        
-        # Funcao para limpar texto (remover caracteres problematicos)
-        def limpar_texto(texto):
-            if not texto:
-                return ""
-            # Substituir caracteres acentuados
-            substituicoes = {
-                'á': 'a', 'à': 'a', 'ã': 'a', 'â': 'a',
-                'é': 'e', 'ê': 'e',
-                'í': 'i',
-                'ó': 'o', 'ô': 'o', 'õ': 'o',
-                'ú': 'u',
-                'ç': 'c',
-                'Á': 'A', 'À': 'A', 'Ã': 'A', 'Â': 'A',
-                'É': 'E', 'Ê': 'E',
-                'Í': 'I',
-                'Ó': 'O', 'Ô': 'O', 'Õ': 'O',
-                'Ú': 'U',
-                'Ç': 'C'
-            }
-            resultado = str(texto)
-            for orig, subst in substituicoes.items():
-                resultado = resultado.replace(orig, subst)
-            return resultado
-        
-        # Nome do mes
-        nomes_meses = ['', 'Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho', 
-                    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
-        nome_mes = nomes_meses[mes] if 1 <= mes <= 12 else 'Mes'
+        # Limpar nomes
+        obra_nome_limpo = limpar_texto(obra.nome)
+        user_nome_limpo = limpar_texto(current_user.nome)
         
         # Titulo
         titulo = Paragraph("<b>PRESTACAO DE CONTAS - CAIXA DE OBRA</b>", styles['Title'])
@@ -10552,9 +10535,6 @@ def gerar_relatorio_caixa_pdf(obra_id):
         elements.append(Spacer(1, 0.5*cm))
         
         # Informacoes
-        obra_nome_limpo = limpar_texto(obra.nome)
-        user_nome_limpo = limpar_texto(current_user.nome)
-        
         info = f"<b>Obra:</b> {obra_nome_limpo}<br/>"
         info += f"<b>Periodo:</b> {nome_mes}/{ano}<br/>"
         info += f"<b>Responsavel:</b> {user_nome_limpo}<br/>"
@@ -10563,16 +10543,13 @@ def gerar_relatorio_caixa_pdf(obra_id):
         elements.append(Spacer(1, 1*cm))
         
         # Saldo inicial
-        data_saldo = [
-            ['SALDO INICIAL', formatar_real(saldo_inicial)]
-        ]
+        data_saldo = [['SALDO INICIAL', formatar_real(saldo_inicial)]]
         table_saldo = Table(data_saldo, colWidths=[12*cm, 5*cm])
         table_saldo.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4CAF50')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 11),
-            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
             ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
         ]))
@@ -10587,13 +10564,11 @@ def gerar_relatorio_caixa_pdf(obra_id):
             
             data_entradas = [['Data', 'Descricao', 'Valor']]
             for m in entradas:
-                desc_limpa = limpar_texto(m.descricao or '')[:60]
                 data_entradas.append([
                     m.data.strftime('%d/%m') if m.data else '-',
-                    desc_limpa,
+                    limpar_texto(m.descricao or '')[:60],
                     formatar_real(m.valor)
                 ])
-            
             data_entradas.append(['', 'TOTAL ENTRADAS', formatar_real(total_entradas)])
             
             table_entradas = Table(data_entradas, colWidths=[2.5*cm, 11*cm, 3.5*cm])
@@ -10601,11 +10576,9 @@ def gerar_relatorio_caixa_pdf(obra_id):
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2196F3')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTSIZE', (0, 1), (-1, -2), 9),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#BBDEFB')),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
             ]))
@@ -10613,22 +10586,19 @@ def gerar_relatorio_caixa_pdf(obra_id):
             elements.append(Spacer(1, 0.7*cm))
         
         # Saidas
-        saidas = [m for m in movimentacoes if m.tipo == 'Saída']
+        saidas = [m for m in movimentacoes if m.tipo in ['Saida', 'Saída']]
         if saidas:
             elements.append(Paragraph("<b>SAIDAS NO PERIODO</b>", styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
             data_saidas = [['Data', 'Descricao', 'Valor', 'Comp.']]
             for m in saidas:
-                comprovante_icon = 'Sim' if m.comprovante_url else '-'
-                desc_limpa = limpar_texto(m.descricao or '')[:60]
                 data_saidas.append([
                     m.data.strftime('%d/%m') if m.data else '-',
-                    desc_limpa,
+                    limpar_texto(m.descricao or '')[:60],
                     formatar_real(m.valor),
-                    comprovante_icon
+                    'Sim' if m.comprovante_url else '-'
                 ])
-            
             data_saidas.append(['', 'TOTAL SAIDAS', formatar_real(total_saidas), ''])
             
             table_saidas = Table(data_saidas, colWidths=[2.5*cm, 10*cm, 3.5*cm, 1*cm])
@@ -10636,12 +10606,10 @@ def gerar_relatorio_caixa_pdf(obra_id):
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f44336')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 10),
                 ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
                 ('ALIGN', (3, 0), (3, -1), 'CENTER'),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTSIZE', (0, 1), (-1, -2), 9),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.whitesmoke, colors.white]),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
                 ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#FFCDD2')),
                 ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
             ]))
@@ -10649,16 +10617,13 @@ def gerar_relatorio_caixa_pdf(obra_id):
             elements.append(Spacer(1, 0.7*cm))
         
         # Saldo final
-        data_final = [
-            ['SALDO FINAL', formatar_real(saldo_final)]
-        ]
+        data_final = [['SALDO FINAL', formatar_real(saldo_final)]]
         table_final = Table(data_final, colWidths=[12*cm, 5*cm])
         table_final.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#FF9800')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 12),
-            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
             ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
         ]))
@@ -10676,9 +10641,8 @@ def gerar_relatorio_caixa_pdf(obra_id):
         doc.build(elements)
         buffer.seek(0)
         
-        print(f"[LOG] PDF do caixa gerado com sucesso para obra {obra_id}")
+        print(f"[LOG] PDF do caixa gerado com sucesso")
         
-        # Nome do arquivo limpo
         nome_arquivo = f"Caixa_{obra_nome_limpo.replace(' ', '_')}_{nome_mes}_{ano}.pdf"
         
         return send_file(
@@ -10691,11 +10655,10 @@ def gerar_relatorio_caixa_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
-        # Retornar erro mais detalhado para debug
         return jsonify({
             "erro": "Erro ao gerar relatorio PDF",
             "mensagem": str(e),
-            "tipo": type(e).__name__
+            "detalhes": error_details
         }), 500
 
 
