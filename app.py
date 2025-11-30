@@ -1270,13 +1270,17 @@ def get_obra_detalhes(obra_id):
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
         
         # --- INCLUIR PARCELAS INDIVIDUAIS PAGAS ---
+        print(f"[DEBUG] Buscando parcelas pagas para obra_id={obra_id}")
         parcelas_pagas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
             PagamentoParcelado.obra_id == obra_id,
             ParcelaIndividual.status == 'Pago'
         ).all()
         
+        print(f"[DEBUG] Encontradas {len(parcelas_pagas)} parcelas com status='Pago'")
+        
         for parcela in parcelas_pagas:
             pag_parcelado = parcela.pagamento_parcelado
+            print(f"[DEBUG] Parcela ID={parcela.id}, numero={parcela.numero_parcela}, status={parcela.status}, valor={parcela.valor_parcela}")
             servico_nome = None
             if pag_parcelado.servico_id:
                 servico = db.session.get(Servico, pag_parcelado.servico_id)
@@ -1326,10 +1330,13 @@ def get_obra_detalhes(obra_id):
             serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
             
             # Incluir parcelas pagas de pagamentos parcelados vinculados ao serviço
+            print(f"[DEBUG] Buscando parcelas pagas do serviço ID={s.id} ({s.nome})")
             parcelas_do_servico = ParcelaIndividual.query.join(PagamentoParcelado).filter(
                 PagamentoParcelado.servico_id == s.id,
                 ParcelaIndividual.status == 'Pago'
             ).all()
+            
+            print(f"[DEBUG] Encontradas {len(parcelas_do_servico)} parcelas pagas para o serviço")
             
             parcelas_list = []
             for parcela in parcelas_do_servico:
@@ -4420,7 +4427,33 @@ def listar_pagamentos_parcelados(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         pagamentos = PagamentoParcelado.query.filter_by(obra_id=obra_id).order_by(PagamentoParcelado.data_primeira_parcela).all()
-        return jsonify([p.to_dict() for p in pagamentos]), 200
+        
+        # Enriquecer cada pagamento com informações das parcelas reais
+        resultado = []
+        for pag in pagamentos:
+            pag_dict = pag.to_dict()
+            
+            # Buscar parcelas individuais para obter o valor real da próxima parcela
+            parcelas = ParcelaIndividual.query.filter_by(
+                pagamento_parcelado_id=pag.id
+            ).order_by(ParcelaIndividual.numero_parcela).all()
+            
+            if parcelas:
+                # Encontrar a próxima parcela não paga
+                proxima_parcela = next((p for p in parcelas if p.status != 'Pago'), None)
+                if proxima_parcela:
+                    pag_dict['valor_proxima_parcela'] = float(proxima_parcela.valor_parcela)
+                    pag_dict['proxima_parcela_data'] = proxima_parcela.data_vencimento.isoformat() if proxima_parcela.data_vencimento else None
+                else:
+                    # Todas pagas - usar última parcela para referência
+                    pag_dict['valor_proxima_parcela'] = float(parcelas[-1].valor_parcela)
+                
+                # Adicionar valor real da parcela (pode diferir do valor médio)
+                pag_dict['valor_parcela_real'] = float(proxima_parcela.valor_parcela) if proxima_parcela else float(pag.valor_parcela)
+            
+            resultado.append(pag_dict)
+        
+        return jsonify(resultado), 200
     
     except Exception as e:
         error_details = traceback.format_exc()
@@ -4442,13 +4475,15 @@ def criar_pagamento_parcelado(obra_id):
         numero_parcelas = int(data.get('numero_parcelas', 1))
         valor_parcela = valor_total / numero_parcelas if numero_parcelas > 0 else 0
         periodicidade = data.get('periodicidade', 'Mensal')  # Semanal ou Mensal
+        segmento = data.get('segmento', 'Material')  # 'Material' ou 'Mão de Obra'
+        
+        print(f"[LOG] Criando pagamento parcelado: segmento={segmento}, servico_id={data.get('servico_id')}")
         
         novo_pagamento = PagamentoParcelado(
             obra_id=obra_id,
             descricao=data.get('descricao'),
             fornecedor=data.get('fornecedor') or None,
-            servico_id=data.get('servico_id') or None,  # Vínculo opcional com serviço (converte "" para None)
-            # segmento será adicionado quando a coluna existir no banco
+            servico_id=data.get('servico_id') or None,
             valor_total=valor_total,
             numero_parcelas=numero_parcelas,
             valor_parcela=valor_parcela,
@@ -4459,10 +4494,15 @@ def criar_pagamento_parcelado(obra_id):
             observacoes=data.get('observacoes') or None
         )
         
+        # Adicionar segmento se a coluna existir
+        if hasattr(novo_pagamento, 'segmento'):
+            novo_pagamento.segmento = segmento
+            print(f"[LOG] Segmento definido: {segmento}")
+        
         db.session.add(novo_pagamento)
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento parcelado criado: ID {novo_pagamento.id} na obra {obra_id} ---")
+        print(f"--- [LOG] Pagamento parcelado criado: ID {novo_pagamento.id} na obra {obra_id}, segmento={segmento} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
@@ -4492,6 +4532,9 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
             pagamento.fornecedor = data['fornecedor']
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
+        if 'segmento' in data and hasattr(pagamento, 'segmento'):
+            pagamento.segmento = data['segmento']
+            print(f"[LOG] Segmento atualizado para: {data['segmento']}")
         if 'parcelas_pagas' in data:
             pagamento.parcelas_pagas = int(data['parcelas_pagas'])
             # Atualiza status se todas as parcelas foram pagas
