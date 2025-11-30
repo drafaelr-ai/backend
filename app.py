@@ -10196,8 +10196,8 @@ def gerenciar_caixa_obra(obra_id):
             # Calcular totais do mês atual
             movimentacoes_mes = MovimentacaoCaixa.query.filter(
                 MovimentacaoCaixa.caixa_id == caixa.id,
-                db.extract('month', MovimentacaoCaixa.data) == caixa.mes_atual,
-                db.extract('year', MovimentacaoCaixa.data) == caixa.ano_atual
+                func.extract('month', MovimentacaoCaixa.data) == caixa.mes_atual,
+                func.extract('year', MovimentacaoCaixa.data) == caixa.ano_atual
             ).all()
             
             total_entradas_mes = sum(m.valor for m in movimentacoes_mes if m.tipo == 'Entrada')
@@ -10267,9 +10267,9 @@ def gerenciar_movimentacoes_caixa(obra_id):
             query = MovimentacaoCaixa.query.filter_by(caixa_id=caixa.id)
             
             if mes:
-                query = query.filter(db.extract('month', MovimentacaoCaixa.data) == mes)
+                query = query.filter(func.extract('month', MovimentacaoCaixa.data) == mes)
             if ano:
-                query = query.filter(db.extract('year', MovimentacaoCaixa.data) == ano)
+                query = query.filter(func.extract('year', MovimentacaoCaixa.data) == ano)
             if tipo:
                 query = query.filter_by(tipo=tipo)
             
@@ -10480,12 +10480,18 @@ def gerar_relatorio_caixa_pdf(obra_id):
         
         print(f"[LOG] Buscando movimentacoes para mes={mes}, ano={ano}")
         
-        # Buscar movimentacoes do periodo
-        movimentacoes = MovimentacaoCaixa.query.filter(
-            MovimentacaoCaixa.caixa_id == caixa.id,
-            db.extract('month', MovimentacaoCaixa.data) == mes,
-            db.extract('year', MovimentacaoCaixa.data) == ano
-        ).order_by(MovimentacaoCaixa.data).all()
+        # Buscar movimentacoes do periodo - CORRIGIDO: usar func.extract
+        try:
+            movimentacoes = MovimentacaoCaixa.query.filter(
+                MovimentacaoCaixa.caixa_id == caixa.id,
+                func.extract('month', MovimentacaoCaixa.data) == mes,
+                func.extract('year', MovimentacaoCaixa.data) == ano
+            ).order_by(MovimentacaoCaixa.data).all()
+        except Exception as e:
+            print(f"[ERRO] Erro na query de movimentacoes: {e}")
+            # Fallback: buscar todas e filtrar em Python
+            todas_movs = MovimentacaoCaixa.query.filter_by(caixa_id=caixa.id).all()
+            movimentacoes = [m for m in todas_movs if m.data and m.data.month == mes and m.data.year == ano]
         
         print(f"[LOG] Encontradas {len(movimentacoes)} movimentacoes")
         
