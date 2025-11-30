@@ -10474,24 +10474,46 @@ def gerar_relatorio_caixa_pdf(obra_id):
         if not caixa:
             return jsonify({"erro": "Caixa nao encontrado"}), 404
         
-        data = request.get_json() or {}
-        mes = int(data.get('mes', date.today().month))
-        ano = int(data.get('ano', date.today().year))
+        req_data = request.get_json() or {}
+        mes = int(req_data.get('mes', date.today().month))
+        ano = int(req_data.get('ano', date.today().year))
         
         print(f"[LOG] Buscando movimentacoes para mes={mes}, ano={ano}")
         
-        # Buscar movimentacoes do periodo
+        # Buscar movimentacoes do periodo - data é DateTime
         todas_movs = MovimentacaoCaixa.query.filter_by(caixa_id=caixa.id).order_by(MovimentacaoCaixa.data).all()
-        movimentacoes = [m for m in todas_movs if m.data and m.data.month == mes and m.data.year == ano]
+        
+        # Filtrar por mes/ano - data é DateTime então precisa acessar corretamente
+        movimentacoes = []
+        for m in todas_movs:
+            if m.data:
+                try:
+                    mov_mes = m.data.month
+                    mov_ano = m.data.year
+                    if mov_mes == mes and mov_ano == ano:
+                        movimentacoes.append(m)
+                except Exception as e:
+                    print(f"[WARN] Erro ao processar data da movimentacao {m.id}: {e}")
         
         print(f"[LOG] Encontradas {len(movimentacoes)} movimentacoes")
         
-        # Calcular totais
+        # Calcular totais - verificar tipo com lowercase para evitar problemas
         saldo_inicial = float(caixa.saldo_inicial or 0)
-        total_entradas = sum(float(m.valor or 0) for m in movimentacoes if m.tipo == 'Entrada')
-        total_saidas = sum(float(m.valor or 0) for m in movimentacoes if m.tipo in ['Saida', 'Saída'])
+        total_entradas = 0
+        total_saidas = 0
+        qtd_comprovantes = 0
+        
+        for m in movimentacoes:
+            tipo = (m.tipo or '').lower()
+            valor = float(m.valor or 0)
+            if tipo == 'entrada':
+                total_entradas += valor
+            elif tipo in ['saida', 'saída']:
+                total_saidas += valor
+            if m.comprovante_url:
+                qtd_comprovantes += 1
+        
         saldo_final = saldo_inicial + total_entradas - total_saidas
-        qtd_comprovantes = sum(1 for m in movimentacoes if m.comprovante_url)
         
         print(f"[LOG] Totais: entradas={total_entradas}, saidas={total_saidas}")
         
@@ -10505,12 +10527,26 @@ def gerar_relatorio_caixa_pdf(obra_id):
         def limpar_texto(texto):
             if not texto:
                 return ""
-            import unicodedata
-            # Normalizar e remover acentos
-            texto_norm = unicodedata.normalize('NFD', str(texto))
-            texto_limpo = ''.join(c for c in texto_norm if unicodedata.category(c) != 'Mn')
-            # Manter apenas ASCII
-            return ''.join(c if ord(c) < 128 else '' for c in texto_limpo)
+            # Substituicoes manuais para evitar problemas
+            subs = {
+                'á': 'a', 'à': 'a', 'ã': 'a', 'â': 'a',
+                'é': 'e', 'ê': 'e', 'è': 'e',
+                'í': 'i', 'ì': 'i',
+                'ó': 'o', 'ô': 'o', 'õ': 'o', 'ò': 'o',
+                'ú': 'u', 'ù': 'u',
+                'ç': 'c', 'ñ': 'n',
+                'Á': 'A', 'À': 'A', 'Ã': 'A', 'Â': 'A',
+                'É': 'E', 'Ê': 'E', 'È': 'E',
+                'Í': 'I', 'Ì': 'I',
+                'Ó': 'O', 'Ô': 'O', 'Õ': 'O', 'Ò': 'O',
+                'Ú': 'U', 'Ù': 'U',
+                'Ç': 'C', 'Ñ': 'N'
+            }
+            resultado = str(texto)
+            for orig, subst in subs.items():
+                resultado = resultado.replace(orig, subst)
+            # Remove caracteres nao-ASCII
+            return ''.join(c if ord(c) < 128 else '' for c in resultado)
         
         # Nome do mes
         nomes_meses = ['', 'Janeiro', 'Fevereiro', 'Marco', 'Abril', 'Maio', 'Junho', 
@@ -10556,16 +10592,20 @@ def gerar_relatorio_caixa_pdf(obra_id):
         elements.append(table_saldo)
         elements.append(Spacer(1, 0.5*cm))
         
-        # Entradas
-        entradas = [m for m in movimentacoes if m.tipo == 'Entrada']
+        # Entradas - usar lowercase para comparacao
+        entradas = [m for m in movimentacoes if (m.tipo or '').lower() == 'entrada']
         if entradas:
             elements.append(Paragraph("<b>ENTRADAS NO PERIODO</b>", styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
             data_entradas = [['Data', 'Descricao', 'Valor']]
             for m in entradas:
+                try:
+                    data_str = m.data.strftime('%d/%m') if m.data else '-'
+                except:
+                    data_str = '-'
                 data_entradas.append([
-                    m.data.strftime('%d/%m') if m.data else '-',
+                    data_str,
                     limpar_texto(m.descricao or '')[:60],
                     formatar_real(m.valor)
                 ])
@@ -10585,16 +10625,20 @@ def gerar_relatorio_caixa_pdf(obra_id):
             elements.append(table_entradas)
             elements.append(Spacer(1, 0.7*cm))
         
-        # Saidas
-        saidas = [m for m in movimentacoes if m.tipo in ['Saida', 'Saída']]
+        # Saidas - usar lowercase para comparacao
+        saidas = [m for m in movimentacoes if (m.tipo or '').lower() in ['saida', 'saída']]
         if saidas:
             elements.append(Paragraph("<b>SAIDAS NO PERIODO</b>", styles['Heading2']))
             elements.append(Spacer(1, 0.3*cm))
             
             data_saidas = [['Data', 'Descricao', 'Valor', 'Comp.']]
             for m in saidas:
+                try:
+                    data_str = m.data.strftime('%d/%m') if m.data else '-'
+                except:
+                    data_str = '-'
                 data_saidas.append([
-                    m.data.strftime('%d/%m') if m.data else '-',
+                    data_str,
                     limpar_texto(m.descricao or '')[:60],
                     formatar_real(m.valor),
                     'Sim' if m.comprovante_url else '-'
