@@ -4426,14 +4426,19 @@ def listar_pagamentos_parcelados(obra_id):
         for pag in pagamentos:
             pag_dict = pag.to_dict()
             
-            # Buscar próxima parcela não paga para obter valor real
-            proxima_parcela = ParcelaIndividual.query.filter(
-                ParcelaIndividual.pagamento_parcelado_id == pag.id,
-                ParcelaIndividual.status != 'Pago'
-            ).order_by(ParcelaIndividual.numero_parcela).first()
+            # Buscar parcelas individuais
+            parcelas = ParcelaIndividual.query.filter_by(
+                pagamento_parcelado_id=pag.id
+            ).order_by(ParcelaIndividual.numero_parcela).all()
             
-            if proxima_parcela:
-                pag_dict['valor_proxima_parcela'] = float(proxima_parcela.valor_parcela)
+            if parcelas:
+                # Encontrar a próxima parcela não paga
+                proxima_parcela = next((p for p in parcelas if p.status not in ['Pago', 'pago']), None)
+                if proxima_parcela:
+                    pag_dict['valor_proxima_parcela'] = float(proxima_parcela.valor_parcela)
+                else:
+                    # Todas pagas - usar a primeira parcela como referência
+                    pag_dict['valor_proxima_parcela'] = float(parcelas[0].valor_parcela)
             
             resultado.append(pag_dict)
         
