@@ -10587,7 +10587,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
         
         # Limpar nomes
         obra_nome_limpo = limpar_texto(obra.nome)
-        user_nome_limpo = limpar_texto(current_user.nome)
+        user_nome_limpo = limpar_texto(current_user.username if current_user else 'Sistema')
         
         # Titulo
         titulo = Paragraph("<b>PRESTACAO DE CONTAS - CAIXA DE OBRA</b>", styles['Title'])
