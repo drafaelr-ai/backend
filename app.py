@@ -10704,6 +10704,92 @@ def gerar_relatorio_caixa_pdf(obra_id):
         rodape += f"Por: {user_nome_limpo}"
         elements.append(Paragraph(rodape, styles['Normal']))
         
+        # === SEÇÃO DE COMPROVANTES ===
+        if qtd_comprovantes > 0:
+            elements.append(Spacer(1, 1*cm))
+            elements.append(Paragraph("<b>COMPROVANTES ANEXOS</b>", styles['Heading2']))
+            elements.append(Spacer(1, 0.5*cm))
+            
+            # Adicionar cada comprovante
+            comprovante_num = 0
+            for m in movimentacoes:
+                if m.comprovante_url:
+                    comprovante_num += 1
+                    try:
+                        # Formatar data
+                        try:
+                            data_str = m.data.strftime('%d/%m/%Y') if m.data else '-'
+                        except:
+                            data_str = '-'
+                        
+                        # Título do comprovante
+                        desc_limpa = limpar_texto(m.descricao or 'Sem descricao')[:50]
+                        titulo_comp = f"<b>Comprovante {comprovante_num}:</b> {desc_limpa} - {data_str} - {formatar_real(m.valor)}"
+                        elements.append(Paragraph(titulo_comp, styles['Normal']))
+                        elements.append(Spacer(1, 0.3*cm))
+                        
+                        # Tentar carregar a imagem
+                        img_data = None
+                        
+                        # Se for base64
+                        if m.comprovante_url.startswith('data:image'):
+                            try:
+                                # Extrair dados base64
+                                base64_data = m.comprovante_url.split(',')[1]
+                                img_data = io.BytesIO(base64.b64decode(base64_data))
+                            except Exception as e:
+                                print(f"[WARN] Erro ao decodificar base64 do comprovante {comprovante_num}: {e}")
+                        
+                        # Se for caminho de arquivo local
+                        elif m.comprovante_url.startswith('/uploads/') or m.comprovante_url.startswith('uploads/'):
+                            try:
+                                # Tentar carregar do sistema de arquivos
+                                file_path = m.comprovante_url.lstrip('/')
+                                if os.path.exists(file_path):
+                                    with open(file_path, 'rb') as f:
+                                        img_data = io.BytesIO(f.read())
+                            except Exception as e:
+                                print(f"[WARN] Erro ao carregar arquivo do comprovante {comprovante_num}: {e}")
+                        
+                        # Se for URL HTTP
+                        elif m.comprovante_url.startswith('http'):
+                            try:
+                                import urllib.request
+                                with urllib.request.urlopen(m.comprovante_url, timeout=10) as response:
+                                    img_data = io.BytesIO(response.read())
+                            except Exception as e:
+                                print(f"[WARN] Erro ao baixar comprovante {comprovante_num}: {e}")
+                        
+                        # Adicionar imagem ao PDF se conseguiu carregar
+                        if img_data:
+                            try:
+                                img = Image(img_data)
+                                # Redimensionar para caber na página (max 15cm de largura, 10cm de altura)
+                                img_width = img.drawWidth
+                                img_height = img.drawHeight
+                                max_width = 15 * cm
+                                max_height = 10 * cm
+                                
+                                # Calcular proporção
+                                ratio = min(max_width / img_width, max_height / img_height)
+                                if ratio < 1:
+                                    img.drawWidth = img_width * ratio
+                                    img.drawHeight = img_height * ratio
+                                
+                                elements.append(img)
+                                elements.append(Spacer(1, 0.5*cm))
+                            except Exception as e:
+                                print(f"[WARN] Erro ao adicionar imagem do comprovante {comprovante_num}: {e}")
+                                elements.append(Paragraph(f"<i>(Erro ao carregar imagem)</i>", styles['Normal']))
+                        else:
+                            elements.append(Paragraph(f"<i>(Comprovante disponivel em: {m.comprovante_url[:60]}...)</i>", styles['Normal']))
+                        
+                        elements.append(Spacer(1, 0.5*cm))
+                        
+                    except Exception as e:
+                        print(f"[WARN] Erro ao processar comprovante {comprovante_num}: {e}")
+                        elements.append(Paragraph(f"<i>(Erro ao processar comprovante)</i>", styles['Normal']))
+        
         # Construir PDF
         print(f"[LOG] Construindo PDF...")
         doc.build(elements)
