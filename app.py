@@ -4972,79 +4972,16 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         print(f"      - segmento: {segmento_info}")
         print(f"      - servico_id: {pagamento.servico_id}")
         
-        # CORREÇÃO: Se tem serviço vinculado, criar APENAS PagamentoServico (não Lancamento)
-        # Se não tem serviço, criar Lancamento
+        # CORREÇÃO: Se tem serviço vinculado, NÃO criar PagamentoServico
+        # As parcelas pagas já aparecem no histórico do serviço via query de ParcelaIndividual
+        # Criar PagamentoServico causaria DUPLICAÇÃO no histórico
         if pagamento.servico_id:
-            # Parcela vinculada a serviço - criar/atualizar PagamentoServico
             servico = db.session.get(Servico, pagamento.servico_id)
-            if not servico:
-                print(f"   ⚠️ Serviço {pagamento.servico_id} não existe! Criando lançamento sem vínculo.")
-                # Serviço não existe, criar lançamento normal
-                novo_lancamento = Lancamento(
-                    obra_id=pagamento.obra_id,
-                    tipo='Despesa',
-                    descricao=descricao_lancamento,
-                    valor_total=parcela.valor_parcela,
-                    valor_pago=parcela.valor_parcela,
-                    data=parcela.data_pagamento,
-                    data_vencimento=parcela.data_vencimento,
-                    status='Pago',
-                    pix=None,
-                    prioridade=0,
-                    fornecedor=pagamento.fornecedor,
-                    servico_id=None
-                )
-                if hasattr(novo_lancamento, 'segmento'):
-                    novo_lancamento.segmento = segmento_info
-                db.session.add(novo_lancamento)
-                db.session.flush()
-                print(f"   ✅ Lançamento criado com ID={novo_lancamento.id} (serviço não encontrado)")
+            if servico:
+                print(f"   ✅ Parcela vinculada ao serviço '{servico.nome}'")
+                print(f"      - NÃO criando PagamentoServico (parcela já aparece no histórico via ParcelaIndividual)")
             else:
-                print(f"   ✅ Parcela vinculada ao serviço '{servico.nome}', criando/atualizando PagamentoServico")
-                
-                # Determinar tipo de pagamento baseado no segmento
-                try:
-                    if hasattr(pagamento, 'segmento') and pagamento.segmento:
-                        if pagamento.segmento == 'Mão de Obra':
-                            tipo_pag = 'mao_de_obra'
-                        else:
-                            tipo_pag = 'material'
-                        print(f"      - Segmento: {pagamento.segmento} -> tipo: {tipo_pag}")
-                    else:
-                        tipo_pag = 'material'
-                        print(f"      - Segmento não encontrado, usando padrão: material")
-                except Exception as seg_error:
-                    tipo_pag = 'material'
-                    print(f"      - Erro ao detectar segmento: {seg_error}, usando padrão: material")
-                
-                # Buscar PagamentoServico existente
-                pagamento_servico_existente = PagamentoServico.query.filter_by(
-                    servico_id=pagamento.servico_id,
-                    fornecedor=pagamento.fornecedor,
-                    tipo_pagamento=tipo_pag
-                ).first()
-                
-                if pagamento_servico_existente:
-                    # Atualizar valor_pago do registro existente
-                    pagamento_servico_existente.valor_pago += parcela.valor_parcela
-                    pagamento_servico_existente.valor_total += parcela.valor_parcela
-                    print(f"      ✅ PagamentoServico ID={pagamento_servico_existente.id} atualizado")
-                    print(f"         Novo valor_pago: R$ {pagamento_servico_existente.valor_pago}")
-                else:
-                    # Criar novo registro
-                    novo_pagamento_servico = PagamentoServico(
-                        servico_id=pagamento.servico_id,
-                        tipo_pagamento=tipo_pag,
-                        valor_total=parcela.valor_parcela,
-                        valor_pago=parcela.valor_parcela,
-                        data=parcela.data_pagamento,
-                        fornecedor=pagamento.fornecedor,
-                        forma_pagamento=parcela.forma_pagamento,
-                        prioridade=0
-                    )
-                    db.session.add(novo_pagamento_servico)
-                    db.session.flush()
-                    print(f"      ✅ Novo PagamentoServico criado com ID={novo_pagamento_servico.id}, tipo={tipo_pag}")
+                print(f"   ⚠️ Serviço {pagamento.servico_id} não existe, mas parcela será mostrada via ParcelaIndividual")
         else:
             # Parcela SEM serviço - criar Lancamento normal
             print(f"   ✅ Parcela sem serviço, criando lançamento geral")
