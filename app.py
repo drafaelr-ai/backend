@@ -92,6 +92,18 @@ def run_auto_migration():
             );
         """)
         print("✅ Tabela parcela_individual recriada vinculada a pagamento_parcelado_v2!")
+        
+        # 4. Alterar comprovante_url para TEXT (suportar base64 grande)
+        print("🔄 Verificando coluna comprovante_url...")
+        cur.execute("""
+            SELECT data_type FROM information_schema.columns 
+            WHERE table_name = 'movimentacao_caixa' AND column_name = 'comprovante_url';
+        """)
+        result = cur.fetchone()
+        if result and result[0] != 'text':
+            print("📝 Alterando comprovante_url para TEXT...")
+            cur.execute("ALTER TABLE movimentacao_caixa ALTER COLUMN comprovante_url TYPE TEXT;")
+            print("✅ Coluna comprovante_url alterada para TEXT!")
             
         conn.commit()
         cur.close()
@@ -613,7 +625,7 @@ class MovimentacaoCaixa(db.Model):
     tipo = db.Column(db.String(10), nullable=False, index=True)  # 'Entrada' ou 'Saída'
     valor = db.Column(db.Float, nullable=False)
     descricao = db.Column(db.String(500), nullable=False)
-    comprovante_url = db.Column(db.String(500), nullable=True)  # URL da imagem do comprovante
+    comprovante_url = db.Column(db.Text, nullable=True)  # Base64 da imagem do comprovante
     observacoes = db.Column(db.Text, nullable=True)
     criado_por = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     criado_em = db.Column(db.DateTime, default=func.now())
@@ -10444,7 +10456,7 @@ def editar_deletar_movimentacao(obra_id, mov_id):
 @app.route('/obras/<int:obra_id>/caixa/upload-comprovante', methods=['POST'])
 @jwt_required()
 def upload_comprovante_caixa(obra_id):
-    """Upload de imagem de comprovante (base64)"""
+    """Upload de imagem de comprovante (base64) - salva direto no banco"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -10455,28 +10467,16 @@ def upload_comprovante_caixa(obra_id):
         if 'imagem' not in data:
             return jsonify({"erro": "Imagem não fornecida"}), 400
         
-        # Processar base64
+        # Pegar o base64 completo (com ou sem prefixo data:image)
         imagem_base64 = data['imagem']
-        if ',' in imagem_base64:
-            imagem_base64 = imagem_base64.split(',')[1]
         
-        # Gerar nome único
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"comprovante_{obra_id}_{timestamp}.jpg"
+        # Se não tiver o prefixo data:image, adicionar
+        if not imagem_base64.startswith('data:image'):
+            imagem_base64 = f"data:image/jpeg;base64,{imagem_base64}"
         
-        # Decodificar e salvar (aqui você pode salvar em S3, Google Cloud Storage, etc)
-        # Por enquanto, retornamos uma URL simulada
-        # Na produção, você deve implementar o upload real
-        
-        comprovante_url = f"/uploads/comprovantes/{filename}"
-        
-        # TODO: Implementar upload real para storage
-        # import boto3  # Para AWS S3
-        # s3 = boto3.client('s3')
-        # s3.put_object(Bucket='seu-bucket', Key=filename, Body=base64.b64decode(imagem_base64))
-        
-        print(f"[LOG] ✅ Comprovante recebido para obra {obra_id}")
-        return jsonify({"comprovante_url": comprovante_url}), 200
+        # Retornar o base64 completo para ser salvo na movimentação
+        print(f"[LOG] ✅ Comprovante base64 recebido para obra {obra_id} ({len(imagem_base64)} chars)")
+        return jsonify({"comprovante_url": imagem_base64}), 200
     
     except Exception as e:
         error_details = traceback.format_exc()
