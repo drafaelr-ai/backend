@@ -104,6 +104,20 @@ def run_auto_migration():
             print("📝 Alterando comprovante_url para TEXT...")
             cur.execute("ALTER TABLE movimentacao_caixa ALTER COLUMN comprovante_url TYPE TEXT;")
             print("✅ Coluna comprovante_url alterada para TEXT!")
+        
+        # 5. Remover FK constraints problemáticas em criado_por (para permitir exclusão de usuários)
+        print("🔄 Removendo FK constraints em criado_por...")
+        fk_constraints_to_drop = [
+            ("diario_obra", "diario_obra_criado_por_fkey"),
+            ("movimentacao_caixa", "movimentacao_caixa_criado_por_fkey"),
+            ("fechamento_caixa", "fechamento_caixa_fechado_por_fkey"),
+        ]
+        for table, constraint in fk_constraints_to_drop:
+            try:
+                cur.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {constraint};")
+                print(f"   ✅ Constraint {constraint} removida (ou não existia)")
+            except Exception as e:
+                print(f"   ⚠️ {constraint}: {str(e)[:50]}")
             
         conn.commit()
         cur.close()
@@ -627,7 +641,7 @@ class MovimentacaoCaixa(db.Model):
     descricao = db.Column(db.String(500), nullable=False)
     comprovante_url = db.Column(db.Text, nullable=True)  # Base64 da imagem do comprovante
     observacoes = db.Column(db.Text, nullable=True)
-    criado_por = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    criado_por = db.Column(db.Integer, nullable=True)  # Sem FK para permitir exclusão de usuários
     criado_em = db.Column(db.DateTime, default=func.now())
     atualizado_em = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
     
@@ -661,7 +675,7 @@ class FechamentoCaixa(db.Model):
     quantidade_comprovantes = db.Column(db.Integer, nullable=False)
     pdf_url = db.Column(db.String(500), nullable=True)
     fechado_em = db.Column(db.DateTime, nullable=False, default=func.now())
-    fechado_por = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    fechado_por = db.Column(db.Integer, nullable=True)  # Sem FK para permitir exclusão de usuários
     
     # Índice composto para consulta rápida por período
     __table_args__ = (
@@ -2977,72 +2991,62 @@ def delete_user(user_id):
             return jsonify({"erro": "Você não pode excluir a si mesmo."}), 403
 
         user = User.query.get_or_404(user_id)
+        username_backup = user.username  # Guardar para log
         
         # Master pode excluir qualquer usuário (exceto a si mesmo, já verificado acima)
-        # Apenas impedir exclusão de outro MASTER
         claims = get_jwt()
         current_user_role = claims.get('role')
         
         if user.role == 'master' and current_user_role != 'master':
             return jsonify({"erro": "Apenas usuários MASTER podem excluir outros MASTER."}), 403
 
-        print(f"--- [LOG] Limpando referências do usuário '{user.username}' (ID: {user_id}) ---")
+        print(f"--- [LOG] Limpando referências do usuário '{username_backup}' (ID: {user_id}) ---")
         
-        # 1. Limpar referências em diario_obra (criado_por)
-        try:
-            db.session.execute(
-                db.text("UPDATE diario_obra SET criado_por = NULL WHERE criado_por = :uid"),
-                {"uid": user_id}
-            )
-            print(f"   ✅ Referências em diario_obra limpas")
-        except Exception as e:
-            print(f"   ⚠️ Aviso ao limpar diario_obra: {e}")
+        # Lista de tabelas/colunas para limpar (SET NULL)
+        tabelas_para_limpar = [
+            ("diario_obra", "criado_por"),
+            ("movimentacao_caixa", "criado_por"),
+            ("fechamento_caixa", "fechado_por"),
+            ("lancamento", "criado_por"),
+            ("pagamento_servico", "criado_por"),
+            ("nota_fiscal", "criado_por"),
+        ]
         
-        # 2. Limpar referências em movimentacao_caixa (criado_por)
-        try:
-            db.session.execute(
-                db.text("UPDATE movimentacao_caixa SET criado_por = NULL WHERE criado_por = :uid"),
-                {"uid": user_id}
-            )
-            print(f"   ✅ Referências em movimentacao_caixa limpas")
-        except Exception as e:
-            print(f"   ⚠️ Aviso ao limpar movimentacao_caixa: {e}")
+        for tabela, coluna in tabelas_para_limpar:
+            try:
+                result = db.session.execute(
+                    db.text(f"UPDATE {tabela} SET {coluna} = NULL WHERE {coluna} = :uid"),
+                    {"uid": user_id}
+                )
+                db.session.commit()
+                print(f"   ✅ {tabela}.{coluna} limpo ({result.rowcount} registros)")
+            except Exception as e:
+                db.session.rollback()
+                print(f"   ⚠️ {tabela}.{coluna}: {str(e)[:50]}")
         
-        # 3. Limpar referências em caixa_obra (fechado_por)
+        # Remover associações de user_obra
         try:
-            db.session.execute(
-                db.text("UPDATE caixa_obra SET fechado_por = NULL WHERE fechado_por = :uid"),
-                {"uid": user_id}
-            )
-            print(f"   ✅ Referências em caixa_obra limpas")
-        except Exception as e:
-            print(f"   ⚠️ Aviso ao limpar caixa_obra: {e}")
-        
-        # 4. Remover associações de user_obra
-        try:
-            db.session.execute(
+            result = db.session.execute(
                 db.text("DELETE FROM user_obra_association WHERE user_id = :uid"),
                 {"uid": user_id}
             )
-            print(f"   ✅ Associações user_obra removidas")
+            db.session.commit()
+            print(f"   ✅ user_obra_association removido ({result.rowcount} registros)")
         except Exception as e:
-            print(f"   ⚠️ Aviso ao limpar user_obra_association: {e}")
+            db.session.rollback()
+            print(f"   ⚠️ user_obra_association: {str(e)[:50]}")
         
-        # 5. Limpar outras possíveis referências
-        try:
-            db.session.execute(
-                db.text("UPDATE lancamento SET criado_por = NULL WHERE criado_por = :uid"),
-                {"uid": user_id}
-            )
-        except Exception as e:
-            pass  # Tabela pode não ter essa coluna
+        # Recarregar o usuário (pode ter sido invalidado pelos commits)
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"erro": "Usuário não encontrado após limpeza."}), 404
         
         # Agora excluir o usuário
         db.session.delete(user)
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Usuário '{user.username}' (ID: {user_id}) foi deletado com sucesso ---")
-        return jsonify({"sucesso": f"Usuário {user.username} deletado com sucesso."}), 200
+        print(f"--- [LOG] ✅ Usuário '{username_backup}' (ID: {user_id}) foi deletado com sucesso ---")
+        return jsonify({"sucesso": f"Usuário {username_backup} deletado com sucesso."}), 200
 
     except Exception as e:
         db.session.rollback()
