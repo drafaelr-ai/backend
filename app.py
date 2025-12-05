@@ -2986,10 +2986,62 @@ def delete_user(user_id):
         if user.role == 'master' and current_user_role != 'master':
             return jsonify({"erro": "Apenas usuários MASTER podem excluir outros MASTER."}), 403
 
+        print(f"--- [LOG] Limpando referências do usuário '{user.username}' (ID: {user_id}) ---")
+        
+        # 1. Limpar referências em diario_obra (criado_por)
+        try:
+            db.session.execute(
+                db.text("UPDATE diario_obra SET criado_por = NULL WHERE criado_por = :uid"),
+                {"uid": user_id}
+            )
+            print(f"   ✅ Referências em diario_obra limpas")
+        except Exception as e:
+            print(f"   ⚠️ Aviso ao limpar diario_obra: {e}")
+        
+        # 2. Limpar referências em movimentacao_caixa (criado_por)
+        try:
+            db.session.execute(
+                db.text("UPDATE movimentacao_caixa SET criado_por = NULL WHERE criado_por = :uid"),
+                {"uid": user_id}
+            )
+            print(f"   ✅ Referências em movimentacao_caixa limpas")
+        except Exception as e:
+            print(f"   ⚠️ Aviso ao limpar movimentacao_caixa: {e}")
+        
+        # 3. Limpar referências em caixa_obra (fechado_por)
+        try:
+            db.session.execute(
+                db.text("UPDATE caixa_obra SET fechado_por = NULL WHERE fechado_por = :uid"),
+                {"uid": user_id}
+            )
+            print(f"   ✅ Referências em caixa_obra limpas")
+        except Exception as e:
+            print(f"   ⚠️ Aviso ao limpar caixa_obra: {e}")
+        
+        # 4. Remover associações de user_obra
+        try:
+            db.session.execute(
+                db.text("DELETE FROM user_obra_association WHERE user_id = :uid"),
+                {"uid": user_id}
+            )
+            print(f"   ✅ Associações user_obra removidas")
+        except Exception as e:
+            print(f"   ⚠️ Aviso ao limpar user_obra_association: {e}")
+        
+        # 5. Limpar outras possíveis referências
+        try:
+            db.session.execute(
+                db.text("UPDATE lancamento SET criado_por = NULL WHERE criado_por = :uid"),
+                {"uid": user_id}
+            )
+        except Exception as e:
+            pass  # Tabela pode não ter essa coluna
+        
+        # Agora excluir o usuário
         db.session.delete(user)
         db.session.commit()
         
-        print(f"--- [LOG] Usuário '{user.username}' (ID: {user_id}) foi deletado ---")
+        print(f"--- [LOG] ✅ Usuário '{user.username}' (ID: {user_id}) foi deletado com sucesso ---")
         return jsonify({"sucesso": f"Usuário {user.username} deletado com sucesso."}), 200
 
     except Exception as e:
