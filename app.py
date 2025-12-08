@@ -2290,16 +2290,22 @@ def aprovar_orcamento(orcamento_id):
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
         
+        print(f"[LOG] Orçamento encontrado: ID={orcamento.id}, Descrição={orcamento.descricao}, Status={orcamento.status}")
+        
         if not user_has_access_to_obra(user, orcamento.obra_id):
+            print(f"[LOG] ❌ Acesso negado - usuário não tem acesso à obra {orcamento.obra_id}")
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
         if orcamento.status != 'Pendente':
-            return jsonify({"erro": "Este orçamento já foi processado."}), 400
+            print(f"[LOG] ❌ Orçamento já foi processado - status atual: {orcamento.status}")
+            return jsonify({"erro": f"Este orçamento já foi processado. Status atual: {orcamento.status}"}), 400
 
         # Receber a opção do frontend
         data = request.get_json() or {}
         opcao = data.get('opcao', 'criar_novo')  # 'criar_novo' ou 'atrelar'
         servico_id = data.get('servico_id')
+        
+        print(f"[LOG] Opção recebida: {opcao}, servico_id: {servico_id}")
 
         orcamento.status = 'Aprovado'
         
@@ -2309,14 +2315,15 @@ def aprovar_orcamento(orcamento_id):
             valor_mo = 0.0
             valor_material = 0.0
             
-            if orcamento.tipo and 'material' in orcamento.tipo.lower():
-                valor_material = orcamento.valor
+            tipo_orcamento = orcamento.tipo or ''
+            if 'material' in tipo_orcamento.lower():
+                valor_material = orcamento.valor or 0.0
             else:
-                valor_mo = orcamento.valor
+                valor_mo = orcamento.valor or 0.0
             
             novo_servico = Servico(
                 obra_id=orcamento.obra_id,
-                nome=orcamento.descricao,
+                nome=orcamento.descricao or 'Serviço sem nome',
                 valor_global_mao_de_obra=valor_mo,
                 valor_global_material=valor_material,
                 responsavel=orcamento.fornecedor
@@ -2327,30 +2334,34 @@ def aprovar_orcamento(orcamento_id):
             # Vincular orçamento ao serviço criado
             orcamento.servico_id = novo_servico.id
             
-            print(f"[LOG] Novo serviço criado: ID {novo_servico.id}, Nome: {novo_servico.nome}, MO: {valor_mo}, MAT: {valor_material}")
+            print(f"[LOG] ✅ Novo serviço criado: ID {novo_servico.id}, Nome: {novo_servico.nome}, MO: {valor_mo}, MAT: {valor_material}")
             
         elif opcao == 'atrelar' and servico_id:
             # Atrelar ao serviço existente
             servico = Servico.query.get(servico_id)
             if not servico or servico.obra_id != orcamento.obra_id:
+                print(f"[LOG] ❌ Serviço inválido ou não pertence à obra")
                 return jsonify({"erro": "Serviço inválido ou não pertence a esta obra."}), 400
             
             # Atualizar valor do serviço baseado no tipo do orçamento
-            if orcamento.tipo and 'material' in orcamento.tipo.lower():
-                servico.valor_global_material = (servico.valor_global_material or 0) + orcamento.valor
-                print(f"[LOG] Orçamento atrelado ao serviço ID {servico.id}, novo valor material: {servico.valor_global_material}")
+            tipo_orcamento = orcamento.tipo or ''
+            if 'material' in tipo_orcamento.lower():
+                servico.valor_global_material = (servico.valor_global_material or 0) + (orcamento.valor or 0)
+                print(f"[LOG] ✅ Orçamento atrelado ao serviço ID {servico.id}, novo valor material: {servico.valor_global_material}")
             else:
-                servico.valor_global_mao_de_obra = (servico.valor_global_mao_de_obra or 0) + orcamento.valor
-                print(f"[LOG] Orçamento atrelado ao serviço ID {servico.id}, novo valor MO: {servico.valor_global_mao_de_obra}")
+                servico.valor_global_mao_de_obra = (servico.valor_global_mao_de_obra or 0) + (orcamento.valor or 0)
+                print(f"[LOG] ✅ Orçamento atrelado ao serviço ID {servico.id}, novo valor MO: {servico.valor_global_mao_de_obra}")
             
             # Vincular orçamento ao serviço
             orcamento.servico_id = servico.id
             
         else:
-            return jsonify({"erro": "Opção inválida para aprovação."}), 400
+            print(f"[LOG] ❌ Opção inválida: opcao={opcao}, servico_id={servico_id}")
+            return jsonify({"erro": "Opção inválida para aprovação. Selecione 'Criar Novo Serviço' ou escolha um serviço existente."}), 400
         
         db.session.commit()
         
+        print(f"[LOG] ✅ Orçamento {orcamento_id} aprovado com sucesso!")
         return jsonify({
             "sucesso": f"Orçamento aprovado! {'Novo serviço criado' if opcao == 'criar_novo' else 'Atrelado ao serviço existente'}."
         }), 200
