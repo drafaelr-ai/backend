@@ -340,6 +340,22 @@ def notificar_operadores_obra(obra_id, tipo, titulo, mensagem=None, item_id=None
                 usuario_origem_id=usuario_origem_id
             )
 
+def notificar_administradores(tipo, titulo, mensagem=None, obra_id=None, item_id=None, item_type=None, usuario_origem_id=None):
+    """Notifica todos os usuários administradores"""
+    admins = User.query.filter_by(role='administrador').all()
+    for admin in admins:
+        if admin.id != usuario_origem_id:  # Não notificar a si mesmo
+            criar_notificacao(
+                usuario_destino_id=admin.id,
+                tipo=tipo,
+                titulo=titulo,
+                mensagem=mensagem,
+                obra_id=obra_id,
+                item_id=item_id,
+                item_type=item_type,
+                usuario_origem_id=usuario_origem_id
+            )
+
 # ---------------------------------------------
 
 
@@ -1824,6 +1840,17 @@ def add_servico(obra_id):
             usuario_origem_id=user.id
         )
         
+        # Notificar administradores
+        notificar_administradores(
+            tipo='servico_criado',
+            titulo=f'Novo serviço criado',
+            mensagem=f'{user.username} criou o serviço "{novo_servico.nome}" na obra {obra_nome}',
+            obra_id=obra_id,
+            item_id=novo_servico.id,
+            item_type='servico',
+            usuario_origem_id=user.id
+        )
+        
         return jsonify(novo_servico.to_dict()), 201
     except Exception as e:
         db.session.rollback()
@@ -2408,6 +2435,21 @@ def add_orcamento(obra_id):
         
         db.session.commit() 
         
+        # --- NOTIFICAÇÃO PARA MASTERS ---
+        obra = Obra.query.get(obra_id)
+        obra_nome = obra.nome if obra else f"Obra {obra_id}"
+        valor_formatado = f"R$ {novo_orcamento.valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        
+        notificar_masters(
+            tipo='orcamento_pendente',
+            titulo='Novo orçamento aguardando aprovação',
+            mensagem=f'{user.username} cadastrou orçamento "{novo_orcamento.descricao}" ({valor_formatado}) na obra {obra_nome}',
+            obra_id=obra_id,
+            item_id=novo_orcamento.id,
+            item_type='orcamento',
+            usuario_origem_id=user.id
+        )
+        
         return jsonify(novo_orcamento.to_dict()), 201
         
     except Exception as e:
@@ -2530,6 +2572,43 @@ def aprovar_orcamento(orcamento_id):
         
         db.session.commit()
         
+        # --- NOTIFICAÇÕES ---
+        obra = Obra.query.get(orcamento.obra_id)
+        obra_nome = obra.nome if obra else f"Obra {orcamento.obra_id}"
+        
+        # Notificar todos os operadores da obra que o orçamento foi aprovado
+        notificar_operadores_obra(
+            obra_id=orcamento.obra_id,
+            tipo='orcamento_aprovado',
+            titulo='Orçamento aprovado',
+            mensagem=f'O orçamento "{orcamento.descricao}" foi aprovado por {user.username}',
+            item_id=orcamento.id,
+            item_type='orcamento',
+            usuario_origem_id=user.id
+        )
+        
+        # Notificar administradores
+        notificar_administradores(
+            tipo='orcamento_aprovado',
+            titulo='Orçamento aprovado',
+            mensagem=f'O orçamento "{orcamento.descricao}" foi aprovado na obra {obra_nome}',
+            obra_id=orcamento.obra_id,
+            item_id=orcamento.id,
+            item_type='orcamento',
+            usuario_origem_id=user.id
+        )
+        
+        # Notificar masters também
+        notificar_masters(
+            tipo='orcamento_aprovado',
+            titulo='Orçamento aprovado',
+            mensagem=f'{user.username} aprovou o orçamento "{orcamento.descricao}" na obra {obra_nome}',
+            obra_id=orcamento.obra_id,
+            item_id=orcamento.id,
+            item_type='orcamento',
+            usuario_origem_id=user.id
+        )
+        
         print(f"[LOG] ✅ Orçamento {orcamento_id} aprovado com sucesso!")
         return jsonify({
             "sucesso": f"Orçamento aprovado! {'Novo serviço criado' if opcao == 'criar_novo' else 'Atrelado ao serviço existente'}."
@@ -2625,6 +2704,43 @@ def rejeitar_orcamento(orcamento_id):
         # <-- MUDANÇA: Em vez de deletar, muda status para 'Rejeitado'
         orcamento.status = 'Rejeitado'
         db.session.commit()
+        
+        # --- NOTIFICAÇÕES ---
+        obra = Obra.query.get(orcamento.obra_id)
+        obra_nome = obra.nome if obra else f"Obra {orcamento.obra_id}"
+        
+        # Notificar operadores da obra
+        notificar_operadores_obra(
+            obra_id=orcamento.obra_id,
+            tipo='orcamento_rejeitado',
+            titulo='Orçamento rejeitado',
+            mensagem=f'O orçamento "{orcamento.descricao}" foi rejeitado por {user.username}',
+            item_id=orcamento.id,
+            item_type='orcamento',
+            usuario_origem_id=user.id
+        )
+        
+        # Notificar administradores
+        notificar_administradores(
+            tipo='orcamento_rejeitado',
+            titulo='Orçamento rejeitado',
+            mensagem=f'O orçamento "{orcamento.descricao}" foi rejeitado na obra {obra_nome}',
+            obra_id=orcamento.obra_id,
+            item_id=orcamento.id,
+            item_type='orcamento',
+            usuario_origem_id=user.id
+        )
+        
+        # Notificar masters
+        notificar_masters(
+            tipo='orcamento_rejeitado',
+            titulo='Orçamento rejeitado',
+            mensagem=f'{user.username} rejeitou o orçamento "{orcamento.descricao}" na obra {obra_nome}',
+            obra_id=orcamento.obra_id,
+            item_id=orcamento.id,
+            item_type='orcamento',
+            usuario_origem_id=user.id
+        )
         
         print(f"--- [LOG] Orçamento {orcamento_id} marcado como Rejeitado ---")
         return jsonify({"sucesso": "Orçamento rejeitado com sucesso"}), 200
