@@ -243,6 +243,103 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
     def to_dict(self):
         return { "id": self.id, "username": self.username, "role": self.role }
+
+# --- MODELO DE NOTIFICAÇÕES ---
+class Notificacao(db.Model):
+    __tablename__ = 'notificacao'
+    id = db.Column(db.Integer, primary_key=True)
+    usuario_destino_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    usuario_origem_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    tipo = db.Column(db.String(50), nullable=False)  # 'servico_criado', 'pagamento_inserido', 'orcamento_aprovado'
+    titulo = db.Column(db.String(255), nullable=False)
+    mensagem = db.Column(db.Text, nullable=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=True)
+    item_id = db.Column(db.Integer, nullable=True)
+    item_type = db.Column(db.String(50), nullable=True)  # 'servico', 'lancamento', 'orcamento'
+    lida = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relacionamentos
+    usuario_destino = db.relationship('User', foreign_keys=[usuario_destino_id], backref='notificacoes_recebidas')
+    usuario_origem = db.relationship('User', foreign_keys=[usuario_origem_id], backref='notificacoes_enviadas')
+    obra = db.relationship('Obra', backref='notificacoes')
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "usuario_destino_id": self.usuario_destino_id,
+            "usuario_origem_id": self.usuario_origem_id,
+            "usuario_origem_nome": self.usuario_origem.username if self.usuario_origem else None,
+            "tipo": self.tipo,
+            "titulo": self.titulo,
+            "mensagem": self.mensagem,
+            "obra_id": self.obra_id,
+            "obra_nome": self.obra.nome if self.obra else None,
+            "item_id": self.item_id,
+            "item_type": self.item_type,
+            "lida": self.lida,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+# Função helper para criar notificações
+def criar_notificacao(usuario_destino_id, tipo, titulo, mensagem=None, obra_id=None, item_id=None, item_type=None, usuario_origem_id=None):
+    """Cria uma nova notificação para um usuário"""
+    try:
+        notificacao = Notificacao(
+            usuario_destino_id=usuario_destino_id,
+            usuario_origem_id=usuario_origem_id,
+            tipo=tipo,
+            titulo=titulo,
+            mensagem=mensagem,
+            obra_id=obra_id,
+            item_id=item_id,
+            item_type=item_type
+        )
+        db.session.add(notificacao)
+        db.session.commit()
+        print(f"--- [NOTIF] Notificação criada: {tipo} para usuário {usuario_destino_id} ---")
+        return notificacao
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] Falha ao criar notificação: {e} ---")
+        return None
+
+def notificar_masters(tipo, titulo, mensagem=None, obra_id=None, item_id=None, item_type=None, usuario_origem_id=None):
+    """Notifica todos os usuários master"""
+    masters = User.query.filter_by(role='master').all()
+    for master in masters:
+        if master.id != usuario_origem_id:  # Não notificar a si mesmo
+            criar_notificacao(
+                usuario_destino_id=master.id,
+                tipo=tipo,
+                titulo=titulo,
+                mensagem=mensagem,
+                obra_id=obra_id,
+                item_id=item_id,
+                item_type=item_type,
+                usuario_origem_id=usuario_origem_id
+            )
+
+def notificar_operadores_obra(obra_id, tipo, titulo, mensagem=None, item_id=None, item_type=None, usuario_origem_id=None):
+    """Notifica todos os operadores (comum) com acesso a uma obra"""
+    obra = Obra.query.get(obra_id)
+    if not obra:
+        return
+    
+    # Buscar usuários com acesso à obra que são 'comum'
+    for user in obra.usuarios_permitidos:
+        if user.role == 'comum' and user.id != usuario_origem_id:
+            criar_notificacao(
+                usuario_destino_id=user.id,
+                tipo=tipo,
+                titulo=titulo,
+                mensagem=mensagem,
+                obra_id=obra_id,
+                item_id=item_id,
+                item_type=item_type,
+                usuario_origem_id=usuario_origem_id
+            )
+
 # ---------------------------------------------
 
 
@@ -1494,6 +1591,19 @@ def add_lancamento(obra_id):
             db.session.add(novo_pagamento_futuro)
             db.session.commit()
             
+            # --- NOTIFICAÇÃO PARA MASTERS ---
+            obra = Obra.query.get(obra_id)
+            obra_nome = obra.nome if obra else f"Obra {obra_id}"
+            notificar_masters(
+                tipo='pagamento_inserido',
+                titulo='Novo pagamento agendado',
+                mensagem=f'{user.username} agendou pagamento "{dados["descricao"]}" de R$ {valor_total:.2f} na obra {obra_nome}',
+                obra_id=obra_id,
+                item_id=novo_pagamento_futuro.id,
+                item_type='pagamento_futuro',
+                usuario_origem_id=user.id
+            )
+            
             print(f"--- [LOG] ✅ PagamentoFuturo criado: ID {novo_pagamento_futuro.id} ---")
             return jsonify(novo_pagamento_futuro.to_dict()), 201
         
@@ -1524,6 +1634,19 @@ def add_lancamento(obra_id):
             )
             db.session.add(novo_lancamento)
             db.session.commit()
+            
+            # --- NOTIFICAÇÃO PARA MASTERS ---
+            obra = Obra.query.get(obra_id)
+            obra_nome = obra.nome if obra else f"Obra {obra_id}"
+            notificar_masters(
+                tipo='pagamento_inserido',
+                titulo='Novo pagamento registrado',
+                mensagem=f'{user.username} registrou pagamento "{dados["descricao"]}" de R$ {valor_total:.2f} na obra {obra_nome}',
+                obra_id=obra_id,
+                item_id=novo_lancamento.id,
+                item_type='lancamento',
+                usuario_origem_id=user.id
+            )
             
             print(f"--- [LOG] ✅ Lançamento criado: ID {novo_lancamento.id} ---")
             return jsonify(novo_lancamento.to_dict()), 201
@@ -1615,11 +1738,11 @@ def deletar_lancamento(lancamento_id):
         # Verificar se o lançamento está PAGO (executado)
         is_pago = lancamento.status == 'Pago'
         
-        # REGRA: Se está PAGO, apenas MASTER pode deletar
-        if is_pago and user_role != 'master':
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} (não MASTER) ---")
+        # REGRA: Se está PAGO, ADMINISTRADOR ou MASTER podem deletar
+        if is_pago and user_role not in ['administrador', 'master']:
+            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} ---")
             return jsonify({
-                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
+                "erro": "Acesso negado: Apenas administradores e masters podem excluir pagamentos já executados (PAGOS)."
             }), 403
         
         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
@@ -1654,7 +1777,7 @@ def deletar_lancamento(lancamento_id):
 # --- ROTAS DE SERVIÇO (Atualizadas) ---
 
 @app.route('/obras/<int:obra_id>/servicos', methods=['POST', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master']) 
+@check_permission(roles=['administrador', 'master', 'comum']) 
 def add_servico(obra_id):
     # ... (código inalterado) ...
     print(f"--- [LOG] Rota /obras/{obra_id}/servicos (POST) acessada ---")
@@ -1674,6 +1797,33 @@ def add_servico(obra_id):
         )
         db.session.add(novo_servico)
         db.session.commit()
+        
+        # --- NOTIFICAÇÕES ---
+        obra = Obra.query.get(obra_id)
+        obra_nome = obra.nome if obra else f"Obra {obra_id}"
+        
+        # Notificar todos os operadores (comum) com acesso à obra
+        notificar_operadores_obra(
+            obra_id=obra_id,
+            tipo='servico_criado',
+            titulo=f'Novo serviço criado',
+            mensagem=f'O serviço "{novo_servico.nome}" foi criado na obra {obra_nome}',
+            item_id=novo_servico.id,
+            item_type='servico',
+            usuario_origem_id=user.id
+        )
+        
+        # Notificar todos os masters
+        notificar_masters(
+            tipo='servico_criado',
+            titulo=f'Novo serviço criado',
+            mensagem=f'{user.username} criou o serviço "{novo_servico.nome}" na obra {obra_nome}',
+            obra_id=obra_id,
+            item_id=novo_servico.id,
+            item_type='servico',
+            usuario_origem_id=user.id
+        )
+        
         return jsonify(novo_servico.to_dict()), 201
     except Exception as e:
         db.session.rollback()
@@ -1835,11 +1985,11 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
         # Verificar se o pagamento está PAGO (completamente executado)
         is_pago = (pagamento.valor_pago or 0) >= (pagamento.valor_total or 0)
         
-        # REGRA: Se está PAGO, apenas MASTER pode deletar
-        if is_pago and user_role != 'master':
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} (não MASTER) ---")
+        # REGRA: Se está PAGO, ADMINISTRADOR ou MASTER podem deletar
+        if is_pago and user_role not in ['administrador', 'master']:
+            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} ---")
             return jsonify({
-                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados (PAGOS)."
+                "erro": "Acesso negado: Apenas administradores e masters podem excluir pagamentos já executados (PAGOS)."
             }), 403
         
         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
@@ -1891,11 +2041,11 @@ def deletar_pagamento_servico_por_id(pagamento_id):
         # Verificar se o pagamento está PAGO
         is_pago = (pagamento.valor_pago or 0) >= (pagamento.valor_total or 0)
         
-        # REGRA: Se está PAGO, apenas MASTER pode deletar
-        if is_pago and user_role != 'master':
+        # REGRA: Se está PAGO, ADMINISTRADOR ou MASTER podem deletar
+        if is_pago and user_role not in ['administrador', 'master']:
             print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} ---")
             return jsonify({
-                "erro": "Acesso negado: Apenas usuários MASTER podem excluir pagamentos já executados."
+                "erro": "Acesso negado: Apenas administradores e masters podem excluir pagamentos já executados."
             }), 403
         
         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
@@ -3103,6 +3253,186 @@ def delete_user(user_id):
         print(f"--- [ERRO] /admin/users/{user_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA NOVA ROTA ---
+# ---------------------------------------------------
+
+# --- ROTAS DE NOTIFICAÇÕES ---
+@app.route('/notificacoes', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def listar_notificacoes():
+    """Lista notificações do usuário logado"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        # Parâmetros opcionais
+        apenas_nao_lidas = request.args.get('apenas_nao_lidas', 'false').lower() == 'true'
+        limite = request.args.get('limite', 50, type=int)
+        
+        query = Notificacao.query.filter_by(usuario_destino_id=current_user_id)
+        
+        if apenas_nao_lidas:
+            query = query.filter_by(lida=False)
+        
+        notificacoes = query.order_by(Notificacao.created_at.desc()).limit(limite).all()
+        
+        return jsonify([n.to_dict() for n in notificacoes]), 200
+    except Exception as e:
+        print(f"--- [ERRO] GET /notificacoes: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+@app.route('/notificacoes/count', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def contar_notificacoes():
+    """Retorna apenas o contador de notificações não lidas"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        count = Notificacao.query.filter_by(
+            usuario_destino_id=current_user_id,
+            lida=False
+        ).count()
+        
+        return jsonify({"count": count}), 200
+    except Exception as e:
+        print(f"--- [ERRO] GET /notificacoes/count: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+@app.route('/notificacoes/<int:notificacao_id>/lida', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def marcar_notificacao_lida(notificacao_id):
+    """Marca uma notificação como lida ou não lida"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        notificacao = Notificacao.query.get_or_404(notificacao_id)
+        
+        # Verificar se pertence ao usuário
+        if notificacao.usuario_destino_id != current_user_id:
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        data = request.get_json() or {}
+        lida = data.get('lida', True)  # Por padrão marca como lida
+        
+        notificacao.lida = lida
+        db.session.commit()
+        
+        return jsonify(notificacao.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] PATCH /notificacoes/{notificacao_id}/lida: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+@app.route('/notificacoes/marcar-todas-lidas', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def marcar_todas_lidas():
+    """Marca todas as notificações do usuário como lidas"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        Notificacao.query.filter_by(
+            usuario_destino_id=current_user_id,
+            lida=False
+        ).update({'lida': True})
+        
+        db.session.commit()
+        
+        return jsonify({"sucesso": "Todas as notificações foram marcadas como lidas"}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] POST /notificacoes/marcar-todas-lidas: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+@app.route('/notificacoes/limpar-lidas', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def limpar_notificacoes_lidas():
+    """Remove todas as notificações lidas do usuário"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        deleted = Notificacao.query.filter_by(
+            usuario_destino_id=current_user_id,
+            lida=True
+        ).delete()
+        
+        db.session.commit()
+        
+        return jsonify({"sucesso": f"{deleted} notificações removidas"}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] DELETE /notificacoes/limpar-lidas: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+@app.route('/notificacoes/<int:notificacao_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def deletar_notificacao(notificacao_id):
+    """Remove uma notificação específica"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        notificacao = Notificacao.query.get_or_404(notificacao_id)
+        
+        # Verificar se pertence ao usuário
+        if notificacao.usuario_destino_id != current_user_id:
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        db.session.delete(notificacao)
+        db.session.commit()
+        
+        return jsonify({"sucesso": "Notificação removida"}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] DELETE /notificacoes/{notificacao_id}: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+# --- ROTA PARA ALTERAR ROLE DE USUÁRIO ---
+@app.route('/admin/users/<int:user_id>/role', methods=['PATCH', 'OPTIONS'])
+@check_permission(roles=['master'])
+def alterar_role_usuario(user_id):
+    """Permite ao master alterar o role de qualquer usuário"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        data = request.get_json()
+        novo_role = data.get('role')
+        
+        if novo_role not in ['master', 'administrador', 'comum']:
+            return jsonify({"erro": "Role inválido. Use: master, administrador ou comum"}), 400
+        
+        user = User.query.get_or_404(user_id)
+        role_anterior = user.role
+        
+        user.role = novo_role
+        db.session.commit()
+        
+        print(f"--- [LOG] Role do usuário '{user.username}' alterado de '{role_anterior}' para '{novo_role}' ---")
+        
+        return jsonify({
+            "sucesso": f"Role alterado para {novo_role}",
+            "user": user.to_dict()
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] PATCH /admin/users/{user_id}/role: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
 # ---------------------------------------------------
 
 # --- ROTAS DE NOTAS FISCAIS ---
