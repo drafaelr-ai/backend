@@ -1597,6 +1597,7 @@ def deletar_lancamento(lancamento_id):
     Deleta um lançamento com regras específicas:
     - Lançamentos PAGOS só podem ser deletados por usuários MASTER
     - Lançamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
+    - Remove também notas fiscais associadas ao lançamento
     """
     print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
     
@@ -1628,12 +1629,20 @@ def deletar_lancamento(lancamento_id):
                 "erro": "Acesso negado: Permissão insuficiente para excluir este lançamento."
             }), 403
         
-        # Se passou nas verificações, deletar o lançamento
+        # 1. Remover notas fiscais associadas a este lançamento
+        notas_removidas = NotaFiscal.query.filter_by(
+            item_id=lancamento_id,
+            item_type='lancamento'
+        ).delete()
+        if notas_removidas > 0:
+            print(f"--- [LOG] {notas_removidas} nota(s) fiscal(is) removida(s) do lançamento {lancamento_id} ---")
+        
+        # 2. Deletar o lançamento
         db.session.delete(lancamento)
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Lançamento {lancamento_id} (Status: {lancamento.status}) deletado com sucesso pelo usuário {user_role} ---")
-        return jsonify({"sucesso": "Lançamento deletado"}), 200
+        print(f"--- [LOG] ✅ Lançamento {lancamento_id} (Status: {lancamento.status}) e dados associados deletados com sucesso pelo usuário {user_role} ---")
+        return jsonify({"sucesso": "Lançamento e dados associados deletados"}), 200
         
     except Exception as e:
         db.session.rollback()
@@ -1862,6 +1871,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
     Regras:
     - Pagamentos PAGOS só podem ser deletados por usuários MASTER
     - Pagamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
+    - Remove também notas fiscais associadas ao pagamento
     """
     print(f"--- [LOG] Rota /pagamentos-servico/{pagamento_id} (DELETE) acessada ---")
     
@@ -1895,11 +1905,20 @@ def deletar_pagamento_servico_por_id(pagamento_id):
                 "erro": "Acesso negado: Permissão insuficiente."
             }), 403
         
+        # 1. Remover notas fiscais associadas a este pagamento
+        notas_removidas = NotaFiscal.query.filter_by(
+            item_id=pagamento_id,
+            item_type='pagamento_servico'
+        ).delete()
+        if notas_removidas > 0:
+            print(f"--- [LOG] {notas_removidas} nota(s) fiscal(is) removida(s) do pagamento {pagamento_id} ---")
+        
+        # 2. Remover o pagamento
         db.session.delete(pagamento)
         db.session.commit()
         
         print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado pelo usuário {user_role} ---")
-        return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
+        return jsonify({"sucesso": "Pagamento e dados associados deletados com sucesso"}), 200
         
     except Exception as e:
         db.session.rollback()
