@@ -2305,17 +2305,29 @@ def aprovar_orcamento(orcamento_id):
         
         if opcao == 'criar_novo':
             # Criar novo serviço baseado no orçamento
+            # Determinar se é MO ou Material baseado no tipo do orçamento
+            valor_mo = 0.0
+            valor_material = 0.0
+            
+            if orcamento.tipo and 'material' in orcamento.tipo.lower():
+                valor_material = orcamento.valor
+            else:
+                valor_mo = orcamento.valor
+            
             novo_servico = Servico(
                 obra_id=orcamento.obra_id,
                 nome=orcamento.descricao,
-                valor_total=orcamento.valor,
-                valor_pago=0.0,
-                porcentagem=0.0
+                valor_global_mao_de_obra=valor_mo,
+                valor_global_material=valor_material,
+                responsavel=orcamento.fornecedor
             )
             db.session.add(novo_servico)
             db.session.flush()  # Para obter o ID do serviço
             
-            print(f"[LOG] Novo serviço criado: ID {novo_servico.id}, Nome: {novo_servico.nome}")
+            # Vincular orçamento ao serviço criado
+            orcamento.servico_id = novo_servico.id
+            
+            print(f"[LOG] Novo serviço criado: ID {novo_servico.id}, Nome: {novo_servico.nome}, MO: {valor_mo}, MAT: {valor_material}")
             
         elif opcao == 'atrelar' and servico_id:
             # Atrelar ao serviço existente
@@ -2323,9 +2335,16 @@ def aprovar_orcamento(orcamento_id):
             if not servico or servico.obra_id != orcamento.obra_id:
                 return jsonify({"erro": "Serviço inválido ou não pertence a esta obra."}), 400
             
-            # Atualizar valor total do serviço
-            servico.valor_total += orcamento.valor
-            print(f"[LOG] Orçamento atrelado ao serviço ID {servico.id}, novo valor total: {servico.valor_total}")
+            # Atualizar valor do serviço baseado no tipo do orçamento
+            if orcamento.tipo and 'material' in orcamento.tipo.lower():
+                servico.valor_global_material = (servico.valor_global_material or 0) + orcamento.valor
+                print(f"[LOG] Orçamento atrelado ao serviço ID {servico.id}, novo valor material: {servico.valor_global_material}")
+            else:
+                servico.valor_global_mao_de_obra = (servico.valor_global_mao_de_obra or 0) + orcamento.valor
+                print(f"[LOG] Orçamento atrelado ao serviço ID {servico.id}, novo valor MO: {servico.valor_global_mao_de_obra}")
+            
+            # Vincular orçamento ao serviço
+            orcamento.servico_id = servico.id
             
         else:
             return jsonify({"erro": "Opção inválida para aprovação."}), 400
