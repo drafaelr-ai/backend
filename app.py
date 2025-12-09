@@ -606,6 +606,7 @@ class PagamentoParcelado(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Ativo')  # Ativo/Concluído/Cancelado
     observacoes = db.Column(db.Text, nullable=True)
     pix = db.Column(db.String(255), nullable=True)  # Chave PIX para pagamento
+    forma_pagamento = db.Column(db.String(20), nullable=True, default='PIX')  # PIX, Boleto, Transferência
     
     def to_dict(self):
         """Converte objeto para dicionário de forma segura sem dependências externas"""
@@ -671,6 +672,7 @@ class PagamentoParcelado(db.Model):
             "status": self.status,
             "observacoes": self.observacoes,
             "pix": self.pix,
+            "forma_pagamento": self.forma_pagamento or 'PIX',
             "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero <= self.numero_parcelas else None,
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
             "servico_id": self.servico_id,
@@ -690,6 +692,7 @@ class ParcelaIndividual(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Previsto', index=True)  # OTIMIZAÇÃO: Índice adicionado
     data_pagamento = db.Column(db.Date, nullable=True)
     forma_pagamento = db.Column(db.String(50), nullable=True)  # PIX, Boleto, TED, Dinheiro, etc
+    codigo_barras = db.Column(db.String(60), nullable=True)  # Linha digitável do boleto (47-48 dígitos)
     observacao = db.Column(db.String(255), nullable=True)
     
     # OTIMIZAÇÃO: Índice composto para consultas mais eficientes
@@ -709,6 +712,7 @@ class ParcelaIndividual(db.Model):
             "status": self.status,
             "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
             "forma_pagamento": self.forma_pagamento,
+            "codigo_barras": self.codigo_barras,
             "observacao": self.observacao
         }
 
@@ -5076,7 +5080,7 @@ def listar_pagamentos_parcelados(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST'])
 @jwt_required()
 def criar_pagamento_parcelado(obra_id):
-    """Cria um novo pagamento parcelado"""
+    """Cria um novo pagamento parcelado com suporte a parcelas customizadas (boletos)"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -5087,14 +5091,14 @@ def criar_pagamento_parcelado(obra_id):
         valor_total = float(data.get('valor_total', 0))
         numero_parcelas = int(data.get('numero_parcelas', 1))
         valor_parcela = valor_total / numero_parcelas if numero_parcelas > 0 else 0
-        periodicidade = data.get('periodicidade', 'Mensal')  # Semanal ou Mensal
+        periodicidade = data.get('periodicidade', 'Mensal')  # Semanal, Quinzenal ou Mensal
+        forma_pagamento = data.get('forma_pagamento', 'PIX')  # PIX, Boleto, Transferência
         
         novo_pagamento = PagamentoParcelado(
             obra_id=obra_id,
             descricao=data.get('descricao'),
             fornecedor=data.get('fornecedor') or None,
-            servico_id=data.get('servico_id') or None,  # Vínculo opcional com serviço (converte "" para None)
-            # segmento será adicionado quando a coluna existir no banco
+            servico_id=data.get('servico_id') or None,
             valor_total=valor_total,
             numero_parcelas=numero_parcelas,
             valor_parcela=valor_parcela,
@@ -5103,13 +5107,47 @@ def criar_pagamento_parcelado(obra_id):
             parcelas_pagas=0,
             status='Ativo',
             observacoes=data.get('observacoes') or None,
-            pix=data.get('pix') or None
+            pix=data.get('pix') or None,
+            forma_pagamento=forma_pagamento
         )
         
         db.session.add(novo_pagamento)
+        db.session.flush()  # Para obter o ID do pagamento
+        
+        # Verificar se há parcelas customizadas (valores diferentes ou boletos com código)
+        parcelas_customizadas = data.get('parcelas_customizadas', [])
+        
+        if parcelas_customizadas and len(parcelas_customizadas) > 0:
+            # Criar parcelas com valores e códigos de barras customizados
+            print(f"--- [LOG] Criando {len(parcelas_customizadas)} parcelas customizadas ---")
+            
+            for i, parcela_data in enumerate(parcelas_customizadas):
+                numero = i + 1
+                valor = float(parcela_data.get('valor', valor_parcela))
+                data_venc = datetime.strptime(parcela_data.get('data_vencimento'), '%Y-%m-%d').date()
+                codigo_barras = parcela_data.get('codigo_barras') or None
+                
+                nova_parcela = ParcelaIndividual(
+                    pagamento_parcelado_id=novo_pagamento.id,
+                    numero_parcela=numero,
+                    valor_parcela=valor,
+                    data_vencimento=data_venc,
+                    status='Previsto',
+                    data_pagamento=None,
+                    forma_pagamento=forma_pagamento,
+                    codigo_barras=codigo_barras,
+                    observacao=None
+                )
+                db.session.add(nova_parcela)
+            
+            # Atualizar valor_parcela do pagamento (média) se valores diferentes
+            soma_valores = sum(float(p.get('valor', 0)) for p in parcelas_customizadas)
+            novo_pagamento.valor_total = soma_valores
+            novo_pagamento.valor_parcela = soma_valores / numero_parcelas if numero_parcelas > 0 else 0
+        
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento parcelado criado: ID {novo_pagamento.id} na obra {obra_id} ---")
+        print(f"--- [LOG] Pagamento parcelado criado: ID {novo_pagamento.id} na obra {obra_id} (forma: {forma_pagamento}) ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
@@ -5141,6 +5179,8 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
             pagamento.observacoes = data['observacoes']
         if 'pix' in data:
             pagamento.pix = data['pix']
+        if 'forma_pagamento' in data:
+            pagamento.forma_pagamento = data['forma_pagamento']
         if 'parcelas_pagas' in data:
             pagamento.parcelas_pagas = int(data['parcelas_pagas'])
             # Atualiza status se todas as parcelas foram pagas
@@ -5479,6 +5519,9 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
         
         if 'observacao' in data:
             parcela.observacao = data['observacao']
+        
+        if 'codigo_barras' in data:
+            parcela.codigo_barras = data['codigo_barras'] or None
         
         if 'status' in data:
             parcela.status = data['status']
@@ -6135,15 +6178,14 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 elements.append(Spacer(1, 0.2*cm))
                 
                 if parcelas:
-                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'PIX', 'Pago em']]
+                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'PIX/Código', 'Pago em']]
                     
                     # Variável para controlar cores
                     row_colors = []
                     
-                    # Obter o PIX do pagamento parcelado (pai) e truncar se necessário
-                    pix_raw = pag_parcelado.pix if pag_parcelado.pix else '-'
-                    # Truncar PIX longo para caber na coluna (máx 18 caracteres)
-                    pix_display = (pix_raw[:16] + '..') if len(pix_raw) > 18 else pix_raw
+                    # Obter forma de pagamento e PIX do pagamento parcelado (pai)
+                    forma_pag = pag_parcelado.forma_pagamento if hasattr(pag_parcelado, 'forma_pagamento') and pag_parcelado.forma_pagamento else 'PIX'
+                    pix_raw = pag_parcelado.pix if pag_parcelado.pix else ''
                     
                     for parcela in parcelas:
                         # Determinar se está vencida
@@ -6154,6 +6196,18 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         else:
                             row_colors.append(colors.whitesmoke if len(row_colors) % 2 == 0 else colors.white)
                         
+                        # Determinar valor da coluna "PIX/Código"
+                        # Priorizar código de barras da parcela (boleto), senão usar PIX do pagamento
+                        codigo_barras = parcela.codigo_barras if hasattr(parcela, 'codigo_barras') and parcela.codigo_barras else ''
+                        if codigo_barras:
+                            # Truncar código de barras (mostrar últimos 12 dígitos)
+                            pix_codigo_display = '...' + codigo_barras[-12:] if len(codigo_barras) > 12 else codigo_barras
+                        elif pix_raw:
+                            # Truncar PIX longo (máx 16 caracteres)
+                            pix_codigo_display = (pix_raw[:14] + '..') if len(pix_raw) > 16 else pix_raw
+                        else:
+                            pix_codigo_display = '-'
+                        
                         # Determinar valor da coluna "Pago em"
                         pago_em_display = parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
                         
@@ -6163,11 +6217,11 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                             parcela.data_vencimento.strftime('%d/%m/%Y'),
                             status_display,
                             pag_parcelado.periodicidade or '-',  # Tipo = Periodicidade
-                            pix_display,  # PIX do pagamento parcelado (truncado)
+                            pix_codigo_display,  # PIX ou Código de Barras (truncado)
                             pago_em_display
                         ])
                     
-                    # Ajustar larguras: Parcela, Valor, Vencimento, Status, Tipo, PIX, Pago em
+                    # Ajustar larguras: Parcela, Valor, Vencimento, Status, Tipo, PIX/Código, Pago em
                     table_parcelas = Table(data_parcelas, colWidths=[1.5*cm, 2*cm, 2.2*cm, 1.8*cm, 1.8*cm, 3*cm, 2.2*cm])
                     
                     style_list = [
