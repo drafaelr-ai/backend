@@ -605,8 +605,9 @@ class PagamentoParcelado(db.Model):
     parcelas_pagas = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(20), nullable=False, default='Ativo')  # Ativo/Concluído/Cancelado
     observacoes = db.Column(db.Text, nullable=True)
-    pix = db.Column(db.String(255), nullable=True)  # Chave PIX para pagamento
-    forma_pagamento = db.Column(db.String(20), nullable=True, default='PIX')  # PIX, Boleto, Transferência
+    # NOTA: Colunas pix e forma_pagamento serão adicionadas após ALTER TABLE no banco
+    # pix = db.Column(db.String(255), nullable=True)
+    # forma_pagamento = db.Column(db.String(20), nullable=True, default='PIX')
     
     def to_dict(self):
         """Converte objeto para dicionário de forma segura sem dependências externas"""
@@ -658,15 +659,21 @@ class PagamentoParcelado(db.Model):
         
         # Montar dicionário de resposta
         # Tratar pix e forma_pagamento de forma defensiva (colunas podem não existir ainda)
+        pix_value = None
+        forma_pagamento_value = 'PIX'
+        
+        # Tentar acessar se existir
         try:
-            pix_value = self.pix if hasattr(self, 'pix') else None
+            if hasattr(self, 'pix'):
+                pix_value = self.pix
         except:
-            pix_value = None
+            pass
         
         try:
-            forma_pagamento_value = self.forma_pagamento if hasattr(self, 'forma_pagamento') and self.forma_pagamento else 'PIX'
+            if hasattr(self, 'forma_pagamento'):
+                forma_pagamento_value = self.forma_pagamento or 'PIX'
         except:
-            forma_pagamento_value = 'PIX'
+            pass
         
         return {
             "id": self.id,
@@ -703,7 +710,8 @@ class ParcelaIndividual(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Previsto', index=True)  # OTIMIZAÇÃO: Índice adicionado
     data_pagamento = db.Column(db.Date, nullable=True)
     forma_pagamento = db.Column(db.String(50), nullable=True)  # PIX, Boleto, TED, Dinheiro, etc
-    codigo_barras = db.Column(db.String(60), nullable=True)  # Linha digitável do boleto (47-48 dígitos)
+    # NOTA: Coluna codigo_barras será adicionada após ALTER TABLE no banco
+    # codigo_barras = db.Column(db.String(60), nullable=True)
     observacao = db.Column(db.String(255), nullable=True)
     
     # OTIMIZAÇÃO: Índice composto para consultas mais eficientes
@@ -715,10 +723,12 @@ class ParcelaIndividual(db.Model):
     
     def to_dict(self):
         # Tratar codigo_barras de forma defensiva (coluna pode não existir ainda)
+        codigo_barras_value = None
         try:
-            codigo_barras_value = self.codigo_barras if hasattr(self, 'codigo_barras') else None
+            if hasattr(self, 'codigo_barras'):
+                codigo_barras_value = self.codigo_barras
         except:
-            codigo_barras_value = None
+            pass
         
         return {
             "id": self.id,
