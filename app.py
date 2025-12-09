@@ -1796,15 +1796,16 @@ def get_obra_detalhes(obra_id):
         total_boletos_com_servico_pagos = sum(b.valor or 0 for b in boletos_obra if b.vinculado_servico_id and b.status == 'Pago')
         
         # Boletos SEM serviço vinculado = despesas extras
-        total_boletos_sem_servico = sum(b.valor or 0 for b in boletos_obra if not b.vinculado_servico_id)
+        total_boletos_sem_servico_pendentes = sum(b.valor or 0 for b in boletos_obra if not b.vinculado_servico_id and b.status in ['Pendente', 'Vencido'])
+        total_boletos_sem_servico_pagos = sum(b.valor or 0 for b in boletos_obra if not b.vinculado_servico_id and b.status == 'Pago')
         
         # Atualizar KPIs com boletos
         kpi_orcamento_total += total_boletos_com_servico  # Boletos com serviço aumentam o orçamento
-        kpi_valores_pagos += total_boletos_com_servico_pagos  # Boletos pagos com serviço vão para valores pagos
+        kpi_valores_pagos += total_boletos_com_servico_pagos + total_boletos_sem_servico_pagos  # TODOS boletos pagos vão para valores pagos
         kpi_liberado_pagamento += total_boletos_com_servico_pendentes  # Boletos pendentes com serviço vão para liberado
-        kpi_despesas_extras += total_boletos_sem_servico  # Boletos sem serviço vão para despesas extras
+        kpi_despesas_extras += total_boletos_sem_servico_pendentes + total_boletos_sem_servico_pagos  # Boletos sem serviço vão para despesas extras
         
-        print(f"--- [DEBUG KPI] 📄 BOLETOS: com_servico={total_boletos_com_servico:.2f} (pendentes={total_boletos_com_servico_pendentes:.2f}, pagos={total_boletos_com_servico_pagos:.2f}), sem_servico={total_boletos_sem_servico:.2f} ---")
+        print(f"--- [DEBUG KPI] 📄 BOLETOS: com_servico={total_boletos_com_servico:.2f} (pend={total_boletos_com_servico_pendentes:.2f}, pago={total_boletos_com_servico_pagos:.2f}), sem_servico_pend={total_boletos_sem_servico_pendentes:.2f}, sem_servico_pago={total_boletos_sem_servico_pagos:.2f} ---")
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
