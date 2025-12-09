@@ -6140,8 +6140,10 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     # Variável para controlar cores
                     row_colors = []
                     
-                    # Obter o PIX do pagamento parcelado (pai)
-                    pix_display = pag_parcelado.pix if pag_parcelado.pix else '-'
+                    # Obter o PIX do pagamento parcelado (pai) e truncar se necessário
+                    pix_raw = pag_parcelado.pix if pag_parcelado.pix else '-'
+                    # Truncar PIX longo para caber na coluna (máx 18 caracteres)
+                    pix_display = (pix_raw[:16] + '..') if len(pix_raw) > 18 else pix_raw
                     
                     for parcela in parcelas:
                         # Determinar se está vencida
@@ -6161,11 +6163,12 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                             parcela.data_vencimento.strftime('%d/%m/%Y'),
                             status_display,
                             pag_parcelado.periodicidade or '-',  # Tipo = Periodicidade
-                            pix_display,  # PIX do pagamento parcelado
+                            pix_display,  # PIX do pagamento parcelado (truncado)
                             pago_em_display
                         ])
                     
-                    table_parcelas = Table(data_parcelas, colWidths=[1.8*cm, 2.2*cm, 2.2*cm, 2*cm, 2*cm, 2.2*cm, 2.2*cm])
+                    # Ajustar larguras: Parcela, Valor, Vencimento, Status, Tipo, PIX, Pago em
+                    table_parcelas = Table(data_parcelas, colWidths=[1.5*cm, 2*cm, 2.2*cm, 1.8*cm, 1.8*cm, 3*cm, 2.2*cm])
                     
                     style_list = [
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5cb85c')),
