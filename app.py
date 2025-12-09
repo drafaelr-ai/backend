@@ -441,6 +441,7 @@ class Boleto(db.Model):
     
     # Relacionamentos
     usuario = db.relationship('User', backref='boletos_cadastrados')
+    servico = db.relationship('Servico', foreign_keys=[vinculado_servico_id], backref='boletos_vinculados')
     
     def to_dict(self):
         # Calcular dias para vencimento
@@ -461,6 +462,15 @@ class Boleto(db.Model):
         else:
             urgencia = 'normal'
         
+        # Buscar nome do serviço vinculado
+        servico_nome = None
+        if self.vinculado_servico_id:
+            try:
+                servico = db.session.get(Servico, self.vinculado_servico_id)
+                servico_nome = servico.nome if servico else None
+            except:
+                pass
+        
         return {
             "id": self.id,
             "obra_id": self.obra_id,
@@ -474,6 +484,7 @@ class Boleto(db.Model):
             "status": self.status,
             "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
             "vinculado_servico_id": self.vinculado_servico_id,
+            "servico_nome": servico_nome,
             "arquivo_nome": self.arquivo_nome,
             "tem_pdf": bool(self.arquivo_pdf),
             "dias_para_vencer": dias_para_vencer,
@@ -1775,6 +1786,28 @@ def get_obra_detalhes(obra_id):
         # Pagamentos futuros e parcelas SEM serviço vinculado
         kpi_despesas_extras = total_futuros_extra + total_parcelas_extra
         print(f"--- [DEBUG KPI] ✅ DESPESAS EXTRAS (fora da planilha) = R$ {kpi_despesas_extras:.2f} ---")
+        
+        # --- BOLETOS ---
+        # Boletos pendentes (sem serviço vinculado = despesa extra)
+        boletos_obra = Boleto.query.filter_by(obra_id=obra_id).all()
+        total_boletos_pagos = sum(b.valor or 0 for b in boletos_obra if b.status == 'Pago')
+        total_boletos_pendentes = sum(b.valor or 0 for b in boletos_obra if b.status in ['Pendente', 'Vencido'])
+        
+        # Boletos SEM serviço vinculado = despesas extras
+        total_boletos_extra = sum(b.valor or 0 for b in boletos_obra if b.status in ['Pendente', 'Vencido'] and not b.vinculado_servico_id)
+        # Boletos COM serviço vinculado = liberado para pagamento
+        total_boletos_servico = sum(b.valor or 0 for b in boletos_obra if b.status in ['Pendente', 'Vencido'] and b.vinculado_servico_id)
+        # Boletos pagos que estavam vinculados a serviço
+        total_boletos_pagos_servico = sum(b.valor or 0 for b in boletos_obra if b.status == 'Pago' and b.vinculado_servico_id)
+        # Boletos pagos sem serviço
+        total_boletos_pagos_extra = sum(b.valor or 0 for b in boletos_obra if b.status == 'Pago' and not b.vinculado_servico_id)
+        
+        # Atualizar KPIs com boletos
+        kpi_valores_pagos += total_boletos_pagos_servico  # Boletos pagos com serviço vão para valores pagos
+        kpi_liberado_pagamento += total_boletos_servico   # Boletos pendentes com serviço vão para liberado
+        kpi_despesas_extras += total_boletos_extra + total_boletos_pagos_extra  # Boletos sem serviço vão para despesas extras
+        
+        print(f"--- [DEBUG KPI] 📄 BOLETOS: pagos={total_boletos_pagos:.2f}, pendentes={total_boletos_pendentes:.2f}, extras={total_boletos_extra:.2f} ---")
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
@@ -1867,6 +1900,32 @@ def get_obra_detalhes(obra_id):
                 "prioridade": 0,
                 "fornecedor": pag_parcelado.fornecedor
             })
+        
+        # --- INCLUIR BOLETOS PAGOS NO HISTÓRICO ---
+        for boleto in boletos_obra:
+            if boleto.status == 'Pago':
+                servico_nome = None
+                if boleto.vinculado_servico_id:
+                    servico = db.session.get(Servico, boleto.vinculado_servico_id)
+                    servico_nome = servico.nome if servico else None
+                
+                historico_unificado.append({
+                    "id": f"boleto-{boleto.id}",
+                    "tipo_registro": "boleto",
+                    "data": boleto.data_pagamento or boleto.data_vencimento,
+                    "data_vencimento": boleto.data_vencimento,
+                    "descricao": f"📄 Boleto: {boleto.descricao or boleto.beneficiario or 'Sem descrição'}",
+                    "tipo": "Boleto",
+                    "valor_total": float(boleto.valor or 0.0),
+                    "valor_pago": float(boleto.valor or 0.0),
+                    "status": "Pago",
+                    "pix": boleto.codigo_barras,
+                    "servico_id": boleto.vinculado_servico_id,
+                    "servico_nome": servico_nome,
+                    "boleto_id": boleto.id,
+                    "prioridade": 0,
+                    "fornecedor": boleto.beneficiario
+                })
         
         # Re-ordenar após incluir parcelas
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
@@ -11990,118 +12049,8 @@ def gerar_relatorio_caixa_pdf(obra_id):
 # ==============================================================================
 # ROTAS DE GESTÃO DE BOLETOS
 # ==============================================================================
-
-def extrair_dados_boleto_pdf(pdf_base64):
-    """Extrai dados do boleto a partir do PDF usando regex"""
-    import re
-    import base64
-    
-    try:
-        # Tentar usar pdfplumber se disponível
-        try:
-            import pdfplumber
-            import io
-            
-            pdf_bytes = base64.b64decode(pdf_base64)
-            texto = ""
-            
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                for page in pdf.pages:
-                    texto += page.extract_text() or ""
-            
-            print(f"--- [LOG] Texto extraído do PDF: {len(texto)} caracteres ---")
-            
-        except ImportError:
-            print("--- [AVISO] pdfplumber não disponível, usando extração básica ---")
-            texto = ""
-        
-        resultado = {
-            "codigo_barras": None,
-            "valor": None,
-            "data_vencimento": None,
-            "beneficiario": None,
-            "sucesso": False,
-            "texto_extraido": texto[:500] if texto else None
-        }
-        
-        if not texto:
-            return resultado
-        
-        # Regex para linha digitável (formato: XXXXX.XXXXX XXXXX.XXXXXX XXXXX.XXXXXX X XXXXXXXXXXXXXX)
-        padrao_linha_digitavel = r'(\d{5}[.\s]?\d{5}[.\s]?\d{5}[.\s]?\d{6}[.\s]?\d{5}[.\s]?\d{6}[.\s]?\d[.\s]?\d{14})'
-        match_codigo = re.search(padrao_linha_digitavel, texto.replace('\n', ' '))
-        
-        # Tentar padrão alternativo (só números, 47 dígitos)
-        if not match_codigo:
-            padrao_47_digitos = r'(\d{47})'
-            match_codigo = re.search(padrao_47_digitos, texto.replace('\n', ' ').replace(' ', '').replace('.', ''))
-        
-        if match_codigo:
-            codigo = match_codigo.group(1)
-            # Limpar e formatar
-            codigo_limpo = re.sub(r'[^\d]', '', codigo)
-            resultado["codigo_barras"] = codigo_limpo
-        
-        # Regex para valor (R$ X.XXX,XX ou similar)
-        padrao_valor = r'R\$\s*([\d.,]+)'
-        matches_valor = re.findall(padrao_valor, texto)
-        if matches_valor:
-            # Pegar o maior valor encontrado (provavelmente é o valor do boleto)
-            valores = []
-            for v in matches_valor:
-                try:
-                    valor_limpo = v.replace('.', '').replace(',', '.')
-                    valores.append(float(valor_limpo))
-                except:
-                    pass
-            if valores:
-                resultado["valor"] = max(valores)
-        
-        # Regex para data de vencimento
-        padrao_data = r'[Vv]encimento[:\s]*([\d]{2}[/.-][\d]{2}[/.-][\d]{4})'
-        match_data = re.search(padrao_data, texto)
-        if not match_data:
-            # Tentar padrão genérico de data
-            padrao_data_generico = r'(\d{2}/\d{2}/\d{4})'
-            matches_data = re.findall(padrao_data_generico, texto)
-            if matches_data:
-                # Pegar a primeira data que parece ser futura
-                for d in matches_data:
-                    try:
-                        data_parsed = datetime.strptime(d, '%d/%m/%Y').date()
-                        if data_parsed >= date.today():
-                            resultado["data_vencimento"] = data_parsed.isoformat()
-                            break
-                    except:
-                        pass
-        else:
-            try:
-                data_str = match_data.group(1).replace('-', '/').replace('.', '/')
-                data_parsed = datetime.strptime(data_str, '%d/%m/%Y').date()
-                resultado["data_vencimento"] = data_parsed.isoformat()
-            except:
-                pass
-        
-        # Tentar extrair beneficiário
-        padrao_beneficiario = r'[Bb]enefici[aá]rio[:\s]*([A-Za-z\s]+)'
-        match_beneficiario = re.search(padrao_beneficiario, texto)
-        if match_beneficiario:
-            resultado["beneficiario"] = match_beneficiario.group(1).strip()[:100]
-        
-        resultado["sucesso"] = bool(resultado["codigo_barras"] or resultado["valor"])
-        
-        return resultado
-        
-    except Exception as e:
-        print(f"--- [ERRO] extrair_dados_boleto_pdf: {str(e)} ---")
-        return {
-            "codigo_barras": None,
-            "valor": None,
-            "data_vencimento": None,
-            "beneficiario": None,
-            "sucesso": False,
-            "erro": str(e)
-        }
+# NOTA: A função extrair_dados_boleto_pdf está definida no início do arquivo (linha ~485)
+# e suporta extração de múltiplos boletos de PDFs com várias páginas
 
 
 @app.route('/obras/<int:obra_id>/boletos', methods=['GET'])
@@ -12172,6 +12121,7 @@ def criar_boleto(obra_id):
             valor=float(data.get('valor')),
             data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             status='Pendente',
+            vinculado_servico_id=data.get('vinculado_servico_id'),  # Vincular a serviço
             arquivo_nome=data.get('arquivo_nome'),
             arquivo_pdf=data.get('arquivo_pdf') or data.get('arquivo_base64')
         )
@@ -12245,6 +12195,8 @@ def editar_boleto(obra_id, boleto_id):
             boleto.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
         if 'status' in data:
             boleto.status = data['status']
+        if 'vinculado_servico_id' in data:
+            boleto.vinculado_servico_id = data['vinculado_servico_id']
         
         db.session.commit()
         
