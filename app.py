@@ -118,6 +118,52 @@ def run_auto_migration():
                 print(f"   ✅ Constraint {constraint} removida (ou não existia)")
             except Exception as e:
                 print(f"   ⚠️ {constraint}: {str(e)[:50]}")
+        
+        # 6. Criar tabela de boletos (Gestão de Boletos)
+        print("🔄 Verificando tabela boleto...")
+        cur.execute("SELECT to_regclass('public.boleto');")
+        if not cur.fetchone()[0]:
+            print("📝 Criando tabela boleto...")
+            cur.execute("""
+                CREATE TABLE boleto (
+                    id SERIAL PRIMARY KEY,
+                    obra_id INTEGER NOT NULL REFERENCES obra(id) ON DELETE CASCADE,
+                    usuario_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                    
+                    -- Dados do boleto
+                    codigo_barras VARCHAR(60),
+                    descricao VARCHAR(255),
+                    beneficiario VARCHAR(255),
+                    valor DECIMAL(12,2),
+                    data_vencimento DATE NOT NULL,
+                    
+                    -- Controle
+                    status VARCHAR(20) DEFAULT 'Pendente',
+                    data_pagamento DATE,
+                    vinculado_servico_id INTEGER,
+                    
+                    -- Arquivo PDF
+                    arquivo_nome VARCHAR(255),
+                    arquivo_pdf TEXT,
+                    
+                    -- Alertas enviados
+                    alerta_7dias BOOLEAN DEFAULT FALSE,
+                    alerta_3dias BOOLEAN DEFAULT FALSE,
+                    alerta_hoje BOOLEAN DEFAULT FALSE,
+                    alerta_vencido BOOLEAN DEFAULT FALSE,
+                    
+                    -- Timestamps
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX idx_boleto_obra ON boleto(obra_id);
+                CREATE INDEX idx_boleto_vencimento ON boleto(data_vencimento);
+                CREATE INDEX idx_boleto_status ON boleto(status);
+            """)
+            print("✅ Tabela boleto criada!")
+        else:
+            print("   ℹ️ Tabela boleto já existe")
             
         conn.commit()
         cur.close()
@@ -358,6 +404,268 @@ def notificar_administradores(tipo, titulo, mensagem=None, obra_id=None, item_id
 
 # ---------------------------------------------
 
+# ===== MODELO DE BOLETOS (GESTÃO DE BOLETOS) =====
+class Boleto(db.Model):
+    """Modelo para gestão de boletos com upload de PDF e extração automática"""
+    __tablename__ = 'boleto'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    
+    # Dados do boleto
+    codigo_barras = db.Column(db.String(60), nullable=True)
+    descricao = db.Column(db.String(255), nullable=True)
+    beneficiario = db.Column(db.String(255), nullable=True)
+    valor = db.Column(db.Float, nullable=True)
+    data_vencimento = db.Column(db.Date, nullable=False)
+    
+    # Controle
+    status = db.Column(db.String(20), default='Pendente')  # Pendente, Pago, Vencido
+    data_pagamento = db.Column(db.Date, nullable=True)
+    vinculado_servico_id = db.Column(db.Integer, nullable=True)
+    
+    # Arquivo PDF
+    arquivo_nome = db.Column(db.String(255), nullable=True)
+    arquivo_pdf = db.Column(db.Text, nullable=True)  # Base64 do PDF
+    
+    # Alertas enviados
+    alerta_7dias = db.Column(db.Boolean, default=False)
+    alerta_3dias = db.Column(db.Boolean, default=False)
+    alerta_hoje = db.Column(db.Boolean, default=False)
+    alerta_vencido = db.Column(db.Boolean, default=False)
+    
+    # Timestamps
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relacionamentos
+    usuario = db.relationship('User', backref='boletos_cadastrados')
+    
+    def to_dict(self):
+        # Calcular dias para vencimento
+        hoje = date.today()
+        dias_para_vencer = (self.data_vencimento - hoje).days if self.data_vencimento else 0
+        
+        # Determinar urgência
+        if self.status == 'Pago':
+            urgencia = 'pago'
+        elif dias_para_vencer < 0:
+            urgencia = 'vencido'
+        elif dias_para_vencer == 0:
+            urgencia = 'hoje'
+        elif dias_para_vencer <= 3:
+            urgencia = 'urgente'
+        elif dias_para_vencer <= 7:
+            urgencia = 'atencao'
+        else:
+            urgencia = 'normal'
+        
+        return {
+            "id": self.id,
+            "obra_id": self.obra_id,
+            "usuario_id": self.usuario_id,
+            "usuario_nome": self.usuario.username if self.usuario else None,
+            "codigo_barras": self.codigo_barras,
+            "descricao": self.descricao,
+            "beneficiario": self.beneficiario,
+            "valor": self.valor,
+            "data_vencimento": self.data_vencimento.isoformat() if self.data_vencimento else None,
+            "status": self.status,
+            "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
+            "vinculado_servico_id": self.vinculado_servico_id,
+            "arquivo_nome": self.arquivo_nome,
+            "tem_pdf": bool(self.arquivo_pdf),
+            "dias_para_vencer": dias_para_vencer,
+            "urgencia": urgencia,
+            "created_at": self.created_at.isoformat() if self.created_at else None
+        }
+
+# Função para extrair dados do PDF do boleto
+def extrair_dados_boleto_pdf(pdf_base64):
+    """Extrai código de barras, vencimento e valor do PDF do boleto"""
+    try:
+        import pdfplumber
+        
+        # Decodificar base64
+        if ',' in pdf_base64:
+            pdf_base64 = pdf_base64.split(',')[1]
+        
+        pdf_bytes = base64.b64decode(pdf_base64)
+        
+        dados = {
+            'codigo_barras': None,
+            'data_vencimento': None,
+            'valor': None,
+            'beneficiario': None
+        }
+        
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            texto = ""
+            for page in pdf.pages:
+                texto += page.extract_text() or ""
+            
+            # Debug: imprimir texto extraído
+            print(f"--- [BOLETO] Texto extraído ({len(texto)} chars): {texto[:500]}...")
+            
+            # Regex para linha digitável (formato: 00000.00000 00000.000000 00000.000000 0 00000000000000)
+            # ou formato compacto: 00000000000000000000000000000000000000000000000
+            patterns_codigo = [
+                r'(\d{5}\.?\d{5}\s*\d{5}\.?\d{6}\s*\d{5}\.?\d{6}\s*\d\s*\d{14})',  # Formato com pontos e espaços
+                r'(\d{47,48})',  # Formato compacto
+                r'(\d{5}\.\d{5}\s+\d{5}\.\d{6}\s+\d{5}\.\d{6}\s+\d\s+\d{14})',  # Com espaços
+            ]
+            
+            for pattern in patterns_codigo:
+                match = re.search(pattern, texto)
+                if match:
+                    codigo = re.sub(r'[\s\.]', '', match.group(1))  # Remove espaços e pontos
+                    if len(codigo) >= 47:
+                        dados['codigo_barras'] = codigo[:48]
+                        print(f"--- [BOLETO] Código encontrado: {dados['codigo_barras']}")
+                        break
+            
+            # Regex para data de vencimento
+            patterns_venc = [
+                r'[Vv]encimento[:\s]*(\d{2}[/.-]\d{2}[/.-]\d{4})',
+                r'[Vv]enc\.?[:\s]*(\d{2}[/.-]\d{2}[/.-]\d{4})',
+                r'[Dd]ata\s*[Vv]encimento[:\s]*(\d{2}[/.-]\d{2}[/.-]\d{4})',
+                r'(\d{2}/\d{2}/\d{4})',  # Qualquer data no formato DD/MM/YYYY
+            ]
+            
+            for pattern in patterns_venc:
+                match = re.search(pattern, texto)
+                if match:
+                    data_str = match.group(1).replace('-', '/').replace('.', '/')
+                    try:
+                        dados['data_vencimento'] = datetime.strptime(data_str, '%d/%m/%Y').date().isoformat()
+                        print(f"--- [BOLETO] Data encontrada: {dados['data_vencimento']}")
+                        break
+                    except:
+                        continue
+            
+            # Regex para valor
+            patterns_valor = [
+                r'[Vv]alor\s*(?:do\s*)?[Dd]ocumento[:\s]*R?\$?\s*([\d.,]+)',
+                r'[Vv]alor\s*[Cc]obrado[:\s]*R?\$?\s*([\d.,]+)',
+                r'[Vv]alor[:\s]*R?\$?\s*([\d.,]+)',
+                r'R\$\s*([\d]{1,3}(?:\.?\d{3})*,\d{2})',
+            ]
+            
+            for pattern in patterns_valor:
+                match = re.search(pattern, texto)
+                if match:
+                    valor_str = match.group(1).replace('.', '').replace(',', '.')
+                    try:
+                        dados['valor'] = float(valor_str)
+                        print(f"--- [BOLETO] Valor encontrado: {dados['valor']}")
+                        break
+                    except:
+                        continue
+            
+            # Regex para beneficiário/cedente
+            patterns_benef = [
+                r'[Bb]enefici[áa]rio[:\s]*([A-Za-zÀ-ÿ\s\-\.]+(?:LTDA|S\.?A\.?|ME|EPP)?)',
+                r'[Cc]edente[:\s]*([A-Za-zÀ-ÿ\s\-\.]+(?:LTDA|S\.?A\.?|ME|EPP)?)',
+                r'[Rr]az[ãa]o\s*[Ss]ocial[:\s]*([A-Za-zÀ-ÿ\s\-\.]+)',
+            ]
+            
+            for pattern in patterns_benef:
+                match = re.search(pattern, texto)
+                if match:
+                    dados['beneficiario'] = match.group(1).strip()[:100]
+                    print(f"--- [BOLETO] Beneficiário encontrado: {dados['beneficiario']}")
+                    break
+        
+        # Verificar se conseguiu extrair pelo menos um dado
+        dados['sucesso'] = any([
+            dados['codigo_barras'],
+            dados['data_vencimento'],
+            dados['valor'],
+            dados['beneficiario']
+        ])
+        
+        return dados
+        
+    except ImportError:
+        print("--- [BOLETO] pdfplumber não instalado, tentando extração básica ---")
+        return {'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
+    except Exception as e:
+        print(f"--- [BOLETO] Erro ao extrair dados do PDF: {e} ---")
+        traceback.print_exc()
+        return {'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
+
+# Função para verificar e criar alertas de boletos vencendo
+def verificar_alertas_boletos():
+    """Verifica boletos próximos do vencimento e cria notificações"""
+    try:
+        hoje = date.today()
+        
+        # Buscar boletos pendentes
+        boletos = Boleto.query.filter(Boleto.status == 'Pendente').all()
+        
+        for boleto in boletos:
+            dias = (boleto.data_vencimento - hoje).days
+            obra = db.session.get(Obra, boleto.obra_id)
+            obra_nome = obra.nome if obra else "Obra"
+            
+            # Boleto vencido
+            if dias < 0 and not boleto.alerta_vencido:
+                boleto.status = 'Vencido'
+                boleto.alerta_vencido = True
+                # Notificar masters e admins
+                notificar_masters(
+                    tipo='boleto_vencido',
+                    titulo=f'🚨 Boleto VENCIDO - {obra_nome}',
+                    mensagem=f'{boleto.descricao or boleto.beneficiario} - R$ {boleto.valor:.2f} venceu em {boleto.data_vencimento.strftime("%d/%m/%Y")}',
+                    obra_id=boleto.obra_id,
+                    item_id=boleto.id,
+                    item_type='boleto'
+                )
+            
+            # Vence hoje
+            elif dias == 0 and not boleto.alerta_hoje:
+                boleto.alerta_hoje = True
+                notificar_masters(
+                    tipo='boleto_hoje',
+                    titulo=f'🚨 Boleto vence HOJE - {obra_nome}',
+                    mensagem=f'{boleto.descricao or boleto.beneficiario} - R$ {boleto.valor:.2f}',
+                    obra_id=boleto.obra_id,
+                    item_id=boleto.id,
+                    item_type='boleto'
+                )
+            
+            # Vence em 3 dias
+            elif dias <= 3 and dias > 0 and not boleto.alerta_3dias:
+                boleto.alerta_3dias = True
+                notificar_masters(
+                    tipo='boleto_3dias',
+                    titulo=f'⚠️ Boleto vence em {dias} dias - {obra_nome}',
+                    mensagem=f'{boleto.descricao or boleto.beneficiario} - R$ {boleto.valor:.2f} vence em {boleto.data_vencimento.strftime("%d/%m/%Y")}',
+                    obra_id=boleto.obra_id,
+                    item_id=boleto.id,
+                    item_type='boleto'
+                )
+            
+            # Vence em 7 dias
+            elif dias <= 7 and dias > 3 and not boleto.alerta_7dias:
+                boleto.alerta_7dias = True
+                notificar_masters(
+                    tipo='boleto_7dias',
+                    titulo=f'🔔 Boleto vence em {dias} dias - {obra_nome}',
+                    mensagem=f'{boleto.descricao or boleto.beneficiario} - R$ {boleto.valor:.2f} vence em {boleto.data_vencimento.strftime("%d/%m/%Y")}',
+                    obra_id=boleto.obra_id,
+                    item_id=boleto.id,
+                    item_type='boleto'
+                )
+        
+        db.session.commit()
+        print(f"--- [BOLETO] Verificação de alertas concluída ({len(boletos)} boletos) ---")
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] Falha ao verificar alertas de boletos: {e} ---")
+
 
 # --- MODELOS DO BANCO DE DADOS (PRINCIPAIS) ---
 class Obra(db.Model):
@@ -372,6 +680,7 @@ class Obra(db.Model):
     pagamentos_futuros = db.relationship('PagamentoFuturo', backref='obra', lazy=True, cascade="all, delete-orphan")
     pagamentos_parcelados = db.relationship('PagamentoParcelado', backref='obra', lazy=True, cascade="all, delete-orphan")
     diarios = db.relationship('DiarioObra', backref='obra', lazy=True, cascade="all, delete-orphan")
+    boletos = db.relationship('Boleto', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
         return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
@@ -6016,6 +6325,12 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             ).order_by(ParcelaIndividual.numero_parcela).all()
             todas_parcelas.extend(parcelas)
         
+        # Buscar boletos da obra
+        try:
+            boletos_obra = Boleto.query.filter_by(obra_id=obra_id).order_by(Boleto.data_vencimento.asc()).all()
+        except:
+            boletos_obra = []
+        
         # Criar o PDF
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=1.5*cm, bottomMargin=1.5*cm)
@@ -6308,6 +6623,91 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     elements.append(table_parcelas)
                     elements.append(Spacer(1, 0.3*cm))
         
+        # Seção: Boletos
+        if boletos_obra:
+            secao_numero += 1
+            section_title = Paragraph(f"<b>{secao_numero}. Boletos</b>", styles['Heading2'])
+            elements.append(section_title)
+            elements.append(Spacer(1, 0.3*cm))
+            
+            # Separar boletos por status
+            boletos_pendentes = [b for b in boletos_obra if b.status == 'Pendente' and b.data_vencimento >= hoje]
+            boletos_vencidos = [b for b in boletos_obra if b.status == 'Vencido' or (b.status == 'Pendente' and b.data_vencimento < hoje)]
+            boletos_pagos = [b for b in boletos_obra if b.status == 'Pago']
+            
+            # Tabela de boletos pendentes
+            if boletos_pendentes or boletos_vencidos:
+                data_boletos = [['Descrição', 'Beneficiário', 'Vencimento', 'Valor', 'Status', 'Código']]
+                row_colors_boletos = []
+                
+                # Vencidos primeiro
+                for boleto in boletos_vencidos:
+                    codigo_truncado = ('...' + boleto.codigo_barras[-12:]) if boleto.codigo_barras and len(boleto.codigo_barras) > 12 else (boleto.codigo_barras or '-')
+                    data_boletos.append([
+                        boleto.descricao[:30] + '...' if len(boleto.descricao) > 30 else boleto.descricao,
+                        (boleto.beneficiario[:20] + '...' if boleto.beneficiario and len(boleto.beneficiario) > 20 else boleto.beneficiario) or '-',
+                        boleto.data_vencimento.strftime('%d/%m/%Y'),
+                        formatar_real(boleto.valor),
+                        'Vencido',
+                        codigo_truncado
+                    ])
+                    row_colors_boletos.append(colors.HexColor('#ffcdd2'))  # Vermelho claro
+                
+                # Pendentes
+                for boleto in boletos_pendentes:
+                    dias_para_vencer = (boleto.data_vencimento - hoje).days
+                    codigo_truncado = ('...' + boleto.codigo_barras[-12:]) if boleto.codigo_barras and len(boleto.codigo_barras) > 12 else (boleto.codigo_barras or '-')
+                    
+                    # Cor baseada na urgência
+                    if dias_para_vencer <= 3:
+                        cor = colors.HexColor('#ffcc80')  # Laranja claro
+                    elif dias_para_vencer <= 7:
+                        cor = colors.HexColor('#fff9c4')  # Amarelo claro
+                    else:
+                        cor = colors.whitesmoke if len(row_colors_boletos) % 2 == 0 else colors.white
+                    
+                    data_boletos.append([
+                        boleto.descricao[:30] + '...' if len(boleto.descricao) > 30 else boleto.descricao,
+                        (boleto.beneficiario[:20] + '...' if boleto.beneficiario and len(boleto.beneficiario) > 20 else boleto.beneficiario) or '-',
+                        boleto.data_vencimento.strftime('%d/%m/%Y'),
+                        formatar_real(boleto.valor),
+                        f'{dias_para_vencer}d' if dias_para_vencer >= 0 else 'Vencido',
+                        codigo_truncado
+                    ])
+                    row_colors_boletos.append(cor)
+                
+                table_boletos = Table(data_boletos, colWidths=[4*cm, 3*cm, 2.2*cm, 2.2*cm, 1.5*cm, 3*cm])
+                
+                style_boletos = [
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#607d8b')),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('FONTSIZE', (0, 1), (-1, -1), 8),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ]
+                
+                for i, color in enumerate(row_colors_boletos, start=1):
+                    style_boletos.append(('BACKGROUND', (0, i), (-1, i), color))
+                    if color == colors.HexColor('#ffcdd2'):
+                        style_boletos.append(('TEXTCOLOR', (4, i), (4, i), colors.HexColor('#d32f2f')))
+                
+                table_boletos.setStyle(TableStyle(style_boletos))
+                elements.append(table_boletos)
+                elements.append(Spacer(1, 0.3*cm))
+            
+            # Resumo de boletos pagos
+            if boletos_pagos:
+                total_boletos_pagos = sum(b.valor for b in boletos_pagos)
+                info_pagos = Paragraph(
+                    f"<i>Boletos pagos: {len(boletos_pagos)} | Total: {formatar_real(total_boletos_pagos)}</i>",
+                    styles['Normal']
+                )
+                elements.append(info_pagos)
+                elements.append(Spacer(1, 0.3*cm))
+        
         # Seção: Resumo Financeiro
         secao_numero += 1
         section_title = Paragraph(f"<b>{secao_numero}. Resumo Financeiro</b>", styles['Heading2'])
@@ -6333,8 +6733,13 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             parcela.valor_parcela for parcela in todas_parcelas if parcela.status == 'Pago'
         )
         
-        total_geral_vencido = total_vencidos_unicos + total_servicos_vencidos + total_parcelas_vencidas
-        total_geral_previsto = total_futuros + total_servicos_pendentes + total_parcelados
+        # Boletos
+        total_boletos_pendentes = sum(b.valor for b in boletos_obra if b.status == 'Pendente' and b.data_vencimento >= hoje) if boletos_obra else 0
+        total_boletos_vencidos = sum(b.valor for b in boletos_obra if b.status == 'Vencido' or (b.status == 'Pendente' and b.data_vencimento < hoje)) if boletos_obra else 0
+        total_boletos_pagos = sum(b.valor for b in boletos_obra if b.status == 'Pago') if boletos_obra else 0
+        
+        total_geral_vencido = total_vencidos_unicos + total_servicos_vencidos + total_parcelas_vencidas + total_boletos_vencidos
+        total_geral_previsto = total_futuros + total_servicos_pendentes + total_parcelados + total_boletos_pendentes
         total_geral = total_geral_vencido + total_geral_previsto
         
         resumo_data = [
@@ -6342,12 +6747,15 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             ['Total de Pagamentos Futuros (Previstos)', formatar_real(total_futuros)],
             ['Total de Pagamentos de Serviços (Previstos)', formatar_real(total_servicos_pendentes)],
             ['Total de Parcelas (Previstas)', formatar_real(total_parcelados)],
+            ['Total de Boletos (Pendentes)', formatar_real(total_boletos_pendentes)],
             ['', ''],  # Linha em branco
             ['Total de Pagamentos VENCIDOS (Únicos)', formatar_real(total_vencidos_unicos)],
             ['Total de Pagamentos de Serviços VENCIDOS', formatar_real(total_servicos_vencidos)],
             ['Total de Parcelas VENCIDAS', formatar_real(total_parcelas_vencidas)],
+            ['Total de Boletos VENCIDOS', formatar_real(total_boletos_vencidos)],
             ['', ''],  # Linha em branco
             ['Total de Parcelas PAGAS', formatar_real(total_pago_parcelas)],
+            ['Total de Boletos PAGOS', formatar_real(total_boletos_pagos)],
             ['', ''],  # Linha em branco
             ['TOTAL VENCIDO ⚠️', formatar_real(total_geral_vencido)],
             ['TOTAL PREVISTO', formatar_real(total_geral_previsto)],
@@ -11491,6 +11899,483 @@ def gerar_relatorio_caixa_pdf(obra_id):
             "mensagem": str(e),
             "detalhes": error_details
         }), 500
+
+
+# ==============================================================================
+# ROTAS DE GESTÃO DE BOLETOS
+# ==============================================================================
+
+def extrair_dados_boleto_pdf(pdf_base64):
+    """Extrai dados do boleto a partir do PDF usando regex"""
+    import re
+    import base64
+    
+    try:
+        # Tentar usar pdfplumber se disponível
+        try:
+            import pdfplumber
+            import io
+            
+            pdf_bytes = base64.b64decode(pdf_base64)
+            texto = ""
+            
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                for page in pdf.pages:
+                    texto += page.extract_text() or ""
+            
+            print(f"--- [LOG] Texto extraído do PDF: {len(texto)} caracteres ---")
+            
+        except ImportError:
+            print("--- [AVISO] pdfplumber não disponível, usando extração básica ---")
+            texto = ""
+        
+        resultado = {
+            "codigo_barras": None,
+            "valor": None,
+            "data_vencimento": None,
+            "beneficiario": None,
+            "sucesso": False,
+            "texto_extraido": texto[:500] if texto else None
+        }
+        
+        if not texto:
+            return resultado
+        
+        # Regex para linha digitável (formato: XXXXX.XXXXX XXXXX.XXXXXX XXXXX.XXXXXX X XXXXXXXXXXXXXX)
+        padrao_linha_digitavel = r'(\d{5}[.\s]?\d{5}[.\s]?\d{5}[.\s]?\d{6}[.\s]?\d{5}[.\s]?\d{6}[.\s]?\d[.\s]?\d{14})'
+        match_codigo = re.search(padrao_linha_digitavel, texto.replace('\n', ' '))
+        
+        # Tentar padrão alternativo (só números, 47 dígitos)
+        if not match_codigo:
+            padrao_47_digitos = r'(\d{47})'
+            match_codigo = re.search(padrao_47_digitos, texto.replace('\n', ' ').replace(' ', '').replace('.', ''))
+        
+        if match_codigo:
+            codigo = match_codigo.group(1)
+            # Limpar e formatar
+            codigo_limpo = re.sub(r'[^\d]', '', codigo)
+            resultado["codigo_barras"] = codigo_limpo
+        
+        # Regex para valor (R$ X.XXX,XX ou similar)
+        padrao_valor = r'R\$\s*([\d.,]+)'
+        matches_valor = re.findall(padrao_valor, texto)
+        if matches_valor:
+            # Pegar o maior valor encontrado (provavelmente é o valor do boleto)
+            valores = []
+            for v in matches_valor:
+                try:
+                    valor_limpo = v.replace('.', '').replace(',', '.')
+                    valores.append(float(valor_limpo))
+                except:
+                    pass
+            if valores:
+                resultado["valor"] = max(valores)
+        
+        # Regex para data de vencimento
+        padrao_data = r'[Vv]encimento[:\s]*([\d]{2}[/.-][\d]{2}[/.-][\d]{4})'
+        match_data = re.search(padrao_data, texto)
+        if not match_data:
+            # Tentar padrão genérico de data
+            padrao_data_generico = r'(\d{2}/\d{2}/\d{4})'
+            matches_data = re.findall(padrao_data_generico, texto)
+            if matches_data:
+                # Pegar a primeira data que parece ser futura
+                for d in matches_data:
+                    try:
+                        data_parsed = datetime.strptime(d, '%d/%m/%Y').date()
+                        if data_parsed >= date.today():
+                            resultado["data_vencimento"] = data_parsed.isoformat()
+                            break
+                    except:
+                        pass
+        else:
+            try:
+                data_str = match_data.group(1).replace('-', '/').replace('.', '/')
+                data_parsed = datetime.strptime(data_str, '%d/%m/%Y').date()
+                resultado["data_vencimento"] = data_parsed.isoformat()
+            except:
+                pass
+        
+        # Tentar extrair beneficiário
+        padrao_beneficiario = r'[Bb]enefici[aá]rio[:\s]*([A-Za-z\s]+)'
+        match_beneficiario = re.search(padrao_beneficiario, texto)
+        if match_beneficiario:
+            resultado["beneficiario"] = match_beneficiario.group(1).strip()[:100]
+        
+        resultado["sucesso"] = bool(resultado["codigo_barras"] or resultado["valor"])
+        
+        return resultado
+        
+    except Exception as e:
+        print(f"--- [ERRO] extrair_dados_boleto_pdf: {str(e)} ---")
+        return {
+            "codigo_barras": None,
+            "valor": None,
+            "data_vencimento": None,
+            "beneficiario": None,
+            "sucesso": False,
+            "erro": str(e)
+        }
+
+
+@app.route('/obras/<int:obra_id>/boletos', methods=['GET'])
+@jwt_required()
+def listar_boletos(obra_id):
+    """Lista todos os boletos de uma obra"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Parâmetros de filtro
+        status_filtro = request.args.get('status', None)  # Pendente, Pago, Vencido
+        dias = request.args.get('dias', None)  # Filtrar por dias até vencimento
+        
+        query = Boleto.query.filter_by(obra_id=obra_id)
+        
+        if status_filtro:
+            query = query.filter_by(status=status_filtro)
+        
+        if dias:
+            dias_int = int(dias)
+            data_limite = date.today() + timedelta(days=dias_int)
+            query = query.filter(Boleto.data_vencimento <= data_limite)
+        
+        boletos = query.order_by(Boleto.data_vencimento.asc()).all()
+        
+        # Atualizar status de vencidos
+        hoje = date.today()
+        for boleto in boletos:
+            if boleto.status == 'Pendente' and boleto.data_vencimento < hoje:
+                boleto.status = 'Vencido'
+        db.session.commit()
+        
+        return jsonify([b.to_dict() for b in boletos]), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] listar_boletos: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/boletos', methods=['POST'])
+@jwt_required()
+def criar_boleto(obra_id):
+    """Cria um novo boleto"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        data = request.get_json()
+        
+        # Validar campos obrigatórios
+        if not data.get('descricao'):
+            return jsonify({"erro": "Descrição é obrigatória"}), 400
+        if not data.get('valor'):
+            return jsonify({"erro": "Valor é obrigatório"}), 400
+        if not data.get('data_vencimento'):
+            return jsonify({"erro": "Data de vencimento é obrigatória"}), 400
+        
+        novo_boleto = Boleto(
+            obra_id=obra_id,
+            usuario_id=user.id,
+            codigo_barras=data.get('codigo_barras'),
+            descricao=data.get('descricao'),
+            beneficiario=data.get('beneficiario'),
+            valor=float(data.get('valor')),
+            data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
+            status='Pendente',
+            arquivo_nome=data.get('arquivo_nome'),
+            arquivo_pdf=data.get('arquivo_pdf') or data.get('arquivo_base64')
+        )
+        
+        db.session.add(novo_boleto)
+        db.session.commit()
+        
+        print(f"--- [LOG] Boleto criado: ID {novo_boleto.id} na obra {obra_id} ---")
+        return jsonify(novo_boleto.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] criar_boleto: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/boletos/extrair-pdf', methods=['POST'])
+@jwt_required()
+def extrair_pdf_boleto(obra_id):
+    """Extrai dados de um PDF de boleto"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        data = request.get_json()
+        pdf_base64 = data.get('arquivo_base64')
+        
+        if not pdf_base64:
+            return jsonify({"erro": "Arquivo PDF não enviado"}), 400
+        
+        # Remover prefixo data:application/pdf;base64, se existir
+        if ',' in pdf_base64:
+            pdf_base64 = pdf_base64.split(',')[1]
+        
+        resultado = extrair_dados_boleto_pdf(pdf_base64)
+        
+        return jsonify(resultado), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] extrair_pdf_boleto: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/boletos/<int:boleto_id>', methods=['PUT'])
+@jwt_required()
+def editar_boleto(obra_id, boleto_id):
+    """Edita um boleto existente"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        boleto = db.session.get(Boleto, boleto_id)
+        if not boleto or boleto.obra_id != obra_id:
+            return jsonify({"erro": "Boleto não encontrado"}), 404
+        
+        data = request.get_json()
+        
+        if 'descricao' in data:
+            boleto.descricao = data['descricao']
+        if 'beneficiario' in data:
+            boleto.beneficiario = data['beneficiario']
+        if 'codigo_barras' in data:
+            boleto.codigo_barras = data['codigo_barras']
+        if 'valor' in data:
+            boleto.valor = float(data['valor'])
+        if 'data_vencimento' in data:
+            boleto.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        if 'status' in data:
+            boleto.status = data['status']
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Boleto {boleto_id} editado ---")
+        return jsonify(boleto.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] editar_boleto: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/boletos/<int:boleto_id>/pagar', methods=['POST'])
+@jwt_required()
+def pagar_boleto(obra_id, boleto_id):
+    """Marca um boleto como pago"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        boleto = db.session.get(Boleto, boleto_id)
+        if not boleto or boleto.obra_id != obra_id:
+            return jsonify({"erro": "Boleto não encontrado"}), 404
+        
+        data = request.get_json() or {}
+        
+        boleto.status = 'Pago'
+        boleto.data_pagamento = datetime.strptime(data.get('data_pagamento', date.today().isoformat()), '%Y-%m-%d').date()
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Boleto {boleto_id} marcado como pago ---")
+        return jsonify(boleto.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] pagar_boleto: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/boletos/<int:boleto_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_boleto(obra_id, boleto_id):
+    """Deleta um boleto"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        boleto = db.session.get(Boleto, boleto_id)
+        if not boleto or boleto.obra_id != obra_id:
+            return jsonify({"erro": "Boleto não encontrado"}), 404
+        
+        db.session.delete(boleto)
+        db.session.commit()
+        
+        print(f"--- [LOG] Boleto {boleto_id} deletado ---")
+        return jsonify({"sucesso": True}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] deletar_boleto: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/boletos/<int:boleto_id>/arquivo', methods=['GET'])
+@jwt_required()
+def obter_arquivo_boleto(obra_id, boleto_id):
+    """Retorna o arquivo PDF do boleto"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        boleto = db.session.get(Boleto, boleto_id)
+        if not boleto or boleto.obra_id != obra_id:
+            return jsonify({"erro": "Boleto não encontrado"}), 404
+        
+        if not boleto.arquivo_pdf:
+            return jsonify({"erro": "Boleto não possui arquivo anexado"}), 404
+        
+        return jsonify({
+            "arquivo_nome": boleto.arquivo_nome,
+            "arquivo_base64": boleto.arquivo_pdf
+        }), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] obter_arquivo_boleto: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/boletos/verificar-alertas', methods=['POST'])
+@jwt_required()
+def verificar_alertas_boletos():
+    """Verifica boletos próximos do vencimento e cria notificações"""
+    try:
+        user = get_current_user()
+        hoje = date.today()
+        
+        # Buscar boletos pendentes de todas as obras que o usuário tem acesso
+        if user.role == 'master':
+            boletos = Boleto.query.filter_by(status='Pendente').all()
+        else:
+            # Buscar obras que o usuário tem acesso
+            obras_ids = [obra.id for obra in user.obras_permitidas]
+            boletos = Boleto.query.filter(
+                Boleto.obra_id.in_(obras_ids),
+                Boleto.status == 'Pendente'
+            ).all()
+        
+        alertas_criados = 0
+        
+        for boleto in boletos:
+            dias_para_vencer = (boleto.data_vencimento - hoje).days
+            obra = Obra.query.get(boleto.obra_id)
+            obra_nome = obra.nome if obra else f"Obra {boleto.obra_id}"
+            
+            # Alerta 7 dias
+            if dias_para_vencer <= 7 and dias_para_vencer > 3 and not boleto.alerta_7dias:
+                criar_notificacao(
+                    usuario_destino_id=boleto.usuario_id or user.id,
+                    tipo='boleto_vencendo',
+                    titulo='Boleto vence em 7 dias',
+                    mensagem=f'O boleto "{boleto.descricao}" de {formatar_real(boleto.valor)} vence em {dias_para_vencer} dias ({boleto.data_vencimento.strftime("%d/%m/%Y")})',
+                    obra_id=boleto.obra_id,
+                    item_id=boleto.id,
+                    item_type='boleto'
+                )
+                boleto.alerta_7dias = True
+                alertas_criados += 1
+            
+            # Alerta 3 dias
+            elif dias_para_vencer <= 3 and dias_para_vencer > 0 and not boleto.alerta_3dias:
+                criar_notificacao(
+                    usuario_destino_id=boleto.usuario_id or user.id,
+                    tipo='boleto_vencendo',
+                    titulo='⚠️ Boleto vence em 3 dias',
+                    mensagem=f'URGENTE: O boleto "{boleto.descricao}" de {formatar_real(boleto.valor)} vence em {dias_para_vencer} dias!',
+                    obra_id=boleto.obra_id,
+                    item_id=boleto.id,
+                    item_type='boleto'
+                )
+                boleto.alerta_3dias = True
+                alertas_criados += 1
+            
+            # Alerta hoje
+            elif dias_para_vencer == 0 and not boleto.alerta_hoje:
+                criar_notificacao(
+                    usuario_destino_id=boleto.usuario_id or user.id,
+                    tipo='boleto_vencendo',
+                    titulo='🚨 Boleto vence HOJE',
+                    mensagem=f'ATENÇÃO: O boleto "{boleto.descricao}" de {formatar_real(boleto.valor)} vence HOJE!',
+                    obra_id=boleto.obra_id,
+                    item_id=boleto.id,
+                    item_type='boleto'
+                )
+                boleto.alerta_hoje = True
+                alertas_criados += 1
+            
+            # Marcar como vencido
+            elif dias_para_vencer < 0:
+                boleto.status = 'Vencido'
+        
+        db.session.commit()
+        
+        return jsonify({
+            "sucesso": True,
+            "alertas_criados": alertas_criados
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] verificar_alertas_boletos: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/boletos/resumo', methods=['GET'])
+@jwt_required()
+def resumo_boletos(obra_id):
+    """Retorna resumo dos boletos para relatório financeiro"""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        boletos = Boleto.query.filter_by(obra_id=obra_id).all()
+        
+        hoje = date.today()
+        
+        # Calcular totais
+        total_pendente = sum(b.valor for b in boletos if b.status == 'Pendente')
+        total_vencido = sum(b.valor for b in boletos if b.status == 'Vencido' or (b.status == 'Pendente' and b.data_vencimento < hoje))
+        total_pago = sum(b.valor for b in boletos if b.status == 'Pago')
+        
+        # Boletos vencendo em 7 dias
+        vencendo_7_dias = [b.to_dict() for b in boletos if b.status == 'Pendente' and 0 <= (b.data_vencimento - hoje).days <= 7]
+        
+        return jsonify({
+            "total_pendente": total_pendente,
+            "total_vencido": total_vencido,
+            "total_pago": total_pago,
+            "quantidade_pendente": len([b for b in boletos if b.status == 'Pendente']),
+            "quantidade_vencido": len([b for b in boletos if b.status == 'Vencido']),
+            "quantidade_pago": len([b for b in boletos if b.status == 'Pago']),
+            "vencendo_7_dias": vencendo_7_dias
+        }), 200
+        
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] resumo_boletos: {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
 
 
 # ==============================================================================
