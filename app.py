@@ -1788,26 +1788,23 @@ def get_obra_detalhes(obra_id):
         print(f"--- [DEBUG KPI] ✅ DESPESAS EXTRAS (fora da planilha) = R$ {kpi_despesas_extras:.2f} ---")
         
         # --- BOLETOS ---
-        # Boletos pendentes (sem serviço vinculado = despesa extra)
         boletos_obra = Boleto.query.filter_by(obra_id=obra_id).all()
-        total_boletos_pagos = sum(b.valor or 0 for b in boletos_obra if b.status == 'Pago')
-        total_boletos_pendentes = sum(b.valor or 0 for b in boletos_obra if b.status in ['Pendente', 'Vencido'])
+        
+        # Boletos COM serviço vinculado = fazem parte do orçamento
+        total_boletos_com_servico = sum(b.valor or 0 for b in boletos_obra if b.vinculado_servico_id)
+        total_boletos_com_servico_pendentes = sum(b.valor or 0 for b in boletos_obra if b.vinculado_servico_id and b.status in ['Pendente', 'Vencido'])
+        total_boletos_com_servico_pagos = sum(b.valor or 0 for b in boletos_obra if b.vinculado_servico_id and b.status == 'Pago')
         
         # Boletos SEM serviço vinculado = despesas extras
-        total_boletos_extra = sum(b.valor or 0 for b in boletos_obra if b.status in ['Pendente', 'Vencido'] and not b.vinculado_servico_id)
-        # Boletos COM serviço vinculado = liberado para pagamento
-        total_boletos_servico = sum(b.valor or 0 for b in boletos_obra if b.status in ['Pendente', 'Vencido'] and b.vinculado_servico_id)
-        # Boletos pagos que estavam vinculados a serviço
-        total_boletos_pagos_servico = sum(b.valor or 0 for b in boletos_obra if b.status == 'Pago' and b.vinculado_servico_id)
-        # Boletos pagos sem serviço
-        total_boletos_pagos_extra = sum(b.valor or 0 for b in boletos_obra if b.status == 'Pago' and not b.vinculado_servico_id)
+        total_boletos_sem_servico = sum(b.valor or 0 for b in boletos_obra if not b.vinculado_servico_id)
         
         # Atualizar KPIs com boletos
-        kpi_valores_pagos += total_boletos_pagos_servico  # Boletos pagos com serviço vão para valores pagos
-        kpi_liberado_pagamento += total_boletos_servico   # Boletos pendentes com serviço vão para liberado
-        kpi_despesas_extras += total_boletos_extra + total_boletos_pagos_extra  # Boletos sem serviço vão para despesas extras
+        kpi_orcamento_total += total_boletos_com_servico  # Boletos com serviço aumentam o orçamento
+        kpi_valores_pagos += total_boletos_com_servico_pagos  # Boletos pagos com serviço vão para valores pagos
+        kpi_liberado_pagamento += total_boletos_com_servico_pendentes  # Boletos pendentes com serviço vão para liberado
+        kpi_despesas_extras += total_boletos_sem_servico  # Boletos sem serviço vão para despesas extras
         
-        print(f"--- [DEBUG KPI] 📄 BOLETOS: pagos={total_boletos_pagos:.2f}, pendentes={total_boletos_pendentes:.2f}, extras={total_boletos_extra:.2f} ---")
+        print(f"--- [DEBUG KPI] 📄 BOLETOS: com_servico={total_boletos_com_servico:.2f} (pendentes={total_boletos_com_servico_pendentes:.2f}, pagos={total_boletos_com_servico_pagos:.2f}), sem_servico={total_boletos_sem_servico:.2f} ---")
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
@@ -12112,10 +12109,21 @@ def criar_boleto(obra_id):
         if not data.get('data_vencimento'):
             return jsonify({"erro": "Data de vencimento é obrigatória"}), 400
         
+        # Verificar duplicidade por código de barras
+        codigo_barras = data.get('codigo_barras')
+        if codigo_barras:
+            boleto_existente = Boleto.query.filter_by(
+                obra_id=obra_id, 
+                codigo_barras=codigo_barras
+            ).first()
+            if boleto_existente:
+                print(f"--- [LOG] Boleto duplicado ignorado: código {codigo_barras[:20]}... já existe ---")
+                return jsonify({"erro": "Boleto com este código de barras já existe", "duplicado": True}), 409
+        
         novo_boleto = Boleto(
             obra_id=obra_id,
             usuario_id=user.id,
-            codigo_barras=data.get('codigo_barras'),
+            codigo_barras=codigo_barras,
             descricao=data.get('descricao'),
             beneficiario=data.get('beneficiario'),
             valor=float(data.get('valor')),
