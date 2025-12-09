@@ -605,6 +605,7 @@ class PagamentoParcelado(db.Model):
     parcelas_pagas = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(20), nullable=False, default='Ativo')  # Ativo/Concluído/Cancelado
     observacoes = db.Column(db.Text, nullable=True)
+    pix = db.Column(db.String(255), nullable=True)  # Chave PIX para pagamento
     
     def to_dict(self):
         """Converte objeto para dicionário de forma segura sem dependências externas"""
@@ -669,6 +670,7 @@ class PagamentoParcelado(db.Model):
             "parcelas_pagas": self.parcelas_pagas,
             "status": self.status,
             "observacoes": self.observacoes,
+            "pix": self.pix,
             "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero <= self.numero_parcelas else None,
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
             "servico_id": self.servico_id,
@@ -5100,7 +5102,8 @@ def criar_pagamento_parcelado(obra_id):
             periodicidade=periodicidade,
             parcelas_pagas=0,
             status='Ativo',
-            observacoes=data.get('observacoes') or None
+            observacoes=data.get('observacoes') or None,
+            pix=data.get('pix') or None
         )
         
         db.session.add(novo_pagamento)
@@ -5136,6 +5139,8 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
             pagamento.fornecedor = data['fornecedor']
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
+        if 'pix' in data:
+            pagamento.pix = data['pix']
         if 'parcelas_pagas' in data:
             pagamento.parcelas_pagas = int(data['parcelas_pagas'])
             # Atualiza status se todas as parcelas foram pagas
@@ -6130,10 +6135,13 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 elements.append(Spacer(1, 0.2*cm))
                 
                 if parcelas:
-                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'Forma Pgto.', 'Pago em']]
+                    data_parcelas = [['Parcela', 'Valor', 'Vencimento', 'Status', 'Tipo', 'PIX', 'Pago em']]
                     
                     # Variável para controlar cores
                     row_colors = []
+                    
+                    # Obter o PIX do pagamento parcelado (pai)
+                    pix_display = pag_parcelado.pix if pag_parcelado.pix else '-'
                     
                     for parcela in parcelas:
                         # Determinar se está vencida
@@ -6144,9 +6152,6 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         else:
                             row_colors.append(colors.whitesmoke if len(row_colors) % 2 == 0 else colors.white)
                         
-                        # Determinar valor da coluna "Forma Pgto."
-                        forma_pagamento_display = parcela.forma_pagamento if parcela.forma_pagamento else '-'
-                        
                         # Determinar valor da coluna "Pago em"
                         pago_em_display = parcela.data_pagamento.strftime('%d/%m/%Y') if parcela.data_pagamento else '-'
                         
@@ -6156,7 +6161,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                             parcela.data_vencimento.strftime('%d/%m/%Y'),
                             status_display,
                             pag_parcelado.periodicidade or '-',  # Tipo = Periodicidade
-                            forma_pagamento_display,  # Nova coluna
+                            pix_display,  # PIX do pagamento parcelado
                             pago_em_display
                         ])
                     
