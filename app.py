@@ -441,7 +441,7 @@ class Boleto(db.Model):
     
     # Relacionamentos
     usuario = db.relationship('User', backref='boletos_cadastrados')
-    servico = db.relationship('Servico', foreign_keys=[vinculado_servico_id], backref='boletos_vinculados')
+    # Nota: vinculado_servico_id não tem ForeignKey, busca manual no to_dict()
     
     def to_dict(self):
         # Calcular dias para vencimento
