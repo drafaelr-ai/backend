@@ -497,7 +497,8 @@ def extrair_dados_boleto_pdf(pdf_base64):
             'codigo_barras': None,
             'data_vencimento': None,
             'valor': None,
-            'beneficiario': None
+            'beneficiario': None,
+            'sucesso': False
         }
         
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -506,78 +507,94 @@ def extrair_dados_boleto_pdf(pdf_base64):
                 texto += page.extract_text() or ""
             
             # Debug: imprimir texto extraído
-            print(f"--- [BOLETO] Texto extraído ({len(texto)} chars): {texto[:500]}...")
+            print(f"--- [BOLETO] Texto extraído ({len(texto)} chars) ---")
+            print(texto[:1500])
+            print("--- [BOLETO] FIM DO TEXTO ---")
             
-            # Regex para linha digitável (formato: 00000.00000 00000.000000 00000.000000 0 00000000000000)
-            # ou formato compacto: 00000000000000000000000000000000000000000000000
+            # =====================================================
+            # 1. CÓDIGO DE BARRAS (LINHA DIGITÁVEL)
+            # =====================================================
+            # Formato Banco Inter: 07790.00116 12070.514091 03958.220455 4 11960000057900
             patterns_codigo = [
-                r'(\d{5}\.?\d{5}\s*\d{5}\.?\d{6}\s*\d{5}\.?\d{6}\s*\d\s*\d{14})',  # Formato com pontos e espaços
-                r'(\d{47,48})',  # Formato compacto
-                r'(\d{5}\.\d{5}\s+\d{5}\.\d{6}\s+\d{5}\.\d{6}\s+\d\s+\d{14})',  # Com espaços
+                r'(\d{5}\.\d{5}\s+\d{5}\.\d{6}\s+\d{5}\.\d{6}\s+\d\s+\d{14})',  # Inter/Itaú
+                r'(\d{5}\.?\d{5}\s*\d{5}\.?\d{6}\s*\d{5}\.?\d{6}\s*\d\s*\d{14})',  # Genérico
+                r'(?<!\d)(\d{47,48})(?!\d)',  # 47-48 dígitos seguidos
             ]
             
             for pattern in patterns_codigo:
                 match = re.search(pattern, texto)
                 if match:
-                    codigo = re.sub(r'[\s\.]', '', match.group(1))  # Remove espaços e pontos
+                    codigo_raw = match.group(1)
+                    codigo = re.sub(r'[\s\.]', '', codigo_raw)
                     if len(codigo) >= 47:
-                        dados['codigo_barras'] = codigo[:48]
-                        print(f"--- [BOLETO] Código encontrado: {dados['codigo_barras']}")
+                        dados['codigo_barras'] = codigo[:47] if len(codigo) >= 47 else codigo
+                        print(f"--- [BOLETO] Código: {dados['codigo_barras']}")
                         break
             
-            # Regex para data de vencimento
-            patterns_venc = [
-                r'[Vv]encimento[:\s]*(\d{2}[/.-]\d{2}[/.-]\d{4})',
-                r'[Vv]enc\.?[:\s]*(\d{2}[/.-]\d{2}[/.-]\d{4})',
-                r'[Dd]ata\s*[Vv]encimento[:\s]*(\d{2}[/.-]\d{2}[/.-]\d{4})',
-                r'(\d{2}/\d{2}/\d{4})',  # Qualquer data no formato DD/MM/YYYY
-            ]
-            
-            for pattern in patterns_venc:
-                match = re.search(pattern, texto)
-                if match:
-                    data_str = match.group(1).replace('-', '/').replace('.', '/')
-                    try:
-                        dados['data_vencimento'] = datetime.strptime(data_str, '%d/%m/%Y').date().isoformat()
-                        print(f"--- [BOLETO] Data encontrada: {dados['data_vencimento']}")
-                        break
-                    except:
-                        continue
-            
-            # Regex para valor
+            # =====================================================
+            # 2. VALOR
+            # =====================================================
             patterns_valor = [
-                r'[Vv]alor\s*(?:do\s*)?[Dd]ocumento[:\s]*R?\$?\s*([\d.,]+)',
-                r'[Vv]alor\s*[Cc]obrado[:\s]*R?\$?\s*([\d.,]+)',
-                r'[Vv]alor[:\s]*R?\$?\s*([\d.,]+)',
-                r'R\$\s*([\d]{1,3}(?:\.?\d{3})*,\d{2})',
+                r'R\$\s*([\d]{1,3}(?:\.\d{3})*,\d{2})',  # R$ 579,00
+                r'[Vv]alor\s*(?:do\s*)?[Dd]ocumento\s*[\n\r]*\s*([\d]+,\d{2})',
             ]
             
             for pattern in patterns_valor:
-                match = re.search(pattern, texto)
-                if match:
-                    valor_str = match.group(1).replace('.', '').replace(',', '.')
+                matches = re.findall(pattern, texto)
+                for match_str in matches:
                     try:
-                        dados['valor'] = float(valor_str)
-                        print(f"--- [BOLETO] Valor encontrado: {dados['valor']}")
-                        break
+                        valor_str = match_str.replace('.', '').replace(',', '.')
+                        valor = float(valor_str)
+                        if valor > 1 and valor < 1000000:
+                            dados['valor'] = valor
+                            print(f"--- [BOLETO] Valor: {dados['valor']}")
+                            break
                     except:
                         continue
+                if dados['valor']:
+                    break
             
-            # Regex para beneficiário/cedente
+            # =====================================================
+            # 3. DATA DE VENCIMENTO
+            # =====================================================
+            patterns_venc = [
+                r'[Vv]encimento.*?(\d{2}/\d{2}/\d{4})',  # Qualquer texto antes de Vencimento
+            ]
+            
+            for pattern in patterns_venc:
+                matches = re.findall(pattern, texto, re.DOTALL)
+                for data_str in matches:
+                    try:
+                        data_parsed = datetime.strptime(data_str, '%d/%m/%Y').date()
+                        if data_parsed.year >= date.today().year - 1:
+                            dados['data_vencimento'] = data_parsed.isoformat()
+                            print(f"--- [BOLETO] Data: {dados['data_vencimento']}")
+                            break
+                    except:
+                        continue
+                if dados['data_vencimento']:
+                    break
+            
+            # =====================================================
+            # 4. BENEFICIÁRIO
+            # =====================================================
             patterns_benef = [
-                r'[Bb]enefici[áa]rio[:\s]*([A-Za-zÀ-ÿ\s\-\.]+(?:LTDA|S\.?A\.?|ME|EPP)?)',
-                r'[Cc]edente[:\s]*([A-Za-zÀ-ÿ\s\-\.]+(?:LTDA|S\.?A\.?|ME|EPP)?)',
-                r'[Rr]az[ãa]o\s*[Ss]ocial[:\s]*([A-Za-zÀ-ÿ\s\-\.]+)',
+                r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\s*-\s*([A-Za-zÀ-ÿ\s]+(?:LTDA|S\.?A\.?|ME|EPP|EIRELI))',
+                r'[Qq]uem\s*vai\s*receber[:\s]*[\n]*([A-Za-zÀ-ÿ\s]+(?:LTDA)?)',
+                r'[Bb]enefici[áa]rio\s*[Ff]inal\s+([A-Za-zÀ-ÿ\s]+(?:LTDA|S\.?A\.?)?)',
             ]
             
             for pattern in patterns_benef:
-                match = re.search(pattern, texto)
+                match = re.search(pattern, texto, re.IGNORECASE)
                 if match:
-                    dados['beneficiario'] = match.group(1).strip()[:100]
-                    print(f"--- [BOLETO] Beneficiário encontrado: {dados['beneficiario']}")
-                    break
+                    benef = match.group(1).strip()
+                    benef = re.sub(r'\s+', ' ', benef).strip()
+                    if len(benef) > 3:
+                        dados['beneficiario'] = benef[:100]
+                        print(f"--- [BOLETO] Beneficiário: {dados['beneficiario']}")
+                        break
         
-        # Verificar se conseguiu extrair pelo menos um dado
+        # Verificar sucesso
         dados['sucesso'] = any([
             dados['codigo_barras'],
             dados['data_vencimento'],
@@ -585,15 +602,17 @@ def extrair_dados_boleto_pdf(pdf_base64):
             dados['beneficiario']
         ])
         
+        print(f"--- [BOLETO] Resultado: sucesso={dados['sucesso']} ---")
+        
         return dados
         
-    except ImportError:
-        print("--- [BOLETO] pdfplumber não instalado, tentando extração básica ---")
-        return {'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
+    except ImportError as e:
+        print(f"--- [BOLETO] pdfplumber não instalado: {e} ---")
+        return {'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None, 'sucesso': False}
     except Exception as e:
-        print(f"--- [BOLETO] Erro ao extrair dados do PDF: {e} ---")
+        print(f"--- [BOLETO] Erro: {e} ---")
         traceback.print_exc()
-        return {'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
+        return {'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None, 'sucesso': False}
 
 # Função para verificar e criar alertas de boletos vencendo
 def verificar_alertas_boletos():
