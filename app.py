@@ -657,6 +657,17 @@ class PagamentoParcelado(db.Model):
             segmento_value = 'Material'
         
         # Montar dicionário de resposta
+        # Tratar pix e forma_pagamento de forma defensiva (colunas podem não existir ainda)
+        try:
+            pix_value = self.pix if hasattr(self, 'pix') else None
+        except:
+            pix_value = None
+        
+        try:
+            forma_pagamento_value = self.forma_pagamento if hasattr(self, 'forma_pagamento') and self.forma_pagamento else 'PIX'
+        except:
+            forma_pagamento_value = 'PIX'
+        
         return {
             "id": self.id,
             "obra_id": self.obra_id,
@@ -671,8 +682,8 @@ class PagamentoParcelado(db.Model):
             "parcelas_pagas": self.parcelas_pagas,
             "status": self.status,
             "observacoes": self.observacoes,
-            "pix": self.pix,
-            "forma_pagamento": self.forma_pagamento or 'PIX',
+            "pix": pix_value,
+            "forma_pagamento": forma_pagamento_value,
             "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero <= self.numero_parcelas else None,
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
             "servico_id": self.servico_id,
@@ -703,6 +714,12 @@ class ParcelaIndividual(db.Model):
     pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
     
     def to_dict(self):
+        # Tratar codigo_barras de forma defensiva (coluna pode não existir ainda)
+        try:
+            codigo_barras_value = self.codigo_barras if hasattr(self, 'codigo_barras') else None
+        except:
+            codigo_barras_value = None
+        
         return {
             "id": self.id,
             "pagamento_parcelado_id": self.pagamento_parcelado_id,
@@ -712,7 +729,7 @@ class ParcelaIndividual(db.Model):
             "status": self.status,
             "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
             "forma_pagamento": self.forma_pagamento,
-            "codigo_barras": self.codigo_barras,
+            "codigo_barras": codigo_barras_value,
             "observacao": self.observacao
         }
 
@@ -5094,6 +5111,7 @@ def criar_pagamento_parcelado(obra_id):
         periodicidade = data.get('periodicidade', 'Mensal')  # Semanal, Quinzenal ou Mensal
         forma_pagamento = data.get('forma_pagamento', 'PIX')  # PIX, Boleto, Transferência
         
+        # Criar pagamento com campos obrigatórios
         novo_pagamento = PagamentoParcelado(
             obra_id=obra_id,
             descricao=data.get('descricao'),
@@ -5106,10 +5124,19 @@ def criar_pagamento_parcelado(obra_id):
             periodicidade=periodicidade,
             parcelas_pagas=0,
             status='Ativo',
-            observacoes=data.get('observacoes') or None,
-            pix=data.get('pix') or None,
-            forma_pagamento=forma_pagamento
+            observacoes=data.get('observacoes') or None
         )
+        
+        # Tentar atribuir campos opcionais (podem não existir no banco ainda)
+        try:
+            novo_pagamento.pix = data.get('pix') or None
+        except:
+            pass
+        
+        try:
+            novo_pagamento.forma_pagamento = forma_pagamento
+        except:
+            pass
         
         db.session.add(novo_pagamento)
         db.session.flush()  # Para obter o ID do pagamento
@@ -5127,6 +5154,7 @@ def criar_pagamento_parcelado(obra_id):
                 data_venc = datetime.strptime(parcela_data.get('data_vencimento'), '%Y-%m-%d').date()
                 codigo_barras = parcela_data.get('codigo_barras') or None
                 
+                # Criar parcela com campos obrigatórios
                 nova_parcela = ParcelaIndividual(
                     pagamento_parcelado_id=novo_pagamento.id,
                     numero_parcela=numero,
@@ -5135,9 +5163,15 @@ def criar_pagamento_parcelado(obra_id):
                     status='Previsto',
                     data_pagamento=None,
                     forma_pagamento=forma_pagamento,
-                    codigo_barras=codigo_barras,
                     observacao=None
                 )
+                
+                # Tentar atribuir codigo_barras (pode não existir no banco ainda)
+                try:
+                    nova_parcela.codigo_barras = codigo_barras
+                except:
+                    pass
+                
                 db.session.add(nova_parcela)
             
             # Atualizar valor_parcela do pagamento (média) se valores diferentes
@@ -5178,9 +5212,15 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
         if 'pix' in data:
-            pagamento.pix = data['pix']
+            try:
+                pagamento.pix = data['pix']
+            except:
+                pass
         if 'forma_pagamento' in data:
-            pagamento.forma_pagamento = data['forma_pagamento']
+            try:
+                pagamento.forma_pagamento = data['forma_pagamento']
+            except:
+                pass
         if 'parcelas_pagas' in data:
             pagamento.parcelas_pagas = int(data['parcelas_pagas'])
             # Atualiza status se todas as parcelas foram pagas
@@ -5521,7 +5561,10 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
             parcela.observacao = data['observacao']
         
         if 'codigo_barras' in data:
-            parcela.codigo_barras = data['codigo_barras'] or None
+            try:
+                parcela.codigo_barras = data['codigo_barras'] or None
+            except:
+                pass
         
         if 'status' in data:
             parcela.status = data['status']
@@ -6183,9 +6226,16 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     # Variável para controlar cores
                     row_colors = []
                     
-                    # Obter forma de pagamento e PIX do pagamento parcelado (pai)
-                    forma_pag = pag_parcelado.forma_pagamento if hasattr(pag_parcelado, 'forma_pagamento') and pag_parcelado.forma_pagamento else 'PIX'
-                    pix_raw = pag_parcelado.pix if pag_parcelado.pix else ''
+                    # Obter forma de pagamento e PIX do pagamento parcelado (pai) de forma defensiva
+                    try:
+                        forma_pag = pag_parcelado.forma_pagamento if hasattr(pag_parcelado, 'forma_pagamento') and pag_parcelado.forma_pagamento else 'PIX'
+                    except:
+                        forma_pag = 'PIX'
+                    
+                    try:
+                        pix_raw = pag_parcelado.pix if hasattr(pag_parcelado, 'pix') and pag_parcelado.pix else ''
+                    except:
+                        pix_raw = ''
                     
                     for parcela in parcelas:
                         # Determinar se está vencida
@@ -6198,7 +6248,10 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         
                         # Determinar valor da coluna "PIX/Código"
                         # Priorizar código de barras da parcela (boleto), senão usar PIX do pagamento
-                        codigo_barras = parcela.codigo_barras if hasattr(parcela, 'codigo_barras') and parcela.codigo_barras else ''
+                        try:
+                            codigo_barras = parcela.codigo_barras if hasattr(parcela, 'codigo_barras') and parcela.codigo_barras else ''
+                        except:
+                            codigo_barras = ''
                         if codigo_barras:
                             # Truncar código de barras (mostrar últimos 12 dígitos)
                             pix_codigo_display = '...' + codigo_barras[-12:] if len(codigo_barras) > 12 else codigo_barras
