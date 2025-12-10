@@ -2214,6 +2214,44 @@ def editar_lancamento(lancamento_id):
         print(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+@app.route('/lancamentos/<int:lancamento_id>', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def atualizar_lancamento_parcial(lancamento_id):
+    """Atualização parcial de lançamento (ex: vincular serviço)"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
+    try:
+        user = get_current_user()
+        claims = get_jwt()
+        user_role = claims.get('role')
+        
+        if user_role not in ['administrador', 'master']:
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        lancamento = Lancamento.query.get_or_404(lancamento_id)
+        if not user_has_access_to_obra(user, lancamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json
+        
+        # Atualizar apenas os campos fornecidos
+        if 'servico_id' in dados:
+            lancamento.servico_id = dados['servico_id'] if dados['servico_id'] else None
+        if 'fornecedor' in dados:
+            lancamento.fornecedor = dados['fornecedor']
+        if 'prioridade' in dados:
+            lancamento.prioridade = int(dados['prioridade'])
+        
+        db.session.commit()
+        print(f"--- [LOG] Lançamento {lancamento_id} atualizado parcialmente ---")
+        return jsonify(lancamento.to_dict())
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /lancamentos/{lancamento_id} (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_lancamento(lancamento_id):
