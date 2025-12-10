@@ -2214,6 +2214,44 @@ def editar_lancamento(lancamento_id):
         print(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+@app.route('/lancamentos/<int:lancamento_id>', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def atualizar_lancamento_parcial(lancamento_id):
+    """Atualização parcial de lançamento (ex: vincular serviço)"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
+    try:
+        user = get_current_user()
+        claims = get_jwt()
+        user_role = claims.get('role')
+        
+        if user_role not in ['administrador', 'master']:
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        lancamento = Lancamento.query.get_or_404(lancamento_id)
+        if not user_has_access_to_obra(user, lancamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json
+        
+        # Atualizar apenas os campos fornecidos
+        if 'servico_id' in dados:
+            lancamento.servico_id = dados['servico_id'] if dados['servico_id'] else None
+        if 'fornecedor' in dados:
+            lancamento.fornecedor = dados['fornecedor']
+        if 'prioridade' in dados:
+            lancamento.prioridade = int(dados['prioridade'])
+        
+        db.session.commit()
+        print(f"--- [LOG] Lançamento {lancamento_id} atualizado parcialmente ---")
+        return jsonify(lancamento.to_dict())
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /lancamentos/{lancamento_id} (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_lancamento(lancamento_id):
@@ -2288,12 +2326,22 @@ def add_servico(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
         dados = request.json
+        
+        # Tratar valores vazios ou nulos
+        def safe_float(value, default=0.0):
+            if value is None or value == '':
+                return default
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return default
+        
         novo_servico = Servico(
             obra_id=obra_id,
             nome=dados['nome'],
-            responsavel=dados['responsavel'],
-            valor_global_mao_de_obra=float(dados.get('valor_global_mao_de_obra', 0.0)),
-            valor_global_material=float(dados.get('valor_global_material', 0.0)),
+            responsavel=dados.get('responsavel', ''),
+            valor_global_mao_de_obra=safe_float(dados.get('valor_global_mao_de_obra')),
+            valor_global_material=safe_float(dados.get('valor_global_material')),
             pix=dados.get('pix')
         )
         db.session.add(novo_servico)
@@ -2387,10 +2435,20 @@ def editar_servico(servico_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
 
         dados = request.json
+        
+        # Tratar valores vazios ou nulos
+        def safe_float(value, default=0.0):
+            if value is None or value == '':
+                return default
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return default
+        
         servico.nome = dados.get('nome', servico.nome)
         servico.responsavel = dados.get('responsavel', servico.responsavel)
-        servico.valor_global_mao_de_obra = float(dados.get('valor_global_mao_de_obra', servico.valor_global_mao_de_obra))
-        servico.valor_global_material = float(dados.get('valor_global_material', servico.valor_global_material))
+        servico.valor_global_mao_de_obra = safe_float(dados.get('valor_global_mao_de_obra'), servico.valor_global_mao_de_obra or 0.0)
+        servico.valor_global_material = safe_float(dados.get('valor_global_material'), servico.valor_global_material or 0.0)
         servico.pix = dados.get('pix', servico.pix)
         db.session.commit()
         return jsonify(servico.to_dict())
