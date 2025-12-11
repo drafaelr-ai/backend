@@ -5249,49 +5249,43 @@ def listar_pagamentos_futuros(obra_id):
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
-        print(f"--- [DEBUG] Buscando pagamentos futuros para obra_id={obra_id} ---")
-        
         resultado = []
         
-        # 1. Pagamentos Futuros (cadastrados pelo botão azul)
+        # 1. Pagamentos Futuros (cadastrados pelo botão azul) - 1 query
         pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id).order_by(PagamentoFuturo.data_vencimento).all()
-        print(f"--- [DEBUG] Encontrados {len(pagamentos_futuros)} PagamentoFuturo no banco ---")
         for p in pagamentos_futuros:
-            print(f"--- [DEBUG] PagamentoFuturo ID {p.id}: {p.descricao}, Valor: R$ {p.valor:.2f}, Data: {p.data_vencimento} ---")
             resultado.append(p.to_dict())
         
-        # 2. NOVO: Pagamentos de Serviços com saldo pendente
-        servicos = Servico.query.filter_by(obra_id=obra_id).all()
-        for servico in servicos:
-            pagamentos_servico = PagamentoServico.query.filter_by(
-                servico_id=servico.id
-            ).filter(
-                PagamentoServico.valor_pago < PagamentoServico.valor_total
-            ).all()
-            
-            for pag_serv in pagamentos_servico:
-                valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
-                if valor_pendente > 0 and pag_serv.data_vencimento:
-                    # Adicionar como se fosse um pagamento futuro
-                    resultado.append({
-                        'id': f'servico-{pag_serv.id}',  # ID especial para distinguir
-                        'tipo_origem': 'servico',  # Flag para identificar origem
-                        'pagamento_servico_id': pag_serv.id,
-                        'servico_id': servico.id,
-                        'servico_nome': servico.nome,
-                        'descricao': f"{servico.nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
-                        'fornecedor': pag_serv.fornecedor,
-                        'valor': valor_pendente,
-                        'data_vencimento': pag_serv.data_vencimento.isoformat(),
-                        'status': 'Previsto',
-                        'periodicidade': None
-                    })
+        # 2. Pagamentos de Serviços com saldo pendente - OTIMIZADO: 1 query com JOIN
+        pagamentos_servico_pendentes = db.session.query(
+            PagamentoServico, Servico.nome.label('servico_nome')
+        ).join(
+            Servico, PagamentoServico.servico_id == Servico.id
+        ).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.valor_pago < PagamentoServico.valor_total,
+            PagamentoServico.data_vencimento.isnot(None)
+        ).all()
         
-        # Ordenar todos por data de vencimento
+        for pag_serv, servico_nome in pagamentos_servico_pendentes:
+            valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
+            if valor_pendente > 0:
+                resultado.append({
+                    'id': f'servico-{pag_serv.id}',
+                    'tipo_origem': 'servico',
+                    'pagamento_servico_id': pag_serv.id,
+                    'servico_id': pag_serv.servico_id,
+                    'servico_nome': servico_nome,
+                    'descricao': f"{servico_nome} - {pag_serv.tipo_pagamento.replace('_', ' ').title()}",
+                    'fornecedor': pag_serv.fornecedor,
+                    'valor': valor_pendente,
+                    'data_vencimento': pag_serv.data_vencimento.isoformat(),
+                    'status': 'Previsto',
+                    'periodicidade': None
+                })
+        
+        # Ordenar por data de vencimento
         resultado.sort(key=lambda x: x.get('data_vencimento', '9999-12-31'))
-        
-        print(f"--- [DEBUG] TOTAL FINAL: {len(resultado)} itens sendo retornados para o frontend ---")
-        print(f"--- [DEBUG] Primeiros 3 itens: {resultado[:3] if len(resultado) > 0 else 'nenhum'} ---")
         
         return jsonify(resultado), 200
     
@@ -5578,23 +5572,36 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_parcelados(obra_id):
-    """Lista todos os pagamentos parcelados de uma obra"""
+    """Lista todos os pagamentos parcelados de uma obra - OTIMIZADO"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
+        # Query única com eager loading das parcelas
         pagamentos = PagamentoParcelado.query.filter_by(obra_id=obra_id).order_by(PagamentoParcelado.data_primeira_parcela).all()
         
-        # Enriquecer com valor real da próxima parcela
+        # Buscar todas as parcelas de uma vez só - 1 query
+        pagamento_ids = [p.id for p in pagamentos]
+        if pagamento_ids:
+            todas_parcelas = ParcelaIndividual.query.filter(
+                ParcelaIndividual.pagamento_parcelado_id.in_(pagamento_ids)
+            ).order_by(ParcelaIndividual.pagamento_parcelado_id, ParcelaIndividual.numero_parcela).all()
+            
+            # Agrupar parcelas por pagamento_parcelado_id
+            parcelas_por_pagamento = {}
+            for parcela in todas_parcelas:
+                if parcela.pagamento_parcelado_id not in parcelas_por_pagamento:
+                    parcelas_por_pagamento[parcela.pagamento_parcelado_id] = []
+                parcelas_por_pagamento[parcela.pagamento_parcelado_id].append(parcela)
+        else:
+            parcelas_por_pagamento = {}
+        
+        # Montar resultado
         resultado = []
         for pag in pagamentos:
             pag_dict = pag.to_dict()
-            
-            # Buscar parcelas individuais
-            parcelas = ParcelaIndividual.query.filter_by(
-                pagamento_parcelado_id=pag.id
-            ).order_by(ParcelaIndividual.numero_parcela).all()
+            parcelas = parcelas_por_pagamento.get(pag.id, [])
             
             if parcelas:
                 # Encontrar a próxima parcela não paga
@@ -5602,7 +5609,6 @@ def listar_pagamentos_parcelados(obra_id):
                 if proxima_parcela:
                     pag_dict['valor_proxima_parcela'] = float(proxima_parcela.valor_parcela)
                 else:
-                    # Todas pagas - usar a primeira parcela como referência
                     pag_dict['valor_proxima_parcela'] = float(parcelas[0].valor_parcela)
             
             resultado.append(pag_dict)
@@ -5873,7 +5879,7 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/previsoes', methods=['GET'])
 @jwt_required()
 def calcular_previsoes(obra_id):
-    """Calcula a tabela de previsões mensais usando parcelas individuais e pagamentos de serviços"""
+    """Calcula a tabela de previsões mensais - OTIMIZADO"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -5881,7 +5887,7 @@ def calcular_previsoes(obra_id):
         
         previsoes_por_mes = {}
         
-        # 1. Pagamentos Futuros (Únicos)
+        # 1. Pagamentos Futuros (Únicos) - 1 query
         pagamentos_futuros = PagamentoFuturo.query.filter_by(
             obra_id=obra_id
         ).filter(
@@ -5895,7 +5901,7 @@ def calcular_previsoes(obra_id):
                 previsoes_por_mes[mes_chave] = 0
             previsoes_por_mes[mes_chave] += pag.valor
         
-        # 2. Parcelas Individuais
+        # 2. Parcelas Individuais - 1 query com JOIN
         parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
             PagamentoParcelado.obra_id == obra_id,
             PagamentoParcelado.status != 'Cancelado',
@@ -5908,23 +5914,22 @@ def calcular_previsoes(obra_id):
                 previsoes_por_mes[mes_chave] = 0
             previsoes_por_mes[mes_chave] += parcela.valor_parcela
         
-        # 3. NOVO: Pagamentos de Serviços com status "A Pagar"
-        servicos = Servico.query.filter_by(obra_id=obra_id).all()
-        for servico in servicos:
-            pagamentos_servico = PagamentoServico.query.filter_by(
-                servico_id=servico.id
-            ).filter(
-                PagamentoServico.valor_pago < PagamentoServico.valor_total  # Tem saldo a pagar
-            ).all()
-            
-            for pag_serv in pagamentos_servico:
-                if pag_serv.data_vencimento:  # Se tem data de vencimento
-                    valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
-                    if valor_pendente > 0:
-                        mes_chave = pag_serv.data_vencimento.strftime('%Y-%m')
-                        if mes_chave not in previsoes_por_mes:
-                            previsoes_por_mes[mes_chave] = 0
-                        previsoes_por_mes[mes_chave] += valor_pendente
+        # 3. Pagamentos de Serviços pendentes - OTIMIZADO: 1 query com JOIN
+        pagamentos_servico_pendentes = db.session.query(PagamentoServico).join(
+            Servico, PagamentoServico.servico_id == Servico.id
+        ).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.valor_pago < PagamentoServico.valor_total,
+            PagamentoServico.data_vencimento.isnot(None)
+        ).all()
+        
+        for pag_serv in pagamentos_servico_pendentes:
+            valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
+            if valor_pendente > 0:
+                mes_chave = pag_serv.data_vencimento.strftime('%Y-%m')
+                if mes_chave not in previsoes_por_mes:
+                    previsoes_por_mes[mes_chave] = 0
+                previsoes_por_mes[mes_chave] += valor_pendente
         
         previsoes_lista = []
         for mes_chave in sorted(previsoes_por_mes.keys()):
@@ -5938,7 +5943,6 @@ def calcular_previsoes(obra_id):
                 'valor': round(previsoes_por_mes[mes_chave], 2)
             })
         
-        print(f"--- [LOG] Previsões calculadas para obra {obra_id}: {len(previsoes_lista)} meses ---")
         return jsonify(previsoes_lista), 200
     
     except Exception as e:
