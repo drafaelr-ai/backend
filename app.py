@@ -64,6 +64,21 @@ def run_auto_migration():
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_parcelado_v2 ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';")
             print("✅ Coluna segmento adicionada")
+        
+        # 2.5 NOVO: Adicionar campos de pagamento na tabela orcamento
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'data_vencimento';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE orcamento ADD COLUMN data_vencimento DATE;")
+            print("✅ Coluna data_vencimento adicionada em orcamento")
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'numero_parcelas';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE orcamento ADD COLUMN numero_parcelas INTEGER DEFAULT 1;")
+            print("✅ Coluna numero_parcelas adicionada em orcamento")
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'periodicidade';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE orcamento ADD COLUMN periodicidade VARCHAR(20) DEFAULT 'Mensal';")
+            print("✅ Coluna periodicidade adicionada em orcamento")
+        
         # =================================================================
         # 3. CORREÇÃO DO ERRO DE FOREIGN KEY (CRÍTICO)
         # =================================================================
@@ -892,6 +907,11 @@ class Orcamento(db.Model):
     tipo = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pendente') 
     
+    # NOVOS CAMPOS - Condições de Pagamento
+    data_vencimento = db.Column(db.Date, nullable=True)
+    numero_parcelas = db.Column(db.Integer, nullable=True, default=1)
+    periodicidade = db.Column(db.String(20), nullable=True, default='Mensal')  # Semanal, Quinzenal, Mensal
+    
     observacoes = db.Column(db.Text, nullable=True)
     
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
@@ -909,6 +929,9 @@ class Orcamento(db.Model):
             "dados_pagamento": self.dados_pagamento,
             "tipo": self.tipo,
             "status": self.status,
+            "data_vencimento": self.data_vencimento.isoformat() if self.data_vencimento else None,
+            "numero_parcelas": self.numero_parcelas or 1,
+            "periodicidade": self.periodicidade or 'Mensal',
             "observacoes": self.observacoes, 
             "servico_id": self.servico_id,
             "servico_nome": self.servico.nome if self.servico else None,
@@ -2940,16 +2963,24 @@ def get_orcamentos_obra(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master']) 
+@check_permission(roles=['administrador', 'master', 'comum'])  # Operador e Admin podem cadastrar
 def add_orcamento(obra_id):
-    # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada (com anexos) ---")
+    """Cria uma nova solicitação de compra"""
+    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
             
         dados = request.form
+        
+        # Processar data de vencimento
+        data_vencimento = None
+        if dados.get('data_vencimento'):
+            try:
+                data_vencimento = datetime.strptime(dados['data_vencimento'], '%Y-%m-%d').date()
+            except:
+                pass
         
         novo_orcamento = Orcamento(
             obra_id=obra_id,
@@ -2960,7 +2991,11 @@ def add_orcamento(obra_id):
             tipo=dados['tipo'],
             status='Pendente',
             observacoes=dados.get('observacoes') or None, 
-            servico_id=int(dados['servico_id']) if dados.get('servico_id') else None
+            servico_id=int(dados['servico_id']) if dados.get('servico_id') else None,
+            # NOVOS CAMPOS
+            data_vencimento=data_vencimento,
+            numero_parcelas=int(dados.get('numero_parcelas', 1)) if dados.get('numero_parcelas') else 1,
+            periodicidade=dados.get('periodicidade') or 'Mensal'
         )
         db.session.add(novo_orcamento)
         db.session.commit() 
@@ -2985,8 +3020,8 @@ def add_orcamento(obra_id):
         
         notificar_masters(
             tipo='orcamento_pendente',
-            titulo='Novo orçamento aguardando aprovação',
-            mensagem=f'{user.username} cadastrou orçamento "{novo_orcamento.descricao}" ({valor_formatado}) na obra {obra_nome}',
+            titulo='📋 Nova solicitação aguardando aprovação',
+            mensagem=f'{user.username} cadastrou "{novo_orcamento.descricao}" ({valor_formatado}) na obra {obra_nome}',
             obra_id=obra_id,
             item_id=novo_orcamento.id,
             item_type='orcamento',
@@ -3037,94 +3072,127 @@ def editar_orcamento(orcamento_id):
 # --- FIM DA ROTA ---
 
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
-@check_permission(roles=['administrador', 'master'])
+@check_permission(roles=['master'])  # APENAS Master pode aprovar
 def aprovar_orcamento(orcamento_id):
+    """
+    Master aprova a solicitação com 1 clique.
+    Sistema cria automaticamente o Pagamento Futuro/Parcelado.
+    Valores são somados ao serviço vinculado (se houver).
+    """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
     print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/aprovar (POST) acessada ---")
     try:
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
         
-        print(f"[LOG] Orçamento encontrado: ID={orcamento.id}, Descrição={orcamento.descricao}, Status={orcamento.status}")
-        
         if not user_has_access_to_obra(user, orcamento.obra_id):
-            print(f"[LOG] ❌ Acesso negado - usuário não tem acesso à obra {orcamento.obra_id}")
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
         if orcamento.status != 'Pendente':
-            print(f"[LOG] ❌ Orçamento já foi processado - status atual: {orcamento.status}")
-            return jsonify({"erro": f"Este orçamento já foi processado. Status atual: {orcamento.status}"}), 400
+            return jsonify({"erro": f"Esta solicitação já foi processada. Status atual: {orcamento.status}"}), 400
 
-        # Receber a opção do frontend
-        data = request.get_json() or {}
-        opcao = data.get('opcao', 'criar_novo')  # 'criar_novo' ou 'atrelar'
-        servico_id = data.get('servico_id')
-        
-        print(f"[LOG] Opção recebida: {opcao}, servico_id: {servico_id}")
-
+        # 1. Marcar como aprovado
         orcamento.status = 'Aprovado'
         
-        if opcao == 'criar_novo':
-            # Criar novo serviço baseado no orçamento
-            # Determinar se é MO ou Material baseado no tipo do orçamento
-            valor_mo = 0.0
-            valor_material = 0.0
-            
-            tipo_orcamento = orcamento.tipo or ''
-            if 'material' in tipo_orcamento.lower():
-                valor_material = orcamento.valor or 0.0
-            else:
-                valor_mo = orcamento.valor or 0.0
-            
-            novo_servico = Servico(
+        # 2. Se tem serviço vinculado, somar valor ao orçamento do serviço
+        if orcamento.servico_id:
+            servico = Servico.query.get(orcamento.servico_id)
+            if servico:
+                tipo_orcamento = orcamento.tipo or ''
+                if 'material' in tipo_orcamento.lower():
+                    servico.valor_global_material = (servico.valor_global_material or 0) + (orcamento.valor or 0)
+                    print(f"[LOG] ✅ Valor somado ao material do serviço {servico.id}: +R$ {orcamento.valor}")
+                else:
+                    servico.valor_global_mao_de_obra = (servico.valor_global_mao_de_obra or 0) + (orcamento.valor or 0)
+                    print(f"[LOG] ✅ Valor somado à MO do serviço {servico.id}: +R$ {orcamento.valor}")
+        
+        # 3. Criar Pagamento Futuro automaticamente
+        valor_orcamento = orcamento.valor or 0.0
+        descricao_pagamento = f"{orcamento.descricao}"
+        
+        # Usar dados de pagamento da solicitação (ou defaults)
+        data_vencimento = orcamento.data_vencimento if hasattr(orcamento, 'data_vencimento') and orcamento.data_vencimento else date.today() + timedelta(days=30)
+        numero_parcelas = orcamento.numero_parcelas if hasattr(orcamento, 'numero_parcelas') and orcamento.numero_parcelas else 1
+        periodicidade = orcamento.periodicidade if hasattr(orcamento, 'periodicidade') and orcamento.periodicidade else 'Mensal'
+        
+        if numero_parcelas == 1:
+            # Criar Pagamento Futuro Único
+            pagamento_futuro = PagamentoFuturo(
                 obra_id=orcamento.obra_id,
-                nome=orcamento.descricao or 'Serviço sem nome',
-                valor_global_mao_de_obra=valor_mo,
-                valor_global_material=valor_material,
-                responsavel=orcamento.fornecedor
+                descricao=descricao_pagamento,
+                fornecedor=orcamento.fornecedor,
+                valor=valor_orcamento,
+                data_vencimento=data_vencimento,
+                status='Previsto',
+                servico_id=orcamento.servico_id,
+                observacoes=f"Solicitação #{orcamento.id} aprovada"
             )
-            db.session.add(novo_servico)
-            db.session.flush()  # Para obter o ID do serviço
-            
-            # Vincular orçamento ao serviço criado
-            orcamento.servico_id = novo_servico.id
-            
-            print(f"[LOG] ✅ Novo serviço criado: ID {novo_servico.id}, Nome: {novo_servico.nome}, MO: {valor_mo}, MAT: {valor_material}")
-            
-        elif opcao == 'atrelar' and servico_id:
-            # Atrelar ao serviço existente
-            servico = Servico.query.get(servico_id)
-            if not servico or servico.obra_id != orcamento.obra_id:
-                print(f"[LOG] ❌ Serviço inválido ou não pertence à obra")
-                return jsonify({"erro": "Serviço inválido ou não pertence a esta obra."}), 400
-            
-            # Atualizar valor do serviço baseado no tipo do orçamento
-            tipo_orcamento = orcamento.tipo or ''
-            if 'material' in tipo_orcamento.lower():
-                servico.valor_global_material = (servico.valor_global_material or 0) + (orcamento.valor or 0)
-                print(f"[LOG] ✅ Orçamento atrelado ao serviço ID {servico.id}, novo valor material: {servico.valor_global_material}")
-            else:
-                servico.valor_global_mao_de_obra = (servico.valor_global_mao_de_obra or 0) + (orcamento.valor or 0)
-                print(f"[LOG] ✅ Orçamento atrelado ao serviço ID {servico.id}, novo valor MO: {servico.valor_global_mao_de_obra}")
-            
-            # Vincular orçamento ao serviço
-            orcamento.servico_id = servico.id
+            db.session.add(pagamento_futuro)
+            print(f"[LOG] ✅ Pagamento Futuro criado: R$ {valor_orcamento:.2f} para {data_vencimento}")
             
         else:
-            print(f"[LOG] ❌ Opção inválida: opcao={opcao}, servico_id={servico_id}")
-            return jsonify({"erro": "Opção inválida para aprovação. Selecione 'Criar Novo Serviço' ou escolha um serviço existente."}), 400
+            # Criar Pagamento Parcelado
+            valor_parcela = valor_orcamento / numero_parcelas
+            
+            pagamento_parcelado = PagamentoParcelado(
+                obra_id=orcamento.obra_id,
+                descricao=descricao_pagamento,
+                fornecedor=orcamento.fornecedor,
+                servico_id=orcamento.servico_id,
+                valor_total=valor_orcamento,
+                numero_parcelas=numero_parcelas,
+                valor_parcela=valor_parcela,
+                data_primeira_parcela=data_vencimento,
+                periodicidade=periodicidade,
+                parcelas_pagas=0,
+                status='Ativo',
+                observacoes=f"Solicitação #{orcamento.id} aprovada"
+            )
+            db.session.add(pagamento_parcelado)
+            db.session.flush()
+            
+            # Criar parcelas individuais
+            for i in range(numero_parcelas):
+                if periodicidade == 'Semanal':
+                    data_parcela = data_vencimento + timedelta(weeks=i)
+                elif periodicidade == 'Quinzenal':
+                    data_parcela = data_vencimento + timedelta(weeks=i*2)
+                else:  # Mensal
+                    mes = data_vencimento.month + i
+                    ano = data_vencimento.year + (mes - 1) // 12
+                    mes = ((mes - 1) % 12) + 1
+                    try:
+                        data_parcela = data_vencimento.replace(year=ano, month=mes)
+                    except ValueError:
+                        import calendar
+                        ultimo_dia = calendar.monthrange(ano, mes)[1]
+                        data_parcela = data_vencimento.replace(year=ano, month=mes, day=min(data_vencimento.day, ultimo_dia))
+                
+                parcela = ParcelaIndividual(
+                    pagamento_parcelado_id=pagamento_parcelado.id,
+                    numero_parcela=i + 1,
+                    valor_parcela=valor_parcela,
+                    data_vencimento=data_parcela,
+                    status='Previsto'
+                )
+                db.session.add(parcela)
+            
+            print(f"[LOG] ✅ Pagamento Parcelado criado: {numero_parcelas}x R$ {valor_parcela:.2f}")
         
         db.session.commit()
         
-        # --- NOTIFICAÇÕES ---
+        # 4. NOTIFICAÇÕES
         obra = Obra.query.get(orcamento.obra_id)
         obra_nome = obra.nome if obra else f"Obra {orcamento.obra_id}"
         
-        # Notificar todos os operadores da obra que o orçamento foi aprovado
+        # Notificar operadores
         notificar_operadores_obra(
             obra_id=orcamento.obra_id,
             tipo='orcamento_aprovado',
-            titulo='Orçamento aprovado',
-            mensagem=f'O orçamento "{orcamento.descricao}" foi aprovado por {user.username}',
+            titulo='✅ Solicitação aprovada',
+            mensagem=f'A solicitação "{orcamento.descricao}" foi aprovada e enviada para pagamento',
             item_id=orcamento.id,
             item_type='orcamento',
             usuario_origem_id=user.id
@@ -3133,29 +3201,30 @@ def aprovar_orcamento(orcamento_id):
         # Notificar administradores
         notificar_administradores(
             tipo='orcamento_aprovado',
-            titulo='Orçamento aprovado',
-            mensagem=f'O orçamento "{orcamento.descricao}" foi aprovado na obra {obra_nome}',
+            titulo='💰 Nova compra autorizada',
+            mensagem=f'Solicitação "{orcamento.descricao}" - R$ {valor_orcamento:,.2f} adicionada ao cronograma financeiro',
             obra_id=orcamento.obra_id,
             item_id=orcamento.id,
             item_type='orcamento',
             usuario_origem_id=user.id
         )
         
-        # Notificar masters também
+        # Notificar masters
         notificar_masters(
             tipo='orcamento_aprovado',
-            titulo='Orçamento aprovado',
-            mensagem=f'{user.username} aprovou o orçamento "{orcamento.descricao}" na obra {obra_nome}',
+            titulo='✅ Solicitação aprovada',
+            mensagem=f'{user.username} aprovou "{orcamento.descricao}" na obra {obra_nome}',
             obra_id=orcamento.obra_id,
             item_id=orcamento.id,
             item_type='orcamento',
             usuario_origem_id=user.id
         )
         
-        print(f"[LOG] ✅ Orçamento {orcamento_id} aprovado com sucesso!")
-        return jsonify({
-            "sucesso": f"Orçamento aprovado! {'Novo serviço criado' if opcao == 'criar_novo' else 'Atrelado ao serviço existente'}."
-        }), 200
+        msg_sucesso = f"Solicitação aprovada! Pagamento de R$ {valor_orcamento:,.2f} adicionado ao cronograma."
+        if numero_parcelas > 1:
+            msg_sucesso = f"Solicitação aprovada! {numero_parcelas}x R$ {valor_orcamento/numero_parcelas:,.2f} adicionado ao cronograma."
+        
+        return jsonify({"sucesso": msg_sucesso}), 200
         
     except Exception as e:
         db.session.rollback()
