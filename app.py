@@ -5692,7 +5692,7 @@ def listar_pagamentos_parcelados(obra_id):
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST'])
 @jwt_required()
 def criar_pagamento_parcelado(obra_id):
-    """Cria um novo pagamento parcelado com suporte a parcelas customizadas (boletos)"""
+    """Cria um novo pagamento parcelado com suporte a entrada e parcelas customizadas (boletos)"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -5702,18 +5702,32 @@ def criar_pagamento_parcelado(obra_id):
         
         valor_total = float(data.get('valor_total', 0))
         numero_parcelas = int(data.get('numero_parcelas', 1))
-        valor_parcela = valor_total / numero_parcelas if numero_parcelas > 0 else 0
         periodicidade = data.get('periodicidade', 'Mensal')  # Semanal, Quinzenal ou Mensal
         forma_pagamento = data.get('forma_pagamento', 'PIX')  # PIX, Boleto, Transferência
         
-        # Criar pagamento com campos obrigatórios
+        # 🆕 Verificar se tem entrada
+        tem_entrada = data.get('tem_entrada', False)
+        valor_entrada = float(data.get('valor_entrada', 0)) if tem_entrada else 0
+        data_entrada = data.get('data_entrada')
+        percentual_entrada = float(data.get('percentual_entrada', 0)) if tem_entrada else 0
+        
+        # Calcular valor das parcelas (após entrada)
+        valor_restante = valor_total - valor_entrada
+        valor_parcela = valor_restante / numero_parcelas if numero_parcelas > 0 else 0
+        
+        # Total de pagamentos = entrada (se houver) + parcelas
+        total_pagamentos = numero_parcelas + (1 if tem_entrada else 0)
+        
+        print(f"--- [LOG] Criando parcelamento: Total={valor_total}, Entrada={valor_entrada} ({percentual_entrada}%), Parcelas={numero_parcelas}x{valor_parcela:.2f} ---")
+        
+        # Criar pagamento parcelado
         novo_pagamento = PagamentoParcelado(
             obra_id=obra_id,
             descricao=data.get('descricao'),
             fornecedor=data.get('fornecedor') or None,
             servico_id=data.get('servico_id') or None,
             valor_total=valor_total,
-            numero_parcelas=numero_parcelas,
+            numero_parcelas=total_pagamentos,  # Incluir entrada no total de parcelas
             valor_parcela=valor_parcela,
             data_primeira_parcela=datetime.strptime(data.get('data_primeira_parcela'), '%Y-%m-%d').date(),
             periodicidade=periodicidade,
@@ -5722,7 +5736,7 @@ def criar_pagamento_parcelado(obra_id):
             observacoes=data.get('observacoes') or None
         )
         
-        # Tentar atribuir campos opcionais (podem não existir no banco ainda)
+        # Tentar atribuir campos opcionais
         try:
             novo_pagamento.pix = data.get('pix') or None
         except:
@@ -5735,6 +5749,23 @@ def criar_pagamento_parcelado(obra_id):
         
         db.session.add(novo_pagamento)
         db.session.flush()  # Para obter o ID do pagamento
+        
+        # 🆕 Criar parcela de ENTRADA (se houver)
+        if tem_entrada and valor_entrada > 0:
+            data_entrada_parsed = datetime.strptime(data_entrada, '%Y-%m-%d').date() if data_entrada else date.today()
+            
+            parcela_entrada = ParcelaIndividual(
+                pagamento_parcelado_id=novo_pagamento.id,
+                numero_parcela=0,  # Parcela 0 = Entrada
+                valor_parcela=valor_entrada,
+                data_vencimento=data_entrada_parsed,
+                status='Previsto',
+                data_pagamento=None,
+                forma_pagamento=forma_pagamento,
+                observacao=f'ENTRADA ({percentual_entrada:.0f}%)'
+            )
+            db.session.add(parcela_entrada)
+            print(f"--- [LOG] Parcela de ENTRADA criada: R$ {valor_entrada:.2f} para {data_entrada_parsed} ---")
         
         # Verificar se há parcelas customizadas (valores diferentes ou boletos com código)
         parcelas_customizadas = data.get('parcelas_customizadas', [])
@@ -5749,7 +5780,6 @@ def criar_pagamento_parcelado(obra_id):
                 data_venc = datetime.strptime(parcela_data.get('data_vencimento'), '%Y-%m-%d').date()
                 codigo_barras = parcela_data.get('codigo_barras') or None
                 
-                # Criar parcela com campos obrigatórios
                 nova_parcela = ParcelaIndividual(
                     pagamento_parcelado_id=novo_pagamento.id,
                     numero_parcela=numero,
@@ -5761,7 +5791,6 @@ def criar_pagamento_parcelado(obra_id):
                     observacao=None
                 )
                 
-                # Tentar atribuir codigo_barras (pode não existir no banco ainda)
                 try:
                     nova_parcela.codigo_barras = codigo_barras
                 except:
@@ -5769,14 +5798,52 @@ def criar_pagamento_parcelado(obra_id):
                 
                 db.session.add(nova_parcela)
             
-            # Atualizar valor_parcela do pagamento (média) se valores diferentes
+            # Atualizar valor_total se houver valores customizados
             soma_valores = sum(float(p.get('valor', 0)) for p in parcelas_customizadas)
-            novo_pagamento.valor_total = soma_valores
-            novo_pagamento.valor_parcela = soma_valores / numero_parcelas if numero_parcelas > 0 else 0
+            novo_pagamento.valor_total = soma_valores + valor_entrada
+            
+        else:
+            # Criar parcelas com valores iguais
+            data_primeira = datetime.strptime(data.get('data_primeira_parcela'), '%Y-%m-%d').date()
+            
+            for i in range(numero_parcelas):
+                # Calcular data da parcela
+                if periodicidade == 'Semanal':
+                    data_parcela = data_primeira + timedelta(weeks=i)
+                elif periodicidade == 'Quinzenal':
+                    data_parcela = data_primeira + timedelta(weeks=i*2)
+                else:  # Mensal
+                    mes = data_primeira.month + i
+                    ano = data_primeira.year + (mes - 1) // 12
+                    mes = ((mes - 1) % 12) + 1
+                    try:
+                        data_parcela = data_primeira.replace(year=ano, month=mes)
+                    except ValueError:
+                        import calendar
+                        ultimo_dia = calendar.monthrange(ano, mes)[1]
+                        data_parcela = data_primeira.replace(year=ano, month=mes, day=min(data_primeira.day, ultimo_dia))
+                
+                nova_parcela = ParcelaIndividual(
+                    pagamento_parcelado_id=novo_pagamento.id,
+                    numero_parcela=i + 1,
+                    valor_parcela=valor_parcela,
+                    data_vencimento=data_parcela,
+                    status='Previsto',
+                    data_pagamento=None,
+                    forma_pagamento=forma_pagamento,
+                    observacao=None
+                )
+                db.session.add(nova_parcela)
         
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento parcelado criado: ID {novo_pagamento.id} na obra {obra_id} (forma: {forma_pagamento}) ---")
+        msg = f"Pagamento parcelado criado: ID {novo_pagamento.id}"
+        if tem_entrada:
+            msg += f" (Entrada de R$ {valor_entrada:.2f} + {numero_parcelas}x R$ {valor_parcela:.2f})"
+        else:
+            msg += f" ({numero_parcelas}x R$ {valor_parcela:.2f})"
+        
+        print(f"--- [LOG] {msg} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
