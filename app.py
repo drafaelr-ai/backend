@@ -1607,8 +1607,12 @@ def get_obras():
         resultados = []
         for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra in obras_com_totais:
             
-            # KPI 1: Orçamento Total (APENAS SERVIÇOS CADASTRADOS)
-            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat)
+            # Calcular valores COM serviço
+            futuro_com_servico = float(futuro_previsto) - float(futuro_extra)
+            parcelas_com_servico = float(parcelas_previstas) - float(parcelas_extra)
+            
+            # KPI 1: Orçamento Total (SERVIÇOS + PAGAMENTOS COM SERVIÇO)
+            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + futuro_com_servico + parcelas_com_servico
             
             # KPI 2: Total Pago (Valores Efetivados)
             total_pago = float(lanc_pago) + float(pag_pago)
@@ -1761,6 +1765,10 @@ def get_obra_detalhes(obra_id):
         total_futuros_extra = float(pagamentos_futuros_sem_servico.total_futuro_extra or 0.0)
         total_parcelas_extra = float(parcelas_sem_servico.total_parcelas_extra or 0.0)
         
+        # Calcular valores COM serviço (para somar ao orçamento)
+        total_futuros_com_servico = total_futuros - total_futuros_extra
+        total_parcelas_com_servico = total_parcelas_previstas - total_parcelas_extra
+        
         # Logs de DEBUG para rastreamento
         print(f"--- [DEBUG KPI] obra_id={obra_id} ---")
         print(f"--- [DEBUG KPI] total_lancamentos: R$ {total_lancamentos:.2f} ---")
@@ -1768,13 +1776,14 @@ def get_obra_detalhes(obra_id):
         print(f"--- [DEBUG KPI] total_budget_mat: R$ {total_budget_mat:.2f} ---")
         print(f"--- [DEBUG KPI] total_futuros (PagamentoFuturo): R$ {total_futuros:.2f} ---")
         print(f"--- [DEBUG KPI] total_parcelas_previstas: R$ {total_parcelas_previstas:.2f} ---")
+        print(f"--- [DEBUG KPI] total_futuros_com_servico: R$ {total_futuros_com_servico:.2f} ---")
+        print(f"--- [DEBUG KPI] total_parcelas_com_servico: R$ {total_parcelas_com_servico:.2f} ---")
         print(f"--- [DEBUG KPI] total_futuros_extra (sem serviço): R$ {total_futuros_extra:.2f} ---")
         print(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
         
-        # KPI 1: ORÇAMENTO TOTAL (APENAS SERVIÇOS CADASTRADOS)
-        # Pagamentos futuros e parcelas SEM serviço não devem entrar no orçamento total
-        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat
-        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL (somente serviços) = R$ {kpi_orcamento_total:.2f} ---")
+        # KPI 1: ORÇAMENTO TOTAL (SERVIÇOS + PAGAMENTOS FUTUROS/PARCELADOS COM SERVIÇO)
+        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat + total_futuros_com_servico + total_parcelas_com_servico
+        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS (valor_pago de lançamentos + valor_pago de serviços)
         kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos
@@ -4375,8 +4384,13 @@ def relatorio_resumo_completo(obra_id):
             for s in servicos
         )
         
-        # CORREÇÃO: Calcular orcamento_total e valores_pagos PRIMEIRO
-        orcamento_total = orcamento_total_servicos  # Apenas dos serviços cadastrados
+        # Calcular pagamentos futuros/parcelas COM serviço
+        futuros_com_servico = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is not None)
+        parcelas_com_servico = sum((p.valor_parcela or 0) for p in parcelas_previstas 
+                                   if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is not None)
+        
+        # Orçamento total inclui serviços + pagamentos COM serviço
+        orcamento_total = orcamento_total_servicos + futuros_com_servico + parcelas_com_servico
         
         valores_pagos_lancamentos = sum((l.valor_pago or 0) for l in lancamentos)
         valores_pagos_servicos = sum(
@@ -4385,7 +4399,7 @@ def relatorio_resumo_completo(obra_id):
         )
         valores_pagos = valores_pagos_lancamentos + valores_pagos_servicos
         
-        # AGORA calcular despesas extras e custo real previsto
+        # Despesas extras = futuros/parcelas SEM serviço
         despesas_extras_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is None)
         despesas_extras_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas 
                                        if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is None)
@@ -4859,8 +4873,13 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
             for s in servicos
         )
         
-        # CORREÇÃO: Calcular orcamento_total e valores_pagos PRIMEIRO
-        orcamento_total = orcamento_total_servicos  # Apenas dos serviços cadastrados
+        # Calcular pagamentos futuros/parcelas COM serviço
+        futuros_com_servico = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is not None)
+        parcelas_com_servico = sum((p.valor_parcela or 0) for p in parcelas_previstas 
+                                   if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is not None)
+        
+        # Orçamento total inclui serviços + pagamentos COM serviço
+        orcamento_total = orcamento_total_servicos + futuros_com_servico + parcelas_com_servico
         
         valores_pagos_lancamentos = sum((l.valor_pago or 0) for l in lancamentos)
         valores_pagos_servicos = sum(
@@ -4869,7 +4888,7 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
         )
         valores_pagos = valores_pagos_lancamentos + valores_pagos_servicos
         
-        # AGORA calcular despesas extras e custo real previsto
+        # Despesas extras = futuros/parcelas SEM serviço
         despesas_extras_futuros = sum((pf.valor or 0) for pf in pagamentos_futuros if pf.servico_id is None)
         despesas_extras_parcelas = sum((p.valor_parcela or 0) for p in parcelas_previstas 
                                        if db.session.query(PagamentoParcelado).get(p.pagamento_parcelado_id).servico_id is None)
