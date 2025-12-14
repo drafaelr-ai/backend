@@ -1562,6 +1562,19 @@ def get_obras():
          ) \
          .group_by(PagamentoParcelado.obra_id) \
          .subquery()
+        
+        # NOVO: 5c. Parcelas PAGAS com serviço (para somar em valores pagos)
+        parcelas_pagas_com_servico_sum = db.session.query(
+            PagamentoParcelado.obra_id,
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_pagas')
+        ).select_from(ParcelaIndividual) \
+         .join(PagamentoParcelado, ParcelaIndividual.pagamento_parcelado_id == PagamentoParcelado.id) \
+         .filter(
+             ParcelaIndividual.status == 'Pago',
+             PagamentoParcelado.servico_id.isnot(None)  # COM serviço
+         ) \
+         .group_by(PagamentoParcelado.obra_id) \
+         .subquery()
 
         # 6. Query Principal
         obras_query = db.session.query(
@@ -1576,7 +1589,8 @@ def get_obras():
             func.coalesce(pagamentos_futuros_sum.c.total_futuro, 0).label('futuro_previsto'),
             func.coalesce(parcelas_previstas_sum.c.total_parcelas, 0).label('parcelas_previstas'),
             func.coalesce(pagamentos_futuros_extra_sum.c.total_futuro_extra, 0).label('futuro_extra'),
-            func.coalesce(parcelas_extra_sum.c.total_parcelas_extra, 0).label('parcelas_extra')
+            func.coalesce(parcelas_extra_sum.c.total_parcelas_extra, 0).label('parcelas_extra'),
+            func.coalesce(parcelas_pagas_com_servico_sum.c.total_parcelas_pagas, 0).label('parcelas_pagas_com_servico')
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
@@ -1591,6 +1605,8 @@ def get_obras():
             pagamentos_futuros_extra_sum, Obra.id == pagamentos_futuros_extra_sum.c.obra_id
         ).outerjoin(
             parcelas_extra_sum, Obra.id == parcelas_extra_sum.c.obra_id
+        ).outerjoin(
+            parcelas_pagas_com_servico_sum, Obra.id == parcelas_pagas_com_servico_sum.c.obra_id
         )
 
         # 7. Filtra permissões
@@ -1605,17 +1621,18 @@ def get_obras():
 
         # 8. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico in obras_com_totais:
             
             # Calcular valores COM serviço
             futuro_com_servico = float(futuro_previsto) - float(futuro_extra)
             parcelas_com_servico = float(parcelas_previstas) - float(parcelas_extra)
             
             # KPI 1: Orçamento Total (SERVIÇOS + PAGAMENTOS COM SERVIÇO)
-            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + futuro_com_servico + parcelas_com_servico
+            # NOTA: Parcelas PAGAS com serviço também fazem parte do orçamento original
+            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + futuro_com_servico + parcelas_com_servico + float(parcelas_pagas_com_servico)
             
-            # KPI 2: Total Pago (Valores Efetivados)
-            total_pago = float(lanc_pago) + float(pag_pago)
+            # KPI 2: Total Pago (Valores Efetivados) - INCLUI parcelas pagas com serviço
+            total_pago = float(lanc_pago) + float(pag_pago) + float(parcelas_pagas_com_servico)
             
             # KPI 3: Liberado para Pagamento (Fila) - Incluindo Cronograma Financeiro
             liberado_pagamento = (
@@ -1781,12 +1798,25 @@ def get_obra_detalhes(obra_id):
         print(f"--- [DEBUG KPI] total_futuros_extra (sem serviço): R$ {total_futuros_extra:.2f} ---")
         print(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
         
+        # CORREÇÃO: Buscar parcelas PAGAS com serviço vinculado ANTES dos KPIs
+        # (Parcelas sem serviço já são contabilizadas via Lancamento criado)
+        parcelas_pagas_com_servico = db.session.query(
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_pagas')
+        ).join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Pago',
+            PagamentoParcelado.servico_id.isnot(None)  # COM serviço
+        ).first()
+        total_parcelas_pagas_com_servico = float(parcelas_pagas_com_servico.total_parcelas_pagas or 0.0)
+        print(f"--- [DEBUG KPI] total_parcelas_pagas_com_servico: R$ {total_parcelas_pagas_com_servico:.2f} ---")
+        
         # KPI 1: ORÇAMENTO TOTAL (SERVIÇOS + PAGAMENTOS FUTUROS/PARCELADOS COM SERVIÇO)
-        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat + total_futuros_com_servico + total_parcelas_com_servico
+        # NOTA: Parcelas PAGAS com serviço também fazem parte do orçamento original
+        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat + total_futuros_com_servico + total_parcelas_com_servico + total_parcelas_pagas_com_servico
         print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = R$ {kpi_orcamento_total:.2f} ---")
         
-        # KPI 2: VALORES EFETIVADOS/PAGOS (valor_pago de lançamentos + valor_pago de serviços)
-        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos
+        # KPI 2: VALORES EFETIVADOS/PAGOS (valor_pago de lançamentos + valor_pago de serviços + parcelas pagas com serviço)
+        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico
         
         # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
         # Lançamentos com saldo pendente (valor_total - valor_pago > 0)
@@ -6424,6 +6454,115 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         print(error_details)
         print(f"{'='*80}\n")
         return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/desfazer', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
+def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
+    """Desfaz o pagamento de uma parcela individual - volta para status Previsto"""
+    
+    # Handler para OPTIONS (CORS preflight)
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+
+    try:
+        print(f"\n{'='*80}")
+        print(f"↩️ INÍCIO: desfazer_pagamento_parcela")
+        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id}")
+        print(f"{'='*80}")
+        
+        # Validações de acesso
+        current_user = get_current_user()
+        print(f"   👤 Usuário: {current_user.username} (role: {current_user.role})")
+        
+        if not user_has_access_to_obra(current_user, obra_id):
+            print(f"   ❌ Acesso negado à obra {obra_id}")
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        # Buscar pagamento parcelado
+        pagamento = db.session.get(PagamentoParcelado, pagamento_id)
+        if not pagamento or pagamento.obra_id != obra_id:
+            print(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        
+        # Buscar parcela
+        parcela = db.session.get(ParcelaIndividual, parcela_id)
+        if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
+            print(f"   ❌ Parcela {parcela_id} não encontrada ou não pertence ao pagamento {pagamento_id}")
+            return jsonify({"erro": "Parcela não encontrada"}), 404
+        
+        if parcela.status != 'Pago':
+            print(f"   ⚠️ Parcela {parcela_id} não está paga, status atual: {parcela.status}")
+            return jsonify({"erro": "Parcela não está marcada como paga"}), 400
+        
+        print(f"   ✅ Parcela encontrada: {parcela.numero_parcela}/{pagamento.numero_parcelas}")
+        print(f"      - valor: R$ {parcela.valor_parcela}")
+        print(f"      - data_pagamento: {parcela.data_pagamento}")
+        
+        # Se NÃO tem serviço vinculado, tentar remover o lançamento criado
+        if not pagamento.servico_id:
+            descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
+            lancamento_existente = Lancamento.query.filter_by(
+                obra_id=pagamento.obra_id,
+                descricao=descricao_lancamento
+            ).first()
+            
+            if lancamento_existente:
+                print(f"   🗑️ Removendo lançamento ID={lancamento_existente.id}")
+                db.session.delete(lancamento_existente)
+        
+        # Voltar parcela para status Previsto
+        parcela.status = 'Previsto'
+        parcela.data_pagamento = None
+        parcela.forma_pagamento = None
+        
+        print(f"   ✅ Parcela voltou para status 'Previsto'")
+        
+        # Atualizar contador de parcelas pagas
+        todas_parcelas = ParcelaIndividual.query.filter_by(
+            pagamento_parcelado_id=pagamento_id
+        ).all()
+        
+        parcelas_pagas_count = sum(1 for p in todas_parcelas if p.status == 'Pago')
+        pagamento.parcelas_pagas = parcelas_pagas_count
+        
+        # Voltar status do pagamento para Ativo se estava Concluído
+        if pagamento.status == 'Concluído':
+            pagamento.status = 'Ativo'
+            print(f"   ✅ Pagamento voltou para status 'Ativo'")
+        
+        print(f"   📊 Total de parcelas pagas agora: {parcelas_pagas_count}/{pagamento.numero_parcelas}")
+        
+        # Commit final
+        db.session.commit()
+        
+        print(f"   ✅ SUCESSO: Pagamento da parcela {parcela_id} desfeito")
+        print(f"{'='*80}\n")
+        
+        return jsonify({
+            "mensagem": "Pagamento desfeito com sucesso",
+            "parcela": parcela.to_dict()
+        }), 200
+    
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"\n{'='*80}")
+        print(f"❌ ERRO FATAL em desfazer_pagamento_parcela:")
+        print(f"   {str(e)}")
+        print(f"\nStack trace completo:")
+        print(error_details)
+        print(f"{'='*80}\n")
+        return jsonify({"erro": str(e)}), 500
+
+
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET'])
 @jwt_required()
 def obter_alertas_vencimento(obra_id):
