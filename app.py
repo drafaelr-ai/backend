@@ -2026,10 +2026,13 @@ def get_obra_detalhes(obra_id):
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def deletar_obra(obra_id):
-    # ... (código inalterado) ...
     print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
+        
+        # Deletar CaixaObra associado primeiro (não tem cascade automático)
+        CaixaObra.query.filter_by(obra_id=obra_id).delete()
+        
         db.session.delete(obra)
         db.session.commit()
         return jsonify({"sucesso": "Obra deletada com sucesso"}), 200
