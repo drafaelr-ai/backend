@@ -1523,12 +1523,12 @@ def get_obras():
          .group_by(Servico.obra_id) \
          .subquery()
         
-        # CORREÇÃO: 4. Pagamentos Futuros (Cronograma Financeiro) - TODOS
+        # CORREÇÃO: 4. Pagamentos Futuros (Cronograma Financeiro) - TODOS com status Previsto OU Pendente
         pagamentos_futuros_sum = db.session.query(
             PagamentoFuturo.obra_id,
             func.sum(PagamentoFuturo.valor).label('total_futuro')
         ).filter(
-            PagamentoFuturo.status == 'Previsto'
+            PagamentoFuturo.status.in_(['Previsto', 'Pendente'])
         ).group_by(PagamentoFuturo.obra_id).subquery()
         
         # NOVO: 4b. Pagamentos Futuros SEM serviço (Despesas Extras)
@@ -1536,7 +1536,7 @@ def get_obras():
             PagamentoFuturo.obra_id,
             func.sum(PagamentoFuturo.valor).label('total_futuro_extra')
         ).filter(
-            PagamentoFuturo.status == 'Previsto',
+            PagamentoFuturo.status.in_(['Previsto', 'Pendente']),
             PagamentoFuturo.servico_id.is_(None)
         ).group_by(PagamentoFuturo.obra_id).subquery()
         
@@ -1743,12 +1743,12 @@ def get_obra_detalhes(obra_id):
         total_pago_servicos = float(pagamentos_servico_valor_pago.valor_pago_serv or 0.0)
         
         # CORREÇÃO: Calcular totais de Pagamentos Futuros e Parcelas ANTES do KPI
-        # Pagamentos Futuros com status='Previsto' (TODOS)
+        # Pagamentos Futuros com status='Previsto' OU 'Pendente' (TODOS)
         pagamentos_futuros_previstos = db.session.query(
             func.sum(PagamentoFuturo.valor).label('total_futuro')
         ).filter(
             PagamentoFuturo.obra_id == obra_id,
-            PagamentoFuturo.status == 'Previsto'
+            PagamentoFuturo.status.in_(['Previsto', 'Pendente'])
         ).first()
         
         # Pagamentos Futuros SEM serviço (Despesas Extras)
@@ -1756,7 +1756,7 @@ def get_obra_detalhes(obra_id):
             func.sum(PagamentoFuturo.valor).label('total_futuro_extra')
         ).filter(
             PagamentoFuturo.obra_id == obra_id,
-            PagamentoFuturo.status == 'Previsto',
+            PagamentoFuturo.status.in_(['Previsto', 'Pendente']),
             PagamentoFuturo.servico_id.is_(None)
         ).first()
         
@@ -4398,7 +4398,7 @@ def relatorio_resumo_completo(obra_id):
         orcamentos = Orcamento.query.filter_by(obra_id=obra_id).all()
         
         # CORREÇÃO: Buscar também PagamentoFuturo e Parcelas
-        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id, status='Previsto').all()
+        pagamentos_futuros = PagamentoFuturo.query.filter(PagamentoFuturo.obra_id == obra_id, PagamentoFuturo.status.in_(['Previsto', 'Pendente'])).all()
         parcelas_previstas = db.session.query(ParcelaIndividual).join(
             PagamentoParcelado
         ).filter(
@@ -4887,7 +4887,7 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
         orcamentos = Orcamento.query.filter_by(obra_id=obra_id).all()
         
         # CORREÇÃO: Buscar também PagamentoFuturo e Parcelas
-        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id, status='Previsto').all()
+        pagamentos_futuros = PagamentoFuturo.query.filter(PagamentoFuturo.obra_id == obra_id, PagamentoFuturo.status.in_(['Previsto', 'Pendente'])).all()
         parcelas_previstas = db.session.query(ParcelaIndividual).join(
             PagamentoParcelado
         ).filter(
