@@ -2006,16 +2006,37 @@ def get_obra_detalhes(obra_id):
         servicos_com_totais = []
         for s in obra.servicos:
             serv_dict = s.to_dict()
+            
+            # Lancamentos vinculados ao serviço
+            lancamentos_servico = [l for l in todos_lancamentos if l.servico_id == s.id]
+            
+            # COMPROMETIDO (valor_total de todos os lancamentos)
             gastos_vinculados_mo = sum(
-                float(l.valor_total or 0.0) for l in todos_lancamentos
-                if l.servico_id == s.id and l.tipo == 'Mão de Obra'
+                float(l.valor_total or 0.0) for l in lancamentos_servico
+                if l.tipo == 'Mão de Obra'
             )
             gastos_vinculados_mat = sum(
-                float(l.valor_total or 0.0) for l in todos_lancamentos 
-                if l.servico_id == s.id and l.tipo == 'Material'
+                float(l.valor_total or 0.0) for l in lancamentos_servico 
+                if l.tipo == 'Material'
             )
             serv_dict['total_gastos_vinculados_mo'] = gastos_vinculados_mo
             serv_dict['total_gastos_vinculados_mat'] = gastos_vinculados_mat
+            
+            # NOVO: Incluir lancamentos pagos no histórico de pagamentos do serviço
+            # (Esses valores já são contados no total_gastos, então só adicionamos ao histórico)
+            lancamentos_pagos = [l for l in lancamentos_servico if l.status == 'Pago']
+            for lanc in lancamentos_pagos:
+                serv_dict['pagamentos'].append({
+                    "id": f"lanc-{lanc.id}",
+                    "data": lanc.data.isoformat() if lanc.data else None,
+                    "tipo_pagamento": "mao_de_obra" if lanc.tipo == 'Mão de Obra' else "material",
+                    "fornecedor": lanc.fornecedor,
+                    "valor_total": lanc.valor_total,
+                    "valor_pago": lanc.valor_pago,
+                    "status": "Pago",
+                    "descricao": lanc.descricao,
+                    "is_lancamento": True
+                })
             
             # Incluir parcelas pagas de pagamentos parcelados vinculados ao serviço
             parcelas_do_servico = ParcelaIndividual.query.join(PagamentoParcelado).filter(
