@@ -1997,6 +1997,12 @@ def get_obra_detalhes(obra_id):
                 item['data_vencimento'] = item['data_vencimento'].isoformat()
             
         # --- Cálculo dos totais de serviço ---
+        # DEBUG: Listar todos os pagamentos parcelados da obra
+        todos_parcelados = PagamentoParcelado.query.filter_by(obra_id=obra_id).all()
+        print(f"--- [DEBUG] Obra {obra_id}: {len(todos_parcelados)} pagamentos parcelados ---")
+        for pp in todos_parcelados:
+            print(f"    - '{pp.descricao}' (ID={pp.id}): servico_id={pp.servico_id}")
+        
         servicos_com_totais = []
         for s in obra.servicos:
             serv_dict = s.to_dict()
@@ -2017,9 +2023,12 @@ def get_obra_detalhes(obra_id):
                 ParcelaIndividual.status == 'Pago'
             ).all()
             
+            print(f"--- [DEBUG] Serviço '{s.nome}' (ID={s.id}): encontradas {len(parcelas_do_servico)} parcelas pagas vinculadas ---")
+            
             parcelas_list = []
             for parcela in parcelas_do_servico:
                 pag = parcela.pagamento_parcelado
+                print(f"    - Parcela {parcela.numero_parcela}: R$ {parcela.valor_parcela:.2f} (PagParcelado ID={pag.id}, servico_id={pag.servico_id})")
                 parcelas_list.append({
                     "id": parcela.id,
                     "data": (parcela.data_pagamento or parcela.data_vencimento).isoformat() if (parcela.data_pagamento or parcela.data_vencimento) else None,
@@ -2035,6 +2044,7 @@ def get_obra_detalhes(obra_id):
             # Adicionar parcelas ao histórico de pagamentos do serviço
             if parcelas_list:
                 serv_dict['pagamentos'] = serv_dict.get('pagamentos', []) + parcelas_list
+                print(f"    ✅ Total de pagamentos no serviço '{s.nome}': {len(serv_dict['pagamentos'])} (incluindo {len(parcelas_list)} parcelas)")
             
             servicos_com_totais.append(serv_dict)
             
