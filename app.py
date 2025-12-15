@@ -5935,6 +5935,27 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
                 pagamento.forma_pagamento = data['forma_pagamento']
             except:
                 pass
+        
+        # CORREÇÃO: Atualizar servico_id quando vinculado a um serviço
+        if 'servico_id' in data:
+            servico_id_novo = data['servico_id']
+            if servico_id_novo:
+                # Validar se o serviço existe e pertence à obra
+                servico = db.session.get(Servico, servico_id_novo)
+                if servico and servico.obra_id == obra_id:
+                    pagamento.servico_id = servico_id_novo
+                    print(f"--- [LOG] PagamentoParcelado {pagamento_id} vinculado ao serviço '{servico.nome}' ---")
+                else:
+                    print(f"--- [WARN] Serviço {servico_id_novo} não encontrado ou não pertence à obra ---")
+            else:
+                # Desvincular do serviço
+                pagamento.servico_id = None
+                print(f"--- [LOG] PagamentoParcelado {pagamento_id} desvinculado de serviço ---")
+        
+        # CORREÇÃO: Atualizar segmento quando alterado
+        if 'segmento' in data:
+            pagamento.segmento = data['segmento']
+        
         if 'parcelas_pagas' in data:
             pagamento.parcelas_pagas = int(data['parcelas_pagas'])
             # Atualiza status se todas as parcelas foram pagas
