@@ -1575,6 +1575,19 @@ def get_obras():
          ) \
          .group_by(PagamentoParcelado.obra_id) \
          .subquery()
+        
+        # NOVO: 5d. Parcelas PAGAS SEM serviço (despesas extras pagas)
+        parcelas_pagas_sem_servico_sum = db.session.query(
+            PagamentoParcelado.obra_id,
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_pagas_sem')
+        ).select_from(ParcelaIndividual) \
+         .join(PagamentoParcelado, ParcelaIndividual.pagamento_parcelado_id == PagamentoParcelado.id) \
+         .filter(
+             ParcelaIndividual.status == 'Pago',
+             PagamentoParcelado.servico_id.is_(None)  # SEM serviço
+         ) \
+         .group_by(PagamentoParcelado.obra_id) \
+         .subquery()
 
         # 6. Query Principal
         obras_query = db.session.query(
@@ -1590,7 +1603,8 @@ def get_obras():
             func.coalesce(parcelas_previstas_sum.c.total_parcelas, 0).label('parcelas_previstas'),
             func.coalesce(pagamentos_futuros_extra_sum.c.total_futuro_extra, 0).label('futuro_extra'),
             func.coalesce(parcelas_extra_sum.c.total_parcelas_extra, 0).label('parcelas_extra'),
-            func.coalesce(parcelas_pagas_com_servico_sum.c.total_parcelas_pagas, 0).label('parcelas_pagas_com_servico')
+            func.coalesce(parcelas_pagas_com_servico_sum.c.total_parcelas_pagas, 0).label('parcelas_pagas_com_servico'),
+            func.coalesce(parcelas_pagas_sem_servico_sum.c.total_parcelas_pagas_sem, 0).label('parcelas_pagas_sem_servico')
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
@@ -1607,6 +1621,8 @@ def get_obras():
             parcelas_extra_sum, Obra.id == parcelas_extra_sum.c.obra_id
         ).outerjoin(
             parcelas_pagas_com_servico_sum, Obra.id == parcelas_pagas_com_servico_sum.c.obra_id
+        ).outerjoin(
+            parcelas_pagas_sem_servico_sum, Obra.id == parcelas_pagas_sem_servico_sum.c.obra_id
         )
 
         # 7. Filtra permissões
@@ -1621,18 +1637,19 @@ def get_obras():
 
         # 8. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico, parcelas_pagas_sem_servico in obras_com_totais:
             
             # Calcular valores COM serviço
             futuro_com_servico = float(futuro_previsto) - float(futuro_extra)
             parcelas_com_servico = float(parcelas_previstas) - float(parcelas_extra)
             
-            # KPI 1: Orçamento Total (SERVIÇOS + PAGAMENTOS COM SERVIÇO)
-            # NOTA: Parcelas PAGAS com serviço também fazem parte do orçamento original
-            orcamento_total = float(lanc_geral) + float(serv_budget_mo) + float(serv_budget_mat) + futuro_com_servico + parcelas_com_servico + float(parcelas_pagas_com_servico)
+            # KPI 1: Orçamento Total (APENAS SERVIÇOS - MO + Material)
+            # Pagamentos futuros/parcelas são formas de PAGAR o orçamento, não orçamento adicional
+            orcamento_total = float(serv_budget_mo) + float(serv_budget_mat)
             
-            # KPI 2: Total Pago (Valores Efetivados) - INCLUI parcelas pagas com serviço
-            total_pago = float(lanc_pago) + float(pag_pago) + float(parcelas_pagas_com_servico)
+            # KPI 2: Total Pago (Valores Efetivados)
+            # Inclui: lançamentos + pagamentos de serviço + parcelas pagas (com e sem serviço)
+            total_pago = float(lanc_pago) + float(pag_pago) + float(parcelas_pagas_com_servico) + float(parcelas_pagas_sem_servico)
             
             # KPI 3: Liberado para Pagamento (Fila) - Incluindo Cronograma Financeiro
             liberado_pagamento = (
@@ -1722,10 +1739,14 @@ def get_obra_detalhes(obra_id):
         total_budget_mo = float(servico_budget_sum.total_budget_mo or 0.0)
         total_budget_mat = float(servico_budget_sum.total_budget_mat or 0.0)
         
-        # Total de Lançamentos (valor_total, independente de status)
+        # Total de Lançamentos SEM serviço vinculado (para evitar duplicação com orçamento de serviços)
+        # Lançamentos COM serviço_id já estão contabilizados no orçamento do serviço (MO + Material)
         total_lancamentos_query = db.session.query(
             func.sum(Lancamento.valor_total).label('total_lanc')
-        ).filter(Lancamento.obra_id == obra_id).first()
+        ).filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.servico_id.is_(None)  # CORREÇÃO: Apenas lançamentos SEM serviço
+        ).first()
         total_lancamentos = float(total_lancamentos_query.total_lanc or 0.0)
         
         # Valor pago dos lançamentos (soma de valor_pago)
@@ -1810,13 +1831,27 @@ def get_obra_detalhes(obra_id):
         total_parcelas_pagas_com_servico = float(parcelas_pagas_com_servico.total_parcelas_pagas or 0.0)
         print(f"--- [DEBUG KPI] total_parcelas_pagas_com_servico: R$ {total_parcelas_pagas_com_servico:.2f} ---")
         
-        # KPI 1: ORÇAMENTO TOTAL (SERVIÇOS + PAGAMENTOS FUTUROS/PARCELADOS COM SERVIÇO)
-        # NOTA: Parcelas PAGAS com serviço também fazem parte do orçamento original
-        kpi_orcamento_total = total_lancamentos + total_budget_mo + total_budget_mat + total_futuros_com_servico + total_parcelas_com_servico + total_parcelas_pagas_com_servico
-        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = R$ {kpi_orcamento_total:.2f} ---")
+        # CORREÇÃO: Buscar parcelas PAGAS SEM serviço (despesas extras pagas)
+        parcelas_pagas_sem_servico = db.session.query(
+            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_pagas_sem')
+        ).join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Pago',
+            PagamentoParcelado.servico_id.is_(None)  # SEM serviço
+        ).first()
+        total_parcelas_pagas_sem_servico = float(parcelas_pagas_sem_servico.total_parcelas_pagas_sem or 0.0)
+        print(f"--- [DEBUG KPI] total_parcelas_pagas_sem_servico: R$ {total_parcelas_pagas_sem_servico:.2f} ---")
         
-        # KPI 2: VALORES EFETIVADOS/PAGOS (valor_pago de lançamentos + valor_pago de serviços + parcelas pagas com serviço)
-        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico
+        # KPI 1: ORÇAMENTO TOTAL
+        # = Orçamento dos Serviços (MO + Material) 
+        # Pagamentos futuros/parcelas COM serviço são formas de PAGAR o orçamento, não são orçamento adicional
+        kpi_orcamento_total = total_budget_mo + total_budget_mat
+        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL (MO + Material) = R$ {kpi_orcamento_total:.2f} ---")
+        
+        # KPI 2: VALORES EFETIVADOS/PAGOS
+        # Inclui: lançamentos pagos + pagamentos de serviço + parcelas pagas (com e sem serviço)
+        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico + total_parcelas_pagas_sem_servico
+        print(f"--- [DEBUG KPI] ✅ VALORES PAGOS = R$ {kpi_valores_pagos:.2f} ---")
         
         # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
         # Lançamentos com saldo pendente (valor_total - valor_pago > 0)
