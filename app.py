@@ -79,6 +79,12 @@ def run_auto_migration():
             cur.execute("ALTER TABLE orcamento ADD COLUMN periodicidade VARCHAR(20) DEFAULT 'Mensal';")
             print("✅ Coluna periodicidade adicionada em orcamento")
         
+        # 2.6 NOVO: Adicionar coluna concluida na tabela obra
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'obra' AND column_name = 'concluida';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE obra ADD COLUMN concluida BOOLEAN DEFAULT FALSE;")
+            print("✅ Coluna concluida adicionada em obra")
+        
         # =================================================================
         # 3. CORREÇÃO DO ERRO DE FOREIGN KEY (CRÍTICO)
         # Verificar se a tabela parcela_individual existe E se a FK está correta
@@ -807,6 +813,7 @@ class Obra(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(150), nullable=False)
     cliente = db.Column(db.String(150))
+    concluida = db.Column(db.Boolean, default=False, nullable=False)  # NOVO: Marca obra como concluída
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
     orcamentos = db.relationship('Orcamento', backref='obra', lazy=True, cascade="all, delete-orphan")
@@ -818,7 +825,7 @@ class Obra(db.Model):
     boletos = db.relationship('Boleto', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
-        return { "id": self.id, "nome": self.nome, "cliente": self.cliente }
+        return { "id": self.id, "nome": self.nome, "cliente": self.cliente, "concluida": self.concluida }
 
 class Lancamento(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1648,15 +1655,28 @@ def get_obras():
             parcelas_pagas_sem_servico_sum, Obra.id == parcelas_pagas_sem_servico_sum.c.obra_id
         )
 
-        # 7. Filtra permissões
+        # 7. Filtra permissões E status de conclusão
+        mostrar_concluidas = request.args.get('mostrar_concluidas', 'false').lower() == 'true'
+        
         if user.role == 'administrador':
-            obras_com_totais = obras_query.order_by(Obra.nome).all()
+            if mostrar_concluidas:
+                obras_com_totais = obras_query.order_by(Obra.nome).all()
+            else:
+                obras_com_totais = obras_query.filter(
+                    db.or_(Obra.concluida == False, Obra.concluida.is_(None))
+                ).order_by(Obra.nome).all()
         else:
-            obras_com_totais = obras_query.join(
+            base_query = obras_query.join(
                 user_obra_association, Obra.id == user_obra_association.c.obra_id
             ).filter(
                 user_obra_association.c.user_id == user.id
-            ).order_by(Obra.nome).all()
+            )
+            if mostrar_concluidas:
+                obras_com_totais = base_query.order_by(Obra.nome).all()
+            else:
+                obras_com_totais = base_query.filter(
+                    db.or_(Obra.concluida == False, Obra.concluida.is_(None))
+                ).order_by(Obra.nome).all()
 
         # 8. Formata a Saída com os 4 KPIs
         resultados = []
@@ -1689,6 +1709,7 @@ def get_obras():
                 "id": obra.id,
                 "nome": obra.nome,
                 "cliente": obra.cliente,
+                "concluida": obra.concluida or False,
                 "orcamento_total": orcamento_total,
                 "total_pago": total_pago,
                 "liberado_pagamento": liberado_pagamento,
@@ -2205,6 +2226,45 @@ def deletar_obra(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/obras/<int:obra_id>/concluir', methods=['PATCH', 'OPTIONS'])
+@check_permission(roles=['administrador', 'master']) 
+def concluir_obra(obra_id):
+    """Marca uma obra como concluída ou reabre"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    
+    print(f"--- [LOG] Rota /obras/{obra_id}/concluir (PATCH) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        obra = Obra.query.get_or_404(obra_id)
+        dados = request.get_json() or {}
+        
+        # Se não passar 'concluida', alterna o estado atual
+        if 'concluida' in dados:
+            obra.concluida = dados['concluida']
+        else:
+            obra.concluida = not (obra.concluida or False)
+        
+        db.session.commit()
+        
+        status_texto = "concluída" if obra.concluida else "reaberta"
+        print(f"--- [LOG] Obra '{obra.nome}' marcada como {status_texto} ---")
+        
+        return jsonify({
+            "sucesso": f"Obra {status_texto} com sucesso!",
+            "obra": obra.to_dict()
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /obras/{obra_id}/concluir: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- Rotas de Lançamento (Geral) ---
