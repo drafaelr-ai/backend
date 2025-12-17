@@ -81,32 +81,55 @@ def run_auto_migration():
         
         # =================================================================
         # 3. CORREÇÃO DO ERRO DE FOREIGN KEY (CRÍTICO)
+        # Verificar se a tabela parcela_individual existe E se a FK está correta
         # =================================================================
-        print("🔄 Forçando recriação da tabela parcela_individual para corrigir FK...")
+        print("🔄 Verificando tabela parcela_individual...")
         
-        # Dropamos a tabela para garantir que ela perca o vínculo com a tabela antiga (pagamento_parcelado)
-        cur.execute("DROP TABLE IF EXISTS parcela_individual CASCADE;")
+        # Verificar se a tabela existe
+        cur.execute("SELECT to_regclass('public.parcela_individual');")
+        tabela_existe = cur.fetchone()[0]
         
-        # Recriamos apontando explicitamente para pagamento_parcelado_v2
-        print("📝 Criando tabela parcela_individual correta...")
-        cur.execute("""
-            CREATE TABLE parcela_individual (
-                id SERIAL PRIMARY KEY,
-                pagamento_parcelado_id INTEGER NOT NULL,
-                numero_parcela INTEGER NOT NULL,
-                valor_parcela FLOAT NOT NULL,
-                data_vencimento DATE NOT NULL,
-                status VARCHAR(20) DEFAULT 'Previsto',
-                data_pagamento DATE,
-                forma_pagamento VARCHAR(50),
-                observacao VARCHAR(255),
-                CONSTRAINT fk_pagamento_parcelado_v2 
-                    FOREIGN KEY(pagamento_parcelado_id) 
-                    REFERENCES pagamento_parcelado_v2(id)
-                    ON DELETE CASCADE
-            );
-        """)
-        print("✅ Tabela parcela_individual recriada vinculada a pagamento_parcelado_v2!")
+        if not tabela_existe:
+            # Tabela não existe, criar
+            print("📝 Criando tabela parcela_individual...")
+            cur.execute("""
+                CREATE TABLE parcela_individual (
+                    id SERIAL PRIMARY KEY,
+                    pagamento_parcelado_id INTEGER NOT NULL,
+                    numero_parcela INTEGER NOT NULL,
+                    valor_parcela FLOAT NOT NULL,
+                    data_vencimento DATE NOT NULL,
+                    status VARCHAR(20) DEFAULT 'Previsto',
+                    data_pagamento DATE,
+                    forma_pagamento VARCHAR(50),
+                    observacao VARCHAR(255),
+                    CONSTRAINT fk_pagamento_parcelado_v2 
+                        FOREIGN KEY(pagamento_parcelado_id) 
+                        REFERENCES pagamento_parcelado_v2(id)
+                        ON DELETE CASCADE
+                );
+            """)
+            print("✅ Tabela parcela_individual criada!")
+        else:
+            # Tabela existe, verificar se FK está correta
+            cur.execute("""
+                SELECT ccu.table_name 
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.constraint_column_usage ccu 
+                    ON tc.constraint_name = ccu.constraint_name
+                WHERE tc.table_name = 'parcela_individual' 
+                AND tc.constraint_type = 'FOREIGN KEY'
+                AND ccu.column_name = 'id';
+            """)
+            fk_result = cur.fetchone()
+            fk_table = fk_result[0] if fk_result else None
+            
+            if fk_table == 'pagamento_parcelado_v2':
+                print("✅ Tabela parcela_individual já existe com FK correta")
+            else:
+                print(f"⚠️ FK atual aponta para: {fk_table}")
+                print("⚠️ NÃO vamos dropar a tabela para preservar dados")
+                print("⚠️ Se houver problemas de FK, corrija manualmente")
         
         # 4. Alterar comprovante_url para TEXT (suportar base64 grande)
         print("🔄 Verificando coluna comprovante_url...")
@@ -1965,10 +1988,14 @@ def get_obra_detalhes(obra_id):
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
         
         # --- INCLUIR PARCELAS INDIVIDUAIS PAGAS ---
+        # CORREÇÃO: Apenas parcelas COM serviço, pois parcelas SEM serviço já criaram Lançamento
         parcelas_pagas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
             PagamentoParcelado.obra_id == obra_id,
-            ParcelaIndividual.status == 'Pago'
+            ParcelaIndividual.status == 'Pago',
+            PagamentoParcelado.servico_id.isnot(None)  # Apenas COM serviço
         ).all()
+        
+        print(f"--- [DEBUG] Parcelas pagas COM serviço encontradas: {len(parcelas_pagas)} ---")
         
         for parcela in parcelas_pagas:
             pag_parcelado = parcela.pagamento_parcelado
@@ -1995,6 +2022,49 @@ def get_obra_detalhes(obra_id):
                 "prioridade": 0,
                 "fornecedor": pag_parcelado.fornecedor
             })
+        
+        # CORREÇÃO: Incluir parcelas SEM serviço que podem não ter criado Lançamento
+        # (backup para casos onde a criação do lançamento falhou)
+        parcelas_pagas_sem_servico = ParcelaIndividual.query.join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Pago',
+            PagamentoParcelado.servico_id.is_(None)  # SEM serviço
+        ).all()
+        
+        print(f"--- [DEBUG] Parcelas pagas SEM serviço encontradas: {len(parcelas_pagas_sem_servico)} ---")
+        
+        # Verificar se cada parcela sem serviço já tem um lançamento correspondente
+        for parcela in parcelas_pagas_sem_servico:
+            pag_parcelado = parcela.pagamento_parcelado
+            desc_esperada = f"{pag_parcelado.descricao} (Parcela {parcela.numero_parcela}/{pag_parcelado.numero_parcelas})"
+            
+            # Verificar se já existe um lançamento com essa descrição
+            lancamento_existe = any(
+                l.get('descricao', '').startswith(pag_parcelado.descricao) and 
+                f"({parcela.numero_parcela}/" in l.get('descricao', '')
+                for l in historico_unificado if l.get('tipo_registro') == 'lancamento'
+            )
+            
+            if not lancamento_existe:
+                print(f"--- [DEBUG] Parcela {parcela.id} ({pag_parcelado.descricao}) não tem lançamento, adicionando ao histórico ---")
+                historico_unificado.append({
+                    "id": f"parcela-sem-serv-{parcela.id}",
+                    "tipo_registro": "parcela_individual",
+                    "data": parcela.data_pagamento or parcela.data_vencimento,
+                    "data_vencimento": parcela.data_vencimento,
+                    "descricao": f"{pag_parcelado.descricao} ({parcela.numero_parcela}/{pag_parcelado.numero_parcelas})",
+                    "tipo": pag_parcelado.segmento or "Material",
+                    "valor_total": float(parcela.valor_parcela or 0.0),
+                    "valor_pago": float(parcela.valor_parcela or 0.0),
+                    "status": "Pago",
+                    "pix": None,
+                    "servico_id": None,
+                    "servico_nome": None,
+                    "pagamento_parcelado_id": pag_parcelado.id,
+                    "parcela_id": parcela.id,
+                    "prioridade": 0,
+                    "fornecedor": pag_parcelado.fornecedor
+                })
         
         # --- INCLUIR BOLETOS PAGOS NO HISTÓRICO ---
         for boleto in boletos_obra:
