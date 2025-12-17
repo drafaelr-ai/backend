@@ -11412,6 +11412,188 @@ def limpar_e_adicionar_coluna():
         return jsonify({'error': str(e), 'success': False}), 500
 
 
+@app.route('/admin/recuperar-parcelas-pagas', methods=['POST', 'GET'])
+def recuperar_parcelas_pagas():
+    """
+    RECUPERAÇÃO DE DADOS: Reconstrói parcelas pagas a partir dos lançamentos existentes.
+    
+    Parâmetros:
+    - preview=true : Apenas mostra o que seria feito, sem alterar dados
+    - dias=30 : Só considera lançamentos dos últimos N dias (padrão: 30)
+    
+    Quando uma parcela SEM serviço é marcada como paga, ela cria um Lançamento.
+    Esta rota usa esses lançamentos para reconstruir as parcelas que foram perdidas.
+    """
+    import re
+    
+    try:
+        # Parâmetros
+        preview_mode = request.args.get('preview', 'true').lower() == 'true'
+        dias_limite = int(request.args.get('dias', 30))
+        
+        data_limite = date.today() - timedelta(days=dias_limite)
+        
+        resultados = {
+            "modo": "PREVIEW (nenhuma alteração feita)" if preview_mode else "EXECUÇÃO",
+            "filtro_dias": dias_limite,
+            "data_minima": data_limite.isoformat(),
+            "lancamentos_analisados": 0,
+            "parcelas_a_recuperar": 0,
+            "parcelas_ja_existentes": 0,
+            "parcelas_previstas_a_criar": 0,
+            "erros": [],
+            "acoes": []
+        }
+        
+        # 1. Buscar lançamentos RECENTES que têm padrão de parcela na descrição
+        todos_lancamentos = Lancamento.query.filter(
+            Lancamento.status == 'Pago',
+            Lancamento.data >= data_limite  # Só lançamentos recentes
+        ).all()
+        
+        # Regex para encontrar padrão de parcela
+        padrao_parcela = re.compile(r'^(.+?)\s*\((?:Parcela\s*)?(\d+)/(\d+)\)$', re.IGNORECASE)
+        
+        for lanc in todos_lancamentos:
+            if not lanc.descricao:
+                continue
+                
+            match = padrao_parcela.match(lanc.descricao.strip())
+            if not match:
+                continue
+            
+            resultados["lancamentos_analisados"] += 1
+            
+            descricao_base = match.group(1).strip()
+            numero_parcela = int(match.group(2))
+            total_parcelas = int(match.group(3))
+            
+            # 2. Buscar o PagamentoParcelado correspondente
+            pag_parcelado = PagamentoParcelado.query.filter(
+                PagamentoParcelado.obra_id == lanc.obra_id,
+                PagamentoParcelado.descricao.ilike(f"%{descricao_base}%")
+            ).first()
+            
+            if not pag_parcelado:
+                resultados["erros"].append(f"⚠️ PagamentoParcelado não encontrado para: {lanc.descricao} (obra {lanc.obra_id}) - IGNORADO")
+                continue
+            
+            # 3. Verificar se a parcela individual já existe
+            parcela_existente = ParcelaIndividual.query.filter(
+                ParcelaIndividual.pagamento_parcelado_id == pag_parcelado.id,
+                ParcelaIndividual.numero_parcela == numero_parcela
+            ).first()
+            
+            if parcela_existente:
+                if parcela_existente.status != 'Pago':
+                    resultados["acoes"].append(f"🔄 Atualizar status para Pago: {lanc.descricao}")
+                    resultados["parcelas_a_recuperar"] += 1
+                    
+                    if not preview_mode:
+                        parcela_existente.status = 'Pago'
+                        parcela_existente.data_pagamento = lanc.data
+                else:
+                    resultados["parcelas_ja_existentes"] += 1
+            else:
+                resultados["acoes"].append(f"✅ Criar parcela paga: {lanc.descricao}")
+                resultados["parcelas_a_recuperar"] += 1
+                
+                if not preview_mode:
+                    # Calcular data de vencimento baseada na periodicidade
+                    if pag_parcelado.periodicidade == 'Semanal':
+                        dias_offset = (numero_parcela - 1) * 7
+                    elif pag_parcelado.periodicidade == 'Quinzenal':
+                        dias_offset = (numero_parcela - 1) * 15
+                    else:  # Mensal
+                        dias_offset = (numero_parcela - 1) * 30
+                    
+                    data_vencimento = pag_parcelado.data_primeira_parcela + timedelta(days=dias_offset)
+                    
+                    nova_parcela = ParcelaIndividual(
+                        pagamento_parcelado_id=pag_parcelado.id,
+                        numero_parcela=numero_parcela,
+                        valor_parcela=lanc.valor_total or pag_parcelado.valor_parcela,
+                        data_vencimento=data_vencimento,
+                        status='Pago',
+                        data_pagamento=lanc.data,
+                        forma_pagamento=None,
+                        observacao=f"Recuperado do lançamento {lanc.id}"
+                    )
+                    db.session.add(nova_parcela)
+            
+            # 4. Atualizar contador de parcelas pagas no PagamentoParcelado
+            if not preview_mode:
+                parcelas_pagas_count = ParcelaIndividual.query.filter(
+                    ParcelaIndividual.pagamento_parcelado_id == pag_parcelado.id,
+                    ParcelaIndividual.status == 'Pago'
+                ).count()
+                pag_parcelado.parcelas_pagas = parcelas_pagas_count
+                
+                if parcelas_pagas_count >= pag_parcelado.numero_parcelas:
+                    pag_parcelado.status = 'Concluído'
+        
+        # 5. Verificar parcelas faltantes (não pagas) para PagamentoParcelados recentes
+        parcelados_recentes = PagamentoParcelado.query.filter(
+            PagamentoParcelado.data_primeira_parcela >= data_limite
+        ).all()
+        
+        for pag in parcelados_recentes:
+            for num in range(1, pag.numero_parcelas + 1):
+                parcela_existe = ParcelaIndividual.query.filter(
+                    ParcelaIndividual.pagamento_parcelado_id == pag.id,
+                    ParcelaIndividual.numero_parcela == num
+                ).first()
+                
+                if not parcela_existe:
+                    resultados["acoes"].append(f"📝 Criar parcela prevista: {pag.descricao} ({num}/{pag.numero_parcelas})")
+                    resultados["parcelas_previstas_a_criar"] += 1
+                    
+                    if not preview_mode:
+                        if pag.periodicidade == 'Semanal':
+                            dias_offset = (num - 1) * 7
+                        elif pag.periodicidade == 'Quinzenal':
+                            dias_offset = (num - 1) * 15
+                        else:
+                            dias_offset = (num - 1) * 30
+                        
+                        data_vencimento = pag.data_primeira_parcela + timedelta(days=dias_offset)
+                        
+                        nova_parcela = ParcelaIndividual(
+                            pagamento_parcelado_id=pag.id,
+                            numero_parcela=num,
+                            valor_parcela=pag.valor_parcela,
+                            data_vencimento=data_vencimento,
+                            status='Previsto',
+                            data_pagamento=None,
+                            forma_pagamento=None,
+                            observacao=None
+                        )
+                        db.session.add(nova_parcela)
+        
+        if not preview_mode:
+            db.session.commit()
+        
+        # Mensagem final
+        if preview_mode:
+            resultados["instrucao"] = "Para executar de verdade, acesse: /admin/recuperar-parcelas-pagas?preview=false&dias=" + str(dias_limite)
+        
+        return jsonify({
+            "success": True,
+            "message": f"{'Preview concluído' if preview_mode else 'Recuperação concluída'}! {resultados['parcelas_a_recuperar']} parcelas {'a recuperar' if preview_mode else 'recuperadas'}.",
+            "resultados": resultados
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] recuperar_parcelas_pagas: {str(e)}\n{error_details} ---")
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "details": error_details
+        }), 500
+
+
 # ==============================================================================
 # ROTAS DE EXPORTAÇÃO CSV
 # ==============================================================================
