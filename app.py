@@ -13514,41 +13514,50 @@ def bi_historico_mensal():
         else:
             obras_ids = [o.id for o in user.obras]
         
+        print(f"[BI HISTORICO] Buscando para {len(obras_ids)} obras")
+        
         # Buscar todos os lançamentos pagos
         lancamentos = Lancamento.query.filter(
             Lancamento.obra_id.in_(obras_ids),
             Lancamento.status == 'Pago'
         ).all()
+        print(f"[BI HISTORICO] Lançamentos pagos: {len(lancamentos)}")
         
         # Buscar parcelas pagas
         parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
             PagamentoParcelado.obra_id.in_(obras_ids),
             ParcelaIndividual.status == 'Pago'
         ).all()
+        print(f"[BI HISTORICO] Parcelas pagas: {len(parcelas)}")
         
         # Buscar pagamentos de serviço
         pagamentos_servico = PagamentoServico.query.join(Servico).filter(
             Servico.obra_id.in_(obras_ids)
         ).all()
+        print(f"[BI HISTORICO] Pagamentos de serviço: {len(pagamentos_servico)}")
         
         # Agrupar por mês
         meses = {}
         
         for l in lancamentos:
-            if l.data:
-                mes_key = l.data.strftime('%Y-%m')
+            # Usar data ou data_vencimento
+            data_ref = l.data or l.data_vencimento
+            if data_ref:
+                mes_key = data_ref.strftime('%Y-%m')
                 if mes_key not in meses:
                     meses[mes_key] = {'mes': mes_key, 'total': 0, 'qtd': 0, 'mao_obra': 0, 'material': 0}
-                meses[mes_key]['total'] += l.valor_pago or 0
+                valor = l.valor_pago or l.valor_total or 0
+                meses[mes_key]['total'] += valor
                 meses[mes_key]['qtd'] += 1
                 if l.tipo == 'Mão de Obra':
-                    meses[mes_key]['mao_obra'] += l.valor_pago or 0
+                    meses[mes_key]['mao_obra'] += valor
                 else:
-                    meses[mes_key]['material'] += l.valor_pago or 0
+                    meses[mes_key]['material'] += valor
         
         for p in parcelas:
-            if p.data_pagamento:
-                mes_key = p.data_pagamento.strftime('%Y-%m')
+            data_ref = p.data_pagamento or p.data_vencimento
+            if data_ref:
+                mes_key = data_ref.strftime('%Y-%m')
                 if mes_key not in meses:
                     meses[mes_key] = {'mes': mes_key, 'total': 0, 'qtd': 0, 'mao_obra': 0, 'material': 0}
                 meses[mes_key]['total'] += p.valor_parcela or 0
@@ -13565,6 +13574,8 @@ def bi_historico_mensal():
                     meses[mes_key]['mao_obra'] += ps.valor_pago or 0
                 else:
                     meses[mes_key]['material'] += ps.valor_pago or 0
+        
+        print(f"[BI HISTORICO] Total de meses encontrados: {len(meses)}")
         
         # Converter para lista ordenada
         historico = sorted(meses.values(), key=lambda x: x['mes'])
