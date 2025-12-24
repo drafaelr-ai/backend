@@ -2042,46 +2042,10 @@ def get_obra_detalhes(obra_id):
         
         # CORREÇÃO: Incluir parcelas SEM serviço que podem não ter criado Lançamento
         # (backup para casos onde a criação do lançamento falhou)
-        parcelas_pagas_sem_servico = ParcelaIndividual.query.join(PagamentoParcelado).filter(
-            PagamentoParcelado.obra_id == obra_id,
-            ParcelaIndividual.status == 'Pago',
-            PagamentoParcelado.servico_id.is_(None)  # SEM serviço
-        ).all()
-        
-        print(f"--- [DEBUG] Parcelas pagas SEM serviço encontradas: {len(parcelas_pagas_sem_servico)} ---")
-        
-        # Verificar se cada parcela sem serviço já tem um lançamento correspondente
-        for parcela in parcelas_pagas_sem_servico:
-            pag_parcelado = parcela.pagamento_parcelado
-            desc_esperada = f"{pag_parcelado.descricao} (Parcela {parcela.numero_parcela}/{pag_parcelado.numero_parcelas})"
-            
-            # Verificar se já existe um lançamento com essa descrição
-            lancamento_existe = any(
-                l.get('descricao', '').startswith(pag_parcelado.descricao) and 
-                f"({parcela.numero_parcela}/" in l.get('descricao', '')
-                for l in historico_unificado if l.get('tipo_registro') == 'lancamento'
-            )
-            
-            if not lancamento_existe:
-                print(f"--- [DEBUG] Parcela {parcela.id} ({pag_parcelado.descricao}) não tem lançamento, adicionando ao histórico ---")
-                historico_unificado.append({
-                    "id": f"parcela-sem-serv-{parcela.id}",
-                    "tipo_registro": "parcela_individual",
-                    "data": parcela.data_pagamento or parcela.data_vencimento,
-                    "data_vencimento": parcela.data_vencimento,
-                    "descricao": f"{pag_parcelado.descricao} ({parcela.numero_parcela}/{pag_parcelado.numero_parcelas})",
-                    "tipo": pag_parcelado.segmento or "Material",
-                    "valor_total": float(parcela.valor_parcela or 0.0),
-                    "valor_pago": float(parcela.valor_parcela or 0.0),
-                    "status": "Pago",
-                    "pix": None,
-                    "servico_id": None,
-                    "servico_nome": None,
-                    "pagamento_parcelado_id": pag_parcelado.id,
-                    "parcela_id": parcela.id,
-                    "prioridade": 0,
-                    "fornecedor": pag_parcelado.fornecedor
-                })
+        # NOTA: Parcelas pagas SEM serviço NÃO são adicionadas aqui
+        # Elas já aparecem via Lancamento criado em marcar_parcela_paga()
+        # Isso evita DUPLICAÇÃO no histórico
+        print(f"--- [DEBUG] Parcelas pagas SEM serviço: não adicionadas (já têm Lancamento) ---")
         
         # --- INCLUIR BOLETOS PAGOS NO HISTÓRICO ---
         for boleto in boletos_obra:
@@ -13186,10 +13150,12 @@ def resumo_boletos(obra_id):
 # ==============================================================================
 # ROTA DE DEBUG - VERIFICAR DADOS DE PARCELAS E LANÇAMENTOS
 # ==============================================================================
-@app.route('/admin/debug-kpi/<int:obra_id>', methods=['GET'])
+@app.route('/admin/debug-kpi/<int:obra_id>', methods=['GET', 'OPTIONS'])
 @jwt_required(optional=True)
 def debug_kpi(obra_id):
     """Rota de debug para verificar cálculos de KPI"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OK"}), 200)
     try:
         resultado = {
             "obra_id": obra_id,
