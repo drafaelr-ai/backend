@@ -1080,25 +1080,43 @@ class PagamentoParcelado(db.Model):
             day = min(source_date.day, calendar.monthrange(year, month)[1])
             return date(year, month, day)
 
-        # Calcular a próxima parcela pendente
-        proxima_parcela_numero = self.parcelas_pagas + 1
-        
-        # Calcular a data da próxima parcela
+        # Buscar próxima parcela pendente diretamente do banco
+        proxima_parcela = None
+        proxima_parcela_numero = None
         proxima_parcela_vencimento = None
-        if proxima_parcela_numero <= self.numero_parcelas:
-            try:
-                if self.periodicidade == 'Semanal':
-                    from datetime import timedelta
-                    dias_incremento = (proxima_parcela_numero - 1) * 7
-                    proxima_data = self.data_primeira_parcela + timedelta(days=dias_incremento)
-                    proxima_parcela_vencimento = proxima_data.isoformat()
-                else:  # Mensal
-                    # CORREÇÃO: Usa função nativa em vez de dateutil
-                    proxima_data = add_months_safe(self.data_primeira_parcela, (proxima_parcela_numero - 1))
-                    proxima_parcela_vencimento = proxima_data.isoformat()
-            except Exception as e:
-                print(f"[AVISO] Erro ao calcular próxima parcela: {e}")
-                proxima_parcela_vencimento = None
+        valor_proxima_parcela = self.valor_parcela
+        
+        try:
+            # Buscar primeira parcela com status diferente de 'Pago', ordenada por numero_parcela
+            proxima_parcela = ParcelaIndividual.query.filter(
+                ParcelaIndividual.pagamento_parcelado_id == self.id,
+                ParcelaIndividual.status != 'Pago'
+            ).order_by(ParcelaIndividual.numero_parcela.asc()).first()
+            
+            if proxima_parcela:
+                proxima_parcela_numero = proxima_parcela.numero_parcela
+                proxima_parcela_vencimento = proxima_parcela.data_vencimento.isoformat() if proxima_parcela.data_vencimento else None
+                valor_proxima_parcela = proxima_parcela.valor_parcela
+                
+                # Se for parcela 0 (entrada), exibir como "Entrada"
+                if proxima_parcela_numero == 0:
+                    proxima_parcela_numero = 0  # Manter como 0 para indicar entrada
+        except Exception as e:
+            print(f"[AVISO] Erro ao buscar próxima parcela: {e}")
+            # Fallback: usar cálculo antigo
+            proxima_parcela_numero = self.parcelas_pagas + 1
+            if proxima_parcela_numero <= self.numero_parcelas:
+                try:
+                    if self.periodicidade == 'Semanal':
+                        from datetime import timedelta
+                        dias_incremento = (proxima_parcela_numero - 1) * 7
+                        proxima_data = self.data_primeira_parcela + timedelta(days=dias_incremento)
+                        proxima_parcela_vencimento = proxima_data.isoformat()
+                    else:  # Mensal
+                        proxima_data = add_months_safe(self.data_primeira_parcela, (proxima_parcela_numero - 1))
+                        proxima_parcela_vencimento = proxima_data.isoformat()
+                except:
+                    pass
         
         # Buscar nome do serviço de forma segura
         servico_nome = None
@@ -1143,6 +1161,7 @@ class PagamentoParcelado(db.Model):
             "valor_total": self.valor_total,
             "numero_parcelas": self.numero_parcelas,
             "valor_parcela": self.valor_parcela,
+            "valor_proxima_parcela": valor_proxima_parcela,
             "data_primeira_parcela": self.data_primeira_parcela.isoformat() if self.data_primeira_parcela else None,
             "periodicidade": self.periodicidade,
             "parcelas_pagas": self.parcelas_pagas,
@@ -1150,7 +1169,7 @@ class PagamentoParcelado(db.Model):
             "observacoes": self.observacoes,
             "pix": pix_value,
             "forma_pagamento": forma_pagamento_value,
-            "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero <= self.numero_parcelas else None,
+            "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero is not None else None,
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
             "servico_id": self.servico_id,
             "servico_nome": servico_nome
@@ -8088,6 +8107,13 @@ def inserir_pagamento(obra_id):
         dados = request.json
         print(f"📋 Dados recebidos: {dados}")
         
+        # DEBUG: Verificar campos de entrada especificamente
+        print(f"🔍 DEBUG ENTRADA:")
+        print(f"   tem_entrada: {dados.get('tem_entrada')}")
+        print(f"   valor_entrada: {dados.get('valor_entrada')}")
+        print(f"   percentual_entrada: {dados.get('percentual_entrada')}")
+        print(f"   data_entrada: {dados.get('data_entrada')}")
+        
         # Campos obrigatórios
         descricao = dados.get('descricao')
         valor_total = float(dados.get('valor', 0))
@@ -8122,8 +8148,23 @@ def inserir_pagamento(obra_id):
                 return jsonify({"erro": "Parcelas, periodicidade e data da primeira parcela são obrigatórios para parcelamento"}), 400
             
             numero_parcelas = int(numero_parcelas)
-            valor_parcela = valor_total / numero_parcelas
             data_primeira = date.fromisoformat(data_primeira_parcela)
+            
+            # 🆕 Verificar se tem entrada
+            tem_entrada = dados.get('tem_entrada', False)
+            valor_entrada = float(dados.get('valor_entrada', 0)) if tem_entrada else 0
+            data_entrada = dados.get('data_entrada')
+            percentual_entrada = float(dados.get('percentual_entrada', 0)) if tem_entrada else 0
+            
+            # Calcular valor das parcelas (após entrada)
+            valor_restante = valor_total - valor_entrada
+            valor_parcela = valor_restante / numero_parcelas if numero_parcelas > 0 else 0
+            
+            # Total de pagamentos = entrada (se houver) + parcelas
+            total_pagamentos = numero_parcelas + (1 if tem_entrada and valor_entrada > 0 else 0)
+            
+            print(f"   💰 Entrada: R$ {valor_entrada:.2f} ({percentual_entrada:.0f}%)")
+            print(f"   💰 Restante: R$ {valor_restante:.2f} em {numero_parcelas}x R$ {valor_parcela:.2f}")
             
             # Criar PagamentoParcelado
             novo_parcelado = PagamentoParcelado(
@@ -8133,7 +8174,7 @@ def inserir_pagamento(obra_id):
                 servico_id=servico_id,
                 segmento=tipo,  # 'Material' ou 'Mão de Obra'
                 valor_total=valor_total,
-                numero_parcelas=numero_parcelas,
+                numero_parcelas=total_pagamentos,  # Incluir entrada no total
                 valor_parcela=valor_parcela,
                 data_primeira_parcela=data_primeira,
                 periodicidade=periodicidade,
@@ -8148,6 +8189,23 @@ def inserir_pagamento(obra_id):
             # Gerar parcelas individuais
             from datetime import timedelta
             import calendar
+            
+            # 🆕 Criar parcela de ENTRADA (se houver)
+            if tem_entrada and valor_entrada > 0:
+                data_entrada_parsed = date.fromisoformat(data_entrada) if data_entrada else data
+                
+                parcela_entrada = ParcelaIndividual(
+                    pagamento_parcelado_id=novo_parcelado.id,
+                    numero_parcela=0,  # Parcela 0 = Entrada
+                    valor_parcela=valor_entrada,
+                    data_vencimento=data_entrada_parsed,
+                    status='Previsto',
+                    data_pagamento=None,
+                    forma_pagamento=None,
+                    observacao=f'ENTRADA ({percentual_entrada:.0f}%)'
+                )
+                db.session.add(parcela_entrada)
+                print(f"      ✅ ENTRADA: R$ {valor_entrada:.2f} - {data_entrada_parsed}")
             
             for i in range(1, numero_parcelas + 1):
                 # Calcular data de vencimento da parcela
