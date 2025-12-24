@@ -13239,6 +13239,112 @@ def debug_kpi(obra_id):
 
 
 # ==============================================================================
+# ROTA DE LIMPEZA - REMOVER LANÇAMENTOS DUPLICADOS DE PARCELAS
+# ==============================================================================
+@app.route('/admin/limpar-lancamentos-duplicados', methods=['GET', 'OPTIONS'])
+@jwt_required(optional=True)
+def limpar_lancamentos_duplicados():
+    """
+    Remove lançamentos duplicados criados por parcelas pagas.
+    
+    Quando uma parcela SEM serviço é paga, o sistema cria um Lancamento.
+    Porém, versões anteriores também adicionavam a ParcelaIndividual ao histórico,
+    causando duplicação.
+    
+    Este script identifica e remove os Lancamentos duplicados.
+    
+    Parâmetros:
+    - preview=true (default): Apenas mostra o que seria deletado
+    - preview=false: Executa a deleção
+    """
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OK"}), 200)
+    
+    try:
+        import re
+        preview = request.args.get('preview', 'true').lower() == 'true'
+        
+        resultado = {
+            "modo": "PREVIEW" if preview else "EXECUÇÃO",
+            "lancamentos_duplicados": [],
+            "total_encontrados": 0,
+            "total_deletados": 0,
+            "valor_total_duplicado": 0,
+            "obras_afetadas": set()
+        }
+        
+        # Padrão: "Descrição (Parcela X/Y)" 
+        padrao_parcela = re.compile(r'^(.+)\s*\(Parcela\s*(\d+)/(\d+)\)$')
+        
+        # Buscar todos os lançamentos que parecem ser de parcelas
+        lancamentos = Lancamento.query.filter(
+            Lancamento.descricao.like('%(Parcela %')
+        ).all()
+        
+        print(f"--- [LIMPEZA] Encontrados {len(lancamentos)} lançamentos com padrão de parcela ---")
+        
+        lancamentos_para_deletar = []
+        
+        for lanc in lancamentos:
+            match = padrao_parcela.match(lanc.descricao)
+            if not match:
+                continue
+            
+            descricao_base = match.group(1).strip()
+            numero_parcela = int(match.group(2))
+            total_parcelas = int(match.group(3))
+            
+            # Buscar PagamentoParcelado correspondente
+            pag_parcelado = PagamentoParcelado.query.filter(
+                PagamentoParcelado.obra_id == lanc.obra_id,
+                PagamentoParcelado.descricao == descricao_base,
+                PagamentoParcelado.numero_parcelas == total_parcelas
+            ).first()
+            
+            if not pag_parcelado:
+                continue
+            
+            # Verificar se existe ParcelaIndividual paga correspondente
+            parcela = ParcelaIndividual.query.filter(
+                ParcelaIndividual.pagamento_parcelado_id == pag_parcelado.id,
+                ParcelaIndividual.numero_parcela == numero_parcela,
+                ParcelaIndividual.status == 'Pago'
+            ).first()
+            
+            if parcela:
+                # Encontrou duplicação! O lançamento foi criado pela parcela
+                # mas a parcela ainda existe como Pago
+                lancamentos_para_deletar.append(lanc)
+                resultado["obras_afetadas"].add(lanc.obra_id)
+                resultado["lancamentos_duplicados"].append({
+                    "lancamento_id": lanc.id,
+                    "obra_id": lanc.obra_id,
+                    "descricao": lanc.descricao,
+                    "valor": lanc.valor_pago,
+                    "data": lanc.data.isoformat() if lanc.data else None,
+                    "parcela_id": parcela.id,
+                    "pagamento_parcelado_id": pag_parcelado.id
+                })
+                resultado["valor_total_duplicado"] += lanc.valor_pago or 0
+        
+        resultado["total_encontrados"] = len(lancamentos_para_deletar)
+        resultado["obras_afetadas"] = list(resultado["obras_afetadas"])
+        
+        if not preview and lancamentos_para_deletar:
+            for lanc in lancamentos_para_deletar:
+                db.session.delete(lanc)
+            db.session.commit()
+            resultado["total_deletados"] = len(lancamentos_para_deletar)
+            print(f"--- [LIMPEZA] ✅ {len(lancamentos_para_deletar)} lançamentos duplicados removidos ---")
+        
+        return jsonify(resultado)
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e), "trace": traceback.format_exc()}), 500
+
+
+# ==============================================================================
 # INICIALIZAÇÃO DO SERVIDOR (DEVE SER A ÚLTIMA COISA DO ARQUIVO)
 # ==============================================================================
 if __name__ == '__main__':
