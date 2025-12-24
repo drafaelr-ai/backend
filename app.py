@@ -1691,8 +1691,9 @@ def get_obras():
             orcamento_total = float(serv_budget_mo) + float(serv_budget_mat)
             
             # KPI 2: Total Pago (Valores Efetivados)
-            # Inclui: lançamentos + pagamentos de serviço + parcelas pagas (com e sem serviço)
-            total_pago = float(lanc_pago) + float(pag_pago) + float(parcelas_pagas_com_servico) + float(parcelas_pagas_sem_servico)
+            # Inclui: lançamentos + pagamentos de serviço + parcelas pagas COM serviço
+            # NOTA: Parcelas pagas SEM serviço já estão em lanc_pago (Lancamento criado ao pagar)
+            total_pago = float(lanc_pago) + float(pag_pago) + float(parcelas_pagas_com_servico)
             
             # KPI 3: Liberado para Pagamento (Fila) - Incluindo Cronograma Financeiro
             liberado_pagamento = (
@@ -1864,7 +1865,7 @@ def get_obra_detalhes(obra_id):
         print(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
         
         # CORREÇÃO: Buscar parcelas PAGAS com serviço vinculado ANTES dos KPIs
-        # (Parcelas sem serviço já são contabilizadas via Lancamento criado)
+        # Parcelas sem serviço NÃO devem ser somadas aqui pois já são contabilizadas via Lancamento criado
         parcelas_pagas_com_servico = db.session.query(
             func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_pagas')
         ).join(PagamentoParcelado).filter(
@@ -1875,16 +1876,10 @@ def get_obra_detalhes(obra_id):
         total_parcelas_pagas_com_servico = float(parcelas_pagas_com_servico.total_parcelas_pagas or 0.0)
         print(f"--- [DEBUG KPI] total_parcelas_pagas_com_servico: R$ {total_parcelas_pagas_com_servico:.2f} ---")
         
-        # CORREÇÃO: Buscar parcelas PAGAS SEM serviço (despesas extras pagas)
-        parcelas_pagas_sem_servico = db.session.query(
-            func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_pagas_sem')
-        ).join(PagamentoParcelado).filter(
-            PagamentoParcelado.obra_id == obra_id,
-            ParcelaIndividual.status == 'Pago',
-            PagamentoParcelado.servico_id.is_(None)  # SEM serviço
-        ).first()
-        total_parcelas_pagas_sem_servico = float(parcelas_pagas_sem_servico.total_parcelas_pagas_sem or 0.0)
-        print(f"--- [DEBUG KPI] total_parcelas_pagas_sem_servico: R$ {total_parcelas_pagas_sem_servico:.2f} ---")
+        # NOTA: Parcelas PAGAS SEM serviço NÃO são mais contadas aqui
+        # Elas já são contabilizadas via Lancamento criado em marcar_parcela_paga()
+        # Isso evita DUPLICAÇÃO
+        print(f"--- [DEBUG KPI] parcelas_pagas_sem_servico: NÃO SOMADO (já está no Lancamento) ---")
         
         # KPI 1: ORÇAMENTO TOTAL
         # = Orçamento dos Serviços (MO + Material) 
@@ -1893,8 +1888,9 @@ def get_obra_detalhes(obra_id):
         print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL (MO + Material) = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS
-        # Inclui: lançamentos pagos + pagamentos de serviço + parcelas pagas (com e sem serviço)
-        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico + total_parcelas_pagas_sem_servico
+        # Inclui: lançamentos pagos + pagamentos de serviço + parcelas pagas COM serviço
+        # NOTA: Parcelas sem serviço já estão em total_pago_lancamentos (Lancamento criado ao pagar)
+        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico
         print(f"--- [DEBUG KPI] ✅ VALORES PAGOS = R$ {kpi_valores_pagos:.2f} ---")
         
         # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
@@ -13185,6 +13181,95 @@ def resumo_boletos(obra_id):
         error_details = traceback.format_exc()
         print(f"--- [ERRO] resumo_boletos: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
+
+
+# ==============================================================================
+# ROTA DE DEBUG - VERIFICAR DADOS DE PARCELAS E LANÇAMENTOS
+# ==============================================================================
+@app.route('/admin/debug-kpi/<int:obra_id>', methods=['GET'])
+@jwt_required(optional=True)
+def debug_kpi(obra_id):
+    """Rota de debug para verificar cálculos de KPI"""
+    try:
+        resultado = {
+            "obra_id": obra_id,
+            "parcelas_individuais": [],
+            "pagamentos_parcelados": [],
+            "lancamentos": [],
+            "calculos": {}
+        }
+        
+        # 1. Buscar todos os pagamentos parcelados
+        pag_parcelados = PagamentoParcelado.query.filter_by(obra_id=obra_id).all()
+        for pp in pag_parcelados:
+            resultado["pagamentos_parcelados"].append({
+                "id": pp.id,
+                "descricao": pp.descricao,
+                "servico_id": pp.servico_id,
+                "valor_total": pp.valor_total,
+                "numero_parcelas": pp.numero_parcelas,
+                "parcelas_pagas": pp.parcelas_pagas,
+                "status": pp.status
+            })
+        
+        # 2. Buscar todas as parcelas individuais
+        parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id
+        ).all()
+        for p in parcelas:
+            resultado["parcelas_individuais"].append({
+                "id": p.id,
+                "pagamento_parcelado_id": p.pagamento_parcelado_id,
+                "numero_parcela": p.numero_parcela,
+                "valor_parcela": p.valor_parcela,
+                "status": p.status,
+                "data_pagamento": p.data_pagamento.isoformat() if p.data_pagamento else None
+            })
+        
+        # 3. Buscar lançamentos
+        lancamentos = Lancamento.query.filter_by(obra_id=obra_id).all()
+        for l in lancamentos:
+            resultado["lancamentos"].append({
+                "id": l.id,
+                "descricao": l.descricao,
+                "valor_total": l.valor_total,
+                "valor_pago": l.valor_pago,
+                "status": l.status,
+                "servico_id": l.servico_id
+            })
+        
+        # 4. Calcular valores
+        total_parcelas_pagas_sem_servico = db.session.query(
+            func.sum(ParcelaIndividual.valor_parcela)
+        ).join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Pago',
+            PagamentoParcelado.servico_id.is_(None)
+        ).scalar() or 0
+        
+        total_parcelas_previstas_sem_servico = db.session.query(
+            func.sum(ParcelaIndividual.valor_parcela)
+        ).join(PagamentoParcelado).filter(
+            PagamentoParcelado.obra_id == obra_id,
+            ParcelaIndividual.status == 'Previsto',
+            PagamentoParcelado.servico_id.is_(None)
+        ).scalar() or 0
+        
+        total_lancamentos_pagos = db.session.query(
+            func.sum(Lancamento.valor_pago)
+        ).filter(Lancamento.obra_id == obra_id).scalar() or 0
+        
+        resultado["calculos"] = {
+            "total_parcelas_pagas_sem_servico": total_parcelas_pagas_sem_servico,
+            "total_parcelas_previstas_sem_servico": total_parcelas_previstas_sem_servico,
+            "total_lancamentos_pagos": total_lancamentos_pagos,
+            "qtd_parcelas_pagas": len([p for p in parcelas if p.status == 'Pago']),
+            "qtd_parcelas_previstas": len([p for p in parcelas if p.status == 'Previsto'])
+        }
+        
+        return jsonify(resultado)
+    except Exception as e:
+        return jsonify({"erro": str(e), "trace": traceback.format_exc()}), 500
 
 
 # ==============================================================================
