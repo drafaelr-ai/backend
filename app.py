@@ -1178,7 +1178,7 @@ class ParcelaIndividual(db.Model):
         db.Index('idx_parcela_pagamento_numero', 'pagamento_parcelado_id', 'numero_parcela'),
     )
     
-    pagamento_parcelado = db.relationship('PagamentoParcelado', backref='parcelas_individuais')
+    pagamento_parcelado = db.relationship('PagamentoParcelado', backref=db.backref('parcelas_individuais', cascade='all, delete-orphan'))
     
     def to_dict(self):
         # Tratar codigo_barras de forma defensiva (coluna pode não existir ainda)
@@ -2216,11 +2216,25 @@ def deletar_obra(obra_id):
     try:
         obra = Obra.query.get_or_404(obra_id)
         
-        # Deletar CaixaObra associado primeiro (não tem cascade automático)
-        CaixaObra.query.filter_by(obra_id=obra_id).delete()
+        # 1. Deletar parcelas individuais dos pagamentos parcelados desta obra
+        pagamentos_parcelados_ids = [p.id for p in PagamentoParcelado.query.filter_by(obra_id=obra_id).all()]
+        if pagamentos_parcelados_ids:
+            ParcelaIndividual.query.filter(
+                ParcelaIndividual.pagamento_parcelado_id.in_(pagamentos_parcelados_ids)
+            ).delete(synchronize_session=False)
+            print(f"--- [LOG] Parcelas individuais deletadas para obra {obra_id} ---")
         
+        # 2. Deletar pagamentos parcelados
+        PagamentoParcelado.query.filter_by(obra_id=obra_id).delete(synchronize_session=False)
+        print(f"--- [LOG] Pagamentos parcelados deletados para obra {obra_id} ---")
+        
+        # 3. Deletar CaixaObra associado (não tem cascade automático)
+        CaixaObra.query.filter_by(obra_id=obra_id).delete(synchronize_session=False)
+        
+        # 4. Deletar a obra (cascade deleta o resto)
         db.session.delete(obra)
         db.session.commit()
+        print(f"--- [LOG] Obra {obra_id} deletada com sucesso ---")
         return jsonify({"sucesso": "Obra deletada com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
