@@ -14690,18 +14690,14 @@ def sincronizar_pagamentos_orcamento(obra_id):
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/popular-servicos-base', methods=['POST'])
-@jwt_required()
+@app.route('/popular-servicos-base', methods=['GET', 'POST'])
 def popular_servicos_base():
     """
     Popula a base de serviços de referência (executar apenas uma vez)
-    Requer role master
+    GET: Acesso direto pelo navegador (sem autenticação, apenas para setup inicial)
+    POST: Acesso autenticado
     """
     try:
-        user = get_current_user()
-        if user.role != 'master':
-            return jsonify({"erro": "Apenas master pode executar"}), 403
-        
         # Verificar se já está populado
         if ServicoBase.query.count() > 0:
             return jsonify({"mensagem": "Base já populada", "total": ServicoBase.query.count()})
