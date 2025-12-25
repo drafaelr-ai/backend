@@ -14927,10 +14927,16 @@ def gerar_orcamento_por_planta(obra_id):
         if not imagem_base64:
             return jsonify({"erro": "Imagem não fornecida"}), 400
         
-        # Validar media_type (API Anthropic só aceita estes formatos)
-        tipos_validos = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+        # Validar media_type (API Anthropic aceita imagens e PDF)
+        tipos_imagem = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+        tipos_documento = ['application/pdf']
+        tipos_validos = tipos_imagem + tipos_documento
+        
         if media_type not in tipos_validos:
-            return jsonify({"erro": f"Formato de imagem não suportado: {media_type}. Use JPG, PNG, GIF ou WEBP."}), 400
+            return jsonify({"erro": f"Formato não suportado: {media_type}. Use JPG, PNG, GIF, WEBP ou PDF."}), 400
+        
+        # Determinar se é imagem ou documento (para estrutura da API)
+        is_pdf = media_type in tipos_documento
         
         # Remover prefixo data:image se existir
         if ',' in imagem_base64:
@@ -15236,6 +15242,30 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
             'anthropic-version': '2023-06-01'
         }
         
+        # Adicionar header beta para suporte a PDF
+        if is_pdf:
+            headers['anthropic-beta'] = 'pdfs-2024-09-25'
+        
+        # Estrutura diferente para PDF (document) vs imagem (image)
+        if is_pdf:
+            content_block = {
+                'type': 'document',
+                'source': {
+                    'type': 'base64',
+                    'media_type': media_type,
+                    'data': imagem_base64
+                }
+            }
+        else:
+            content_block = {
+                'type': 'image',
+                'source': {
+                    'type': 'base64',
+                    'media_type': media_type,
+                    'data': imagem_base64
+                }
+            }
+        
         payload = {
             'model': 'claude-sonnet-4-20250514',
             'max_tokens': 8000,
@@ -15243,14 +15273,7 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
                 {
                     'role': 'user',
                     'content': [
-                        {
-                            'type': 'image',
-                            'source': {
-                                'type': 'base64',
-                                'media_type': media_type,
-                                'data': imagem_base64
-                            }
-                        },
+                        content_block,
                         {
                             'type': 'text',
                             'text': prompt
@@ -15260,7 +15283,7 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
             ]
         }
         
-        print("[PLANTA-IA] Enviando para Claude Vision...")
+        print(f"[PLANTA-IA] Enviando para Claude Vision... (tipo: {'PDF' if is_pdf else 'imagem'})")
         
         # Usar urllib (nativo do Python) para chamar API
         req = urllib.request.Request(
