@@ -7,6 +7,8 @@ import os
 import traceback  # Importado para log de erros detalhado
 import re  # Importado para o CORS com regex
 import zipfile  # Importado para criar ZIP de notas fiscais
+import requests  # Para chamar API externa (Claude Vision)
+import json  # Para parsing de JSON
 from flask import Flask, jsonify, request, make_response, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -14773,6 +14775,580 @@ def listar_categorias():
         {"id": "limpeza", "nome": "Limpeza e Acabamento", "icone": "🧹"},
     ]
     return jsonify(categorias)
+
+
+# ==============================================================================
+# GERAÇÃO DE ORÇAMENTO POR PLANTA BAIXA (CLAUDE VISION)
+# ==============================================================================
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/gerar-por-planta', methods=['POST'])
+@jwt_required()
+def gerar_orcamento_por_planta(obra_id):
+    """
+    Recebe uma imagem de planta baixa e usa Claude Vision para gerar orçamento automaticamente
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        dados = request.json
+        imagem_base64 = dados.get('imagem_base64')
+        media_type = dados.get('media_type', 'image/jpeg')
+        area_total = dados.get('area_total')
+        padrao = dados.get('padrao', 'médio')
+        pavimentos = dados.get('pavimentos', 1)
+        tipo_construcao = dados.get('tipo_construcao', 'residencial')
+        
+        if not imagem_base64:
+            return jsonify({"erro": "Imagem não fornecida"}), 400
+        
+        # Remover prefixo data:image se existir
+        if ',' in imagem_base64:
+            imagem_base64 = imagem_base64.split(',')[1]
+        
+        # Chave da API Anthropic (configurar como variável de ambiente)
+        anthropic_api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not anthropic_api_key:
+            return jsonify({"erro": "API Key da Anthropic não configurada"}), 500
+        
+        print(f"[PLANTA-IA] Analisando planta para obra {obra_id}...")
+        
+        # Montar prompt para análise
+        prompt = f"""Analise esta planta baixa de uma construção e gere um orçamento detalhado.
+
+INFORMAÇÕES FORNECIDAS:
+- Área total informada: {area_total if area_total else 'não informada (estimar pela planta)'}
+- Padrão de acabamento: {padrao}
+- Número de pavimentos: {pavimentos}
+- Tipo de construção: {tipo_construcao}
+
+INSTRUÇÕES:
+1. Identifique todos os ambientes visíveis na planta (quartos, salas, banheiros, cozinha, etc.)
+2. Estime as dimensões e áreas de cada ambiente se possível ver escala ou cotas
+3. Calcule quantitativos para cada serviço de construção
+4. Use valores realistas baseados nas dimensões identificadas
+
+IMPORTANTE: Retorne APENAS um JSON válido, sem markdown, sem explicações, seguindo EXATAMENTE esta estrutura:
+
+{{
+    "dados_identificados": {{
+        "area_estimada": 120,
+        "ambientes": [
+            {{"nome": "Sala", "area_estimada": 20}},
+            {{"nome": "Quarto 1", "area_estimada": 12}},
+            {{"nome": "Banheiro 1", "area_estimada": 4}}
+        ],
+        "total_ambientes": 8,
+        "banheiros": 2,
+        "paredes_lineares_m": 85,
+        "portas_estimadas": 8,
+        "janelas_estimadas": 10,
+        "observacoes": "Casa térrea com planta retangular"
+    }},
+    "etapas": [
+        {{
+            "codigo": "01",
+            "nome": "SERVIÇOS PRELIMINARES",
+            "itens": [
+                {{
+                    "codigo": "01.01",
+                    "descricao": "Limpeza do terreno",
+                    "unidade": "m²",
+                    "quantidade": 150,
+                    "justificativa": "Área do terreno estimada em 25% maior que área construída"
+                }},
+                {{
+                    "codigo": "01.02",
+                    "descricao": "Locação da obra",
+                    "unidade": "m²",
+                    "quantidade": 120,
+                    "justificativa": "Área construída total"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "02",
+            "nome": "FUNDAÇÃO",
+            "itens": [
+                {{
+                    "codigo": "02.01",
+                    "descricao": "Escavação manual até 1,5m",
+                    "unidade": "m³",
+                    "quantidade": 36,
+                    "justificativa": "Perímetro 40m x profundidade 0.6m x largura 1.5m"
+                }},
+                {{
+                    "codigo": "02.02",
+                    "descricao": "Concreto fck 25 MPa",
+                    "unidade": "m³",
+                    "quantidade": 18,
+                    "justificativa": "Volume de concreto para sapatas e baldrame"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "03",
+            "nome": "ESTRUTURA",
+            "itens": [
+                {{
+                    "codigo": "03.01",
+                    "descricao": "Laje pré-moldada h=12cm",
+                    "unidade": "m²",
+                    "quantidade": 120,
+                    "justificativa": "Área construída"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "04",
+            "nome": "ALVENARIA",
+            "itens": [
+                {{
+                    "codigo": "04.01",
+                    "descricao": "Alvenaria bloco cerâmico 14x19x39",
+                    "unidade": "m²",
+                    "quantidade": 238,
+                    "justificativa": "Perímetro 85m x pé-direito 2.8m"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "05",
+            "nome": "INSTALAÇÕES HIDRÁULICAS",
+            "itens": [
+                {{
+                    "codigo": "05.01",
+                    "descricao": "Ponto de água fria PVC",
+                    "unidade": "pt",
+                    "quantidade": 18,
+                    "justificativa": "2 banheiros (8pt) + cozinha (4pt) + área serviço (4pt) + jardim (2pt)"
+                }},
+                {{
+                    "codigo": "05.02",
+                    "descricao": "Ponto de esgoto PVC",
+                    "unidade": "pt",
+                    "quantidade": 12,
+                    "justificativa": "2 banheiros (6pt) + cozinha (3pt) + área serviço (3pt)"
+                }},
+                {{
+                    "codigo": "05.03",
+                    "descricao": "Vaso sanitário com caixa acoplada",
+                    "unidade": "un",
+                    "quantidade": 2,
+                    "justificativa": "1 por banheiro"
+                }},
+                {{
+                    "codigo": "05.04",
+                    "descricao": "Lavatório com coluna",
+                    "unidade": "un",
+                    "quantidade": 2,
+                    "justificativa": "1 por banheiro"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "06",
+            "nome": "INSTALAÇÕES ELÉTRICAS",
+            "itens": [
+                {{
+                    "codigo": "06.01",
+                    "descricao": "Ponto de luz",
+                    "unidade": "pt",
+                    "quantidade": 15,
+                    "justificativa": "Média de 1-2 por ambiente"
+                }},
+                {{
+                    "codigo": "06.02",
+                    "descricao": "Ponto de tomada 2P+T",
+                    "unidade": "pt",
+                    "quantidade": 45,
+                    "justificativa": "Média de 5-6 por ambiente"
+                }},
+                {{
+                    "codigo": "06.03",
+                    "descricao": "Quadro distribuição 12 circuitos",
+                    "unidade": "un",
+                    "quantidade": 1,
+                    "justificativa": "Quadro principal"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "07",
+            "nome": "REVESTIMENTOS",
+            "itens": [
+                {{
+                    "codigo": "07.01",
+                    "descricao": "Chapisco interno",
+                    "unidade": "m²",
+                    "quantidade": 476,
+                    "justificativa": "Paredes internas 238m² x 2 faces"
+                }},
+                {{
+                    "codigo": "07.02",
+                    "descricao": "Reboco interno e=2cm",
+                    "unidade": "m²",
+                    "quantidade": 476,
+                    "justificativa": "Paredes internas"
+                }},
+                {{
+                    "codigo": "07.03",
+                    "descricao": "Contrapiso e=5cm",
+                    "unidade": "m²",
+                    "quantidade": 120,
+                    "justificativa": "Área construída"
+                }},
+                {{
+                    "codigo": "07.04",
+                    "descricao": "Piso cerâmico PEI-4",
+                    "unidade": "m²",
+                    "quantidade": 120,
+                    "justificativa": "Área construída"
+                }},
+                {{
+                    "codigo": "07.05",
+                    "descricao": "Azulejo 30x60",
+                    "unidade": "m²",
+                    "quantidade": 28,
+                    "justificativa": "Paredes dos banheiros até 1.8m de altura"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "08",
+            "nome": "PINTURA",
+            "itens": [
+                {{
+                    "codigo": "08.01",
+                    "descricao": "Massa corrida PVA",
+                    "unidade": "m²",
+                    "quantidade": 448,
+                    "justificativa": "Paredes - azulejos"
+                }},
+                {{
+                    "codigo": "08.02",
+                    "descricao": "Pintura acrílica 2 demãos",
+                    "unidade": "m²",
+                    "quantidade": 568,
+                    "justificativa": "Paredes + teto"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "09",
+            "nome": "ESQUADRIAS",
+            "itens": [
+                {{
+                    "codigo": "09.01",
+                    "descricao": "Porta madeira 80x210 completa",
+                    "unidade": "un",
+                    "quantidade": 5,
+                    "justificativa": "Portas internas dos quartos e banheiros"
+                }},
+                {{
+                    "codigo": "09.02",
+                    "descricao": "Porta madeira 70x210 completa",
+                    "unidade": "un",
+                    "quantidade": 3,
+                    "justificativa": "Portas menores"
+                }},
+                {{
+                    "codigo": "09.03",
+                    "descricao": "Janela alumínio correr 120x120",
+                    "unidade": "un",
+                    "quantidade": 10,
+                    "justificativa": "Janelas dos ambientes"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "10",
+            "nome": "COBERTURA",
+            "itens": [
+                {{
+                    "codigo": "10.01",
+                    "descricao": "Estrutura madeira para telha",
+                    "unidade": "m²",
+                    "quantidade": 140,
+                    "justificativa": "Área construída + beiral"
+                }},
+                {{
+                    "codigo": "10.02",
+                    "descricao": "Telha cerâmica",
+                    "unidade": "m²",
+                    "quantidade": 140,
+                    "justificativa": "Área de cobertura"
+                }}
+            ]
+        }},
+        {{
+            "codigo": "11",
+            "nome": "LIMPEZA E ACABAMENTO",
+            "itens": [
+                {{
+                    "codigo": "11.01",
+                    "descricao": "Limpeza final da obra",
+                    "unidade": "m²",
+                    "quantidade": 120,
+                    "justificativa": "Área construída"
+                }}
+            ]
+        }}
+    ]
+}}
+
+Adapte os quantitativos conforme o que você identificar na planta. Se a planta mostrar mais ou menos ambientes, ajuste proporcionalmente."""
+
+        # Chamar API da Anthropic
+        headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': anthropic_api_key,
+            'anthropic-version': '2023-06-01'
+        }
+        
+        payload = {
+            'model': 'claude-sonnet-4-20250514',
+            'max_tokens': 8000,
+            'messages': [
+                {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'image',
+                            'source': {
+                                'type': 'base64',
+                                'media_type': media_type,
+                                'data': imagem_base64
+                            }
+                        },
+                        {
+                            'type': 'text',
+                            'text': prompt
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        print("[PLANTA-IA] Enviando para Claude Vision...")
+        response = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+        
+        if response.status_code != 200:
+            print(f"[PLANTA-IA] Erro da API: {response.status_code} - {response.text}")
+            return jsonify({"erro": f"Erro na API de IA: {response.status_code}"}), 500
+        
+        result = response.json()
+        print("[PLANTA-IA] Resposta recebida, processando...")
+        
+        # Extrair texto da resposta
+        texto_resposta = result.get('content', [{}])[0].get('text', '')
+        
+        # Tentar parsear JSON
+        try:
+            # Limpar possíveis caracteres extras
+            texto_limpo = texto_resposta.strip()
+            if texto_limpo.startswith('```json'):
+                texto_limpo = texto_limpo[7:]
+            if texto_limpo.startswith('```'):
+                texto_limpo = texto_limpo[3:]
+            if texto_limpo.endswith('```'):
+                texto_limpo = texto_limpo[:-3]
+            texto_limpo = texto_limpo.strip()
+            
+            orcamento_gerado = json.loads(texto_limpo)
+        except json.JSONDecodeError as e:
+            print(f"[PLANTA-IA] Erro ao parsear JSON: {e}")
+            print(f"[PLANTA-IA] Texto recebido: {texto_resposta[:500]}...")
+            return jsonify({
+                "erro": "Erro ao processar resposta da IA",
+                "detalhes": str(e),
+                "resposta_raw": texto_resposta[:1000]
+            }), 500
+        
+        # Enriquecer com preços da base de serviços
+        print("[PLANTA-IA] Enriquecendo com preços da base...")
+        for etapa in orcamento_gerado.get('etapas', []):
+            for item in etapa.get('itens', []):
+                # Buscar serviço similar na base
+                descricao = item.get('descricao', '')
+                servico_base = ServicoBase.query.filter(
+                    ServicoBase.descricao.ilike(f'%{descricao}%')
+                ).first()
+                
+                if servico_base:
+                    item['preco_mao_obra'] = servico_base.preco_mao_obra
+                    item['preco_material'] = servico_base.preco_material
+                    item['preco_unitario'] = servico_base.preco_unitario
+                    item['tipo_composicao'] = servico_base.tipo_composicao
+                    item['rateio_mo'] = servico_base.rateio_mo
+                    item['rateio_mat'] = servico_base.rateio_mat
+                    item['fonte_preco'] = 'base'
+                else:
+                    # Tentar busca mais flexível
+                    palavras = descricao.split()[:2]  # Primeiras 2 palavras
+                    if palavras:
+                        servico_base = ServicoBase.query.filter(
+                            ServicoBase.descricao.ilike(f'%{palavras[0]}%')
+                        ).first()
+                        if servico_base:
+                            item['preco_mao_obra'] = servico_base.preco_mao_obra
+                            item['preco_material'] = servico_base.preco_material
+                            item['preco_unitario'] = servico_base.preco_unitario
+                            item['tipo_composicao'] = servico_base.tipo_composicao
+                            item['fonte_preco'] = 'base_aproximado'
+                        else:
+                            item['fonte_preco'] = 'nao_encontrado'
+                            item['tipo_composicao'] = 'separado'
+                    else:
+                        item['fonte_preco'] = 'nao_encontrado'
+                        item['tipo_composicao'] = 'separado'
+        
+        # Calcular totais
+        total_geral = 0
+        total_itens = 0
+        for etapa in orcamento_gerado.get('etapas', []):
+            etapa_total = 0
+            for item in etapa.get('itens', []):
+                qtd = item.get('quantidade', 0)
+                if item.get('tipo_composicao') == 'composto' and item.get('preco_unitario'):
+                    item_total = qtd * item.get('preco_unitario', 0)
+                else:
+                    mo = item.get('preco_mao_obra') or 0
+                    mat = item.get('preco_material') or 0
+                    item_total = qtd * (mo + mat)
+                item['total_estimado'] = item_total
+                etapa_total += item_total
+                total_itens += 1
+            etapa['total_etapa'] = etapa_total
+            total_geral += etapa_total
+        
+        orcamento_gerado['resumo'] = {
+            'total_geral': total_geral,
+            'total_etapas': len(orcamento_gerado.get('etapas', [])),
+            'total_itens': total_itens
+        }
+        
+        print(f"[PLANTA-IA] Orçamento gerado: {total_itens} itens, total R$ {total_geral:,.2f}")
+        
+        return jsonify(orcamento_gerado)
+        
+    except requests.exceptions.Timeout:
+        print("[PLANTA-IA] Timeout na requisição")
+        return jsonify({"erro": "Timeout ao processar imagem. Tente novamente."}), 504
+    except Exception as e:
+        print(f"[PLANTA-IA] Erro: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/importar-gerado', methods=['POST'])
+@jwt_required()
+def importar_orcamento_gerado(obra_id):
+    """
+    Importa o orçamento gerado pela IA para o banco de dados
+    Recebe as etapas/itens selecionados pelo usuário após revisão
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        dados = request.json
+        etapas_importar = dados.get('etapas', [])
+        criar_servicos = dados.get('criar_servicos', True)
+        
+        etapas_criadas = 0
+        itens_criados = 0
+        servicos_criados = 0
+        
+        for etapa_data in etapas_importar:
+            # Verificar se etapa já existe
+            etapa_existente = OrcamentoEngEtapa.query.filter_by(
+                obra_id=obra_id,
+                codigo=etapa_data.get('codigo')
+            ).first()
+            
+            if etapa_existente:
+                etapa = etapa_existente
+            else:
+                # Criar etapa
+                max_ordem = db.session.query(db.func.max(OrcamentoEngEtapa.ordem)).filter_by(obra_id=obra_id).scalar() or 0
+                etapa = OrcamentoEngEtapa(
+                    obra_id=obra_id,
+                    codigo=etapa_data.get('codigo'),
+                    nome=etapa_data.get('nome', '').upper(),
+                    ordem=max_ordem + 1
+                )
+                db.session.add(etapa)
+                db.session.flush()
+                etapas_criadas += 1
+            
+            # Criar itens
+            for item_data in etapa_data.get('itens', []):
+                if not item_data.get('selecionado', True):
+                    continue
+                
+                # Calcular ordem do item
+                max_ordem_item = db.session.query(db.func.max(OrcamentoEngItem.ordem)).filter_by(etapa_id=etapa.id).scalar() or 0
+                
+                item = OrcamentoEngItem(
+                    etapa_id=etapa.id,
+                    codigo=item_data.get('codigo'),
+                    descricao=item_data.get('descricao'),
+                    unidade=item_data.get('unidade'),
+                    quantidade=item_data.get('quantidade', 0),
+                    tipo_composicao=item_data.get('tipo_composicao', 'separado'),
+                    preco_mao_obra=item_data.get('preco_mao_obra'),
+                    preco_material=item_data.get('preco_material'),
+                    preco_unitario=item_data.get('preco_unitario'),
+                    rateio_mo=item_data.get('rateio_mo', 50),
+                    rateio_mat=item_data.get('rateio_mat', 50),
+                    ordem=max_ordem_item + 1
+                )
+                db.session.add(item)
+                db.session.flush()
+                itens_criados += 1
+                
+                # Criar serviço no Kanban se solicitado
+                if criar_servicos and item_data.get('criar_servico', True):
+                    totais = item.calcular_totais()
+                    servico = Servico(
+                        obra_id=obra_id,
+                        nome=item_data.get('descricao'),
+                        valor_global_mao_de_obra=totais['total_mao_obra'],
+                        valor_global_material=totais['total_material']
+                    )
+                    db.session.add(servico)
+                    db.session.flush()
+                    item.servico_id = servico.id
+                    servicos_criados += 1
+        
+        db.session.commit()
+        
+        return jsonify({
+            "mensagem": "Orçamento importado com sucesso",
+            "etapas_criadas": etapas_criadas,
+            "itens_criados": itens_criados,
+            "servicos_criados": servicos_criados
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[IMPORTAR-ORC] Erro: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
 
 
 # ==============================================================================
