@@ -14927,6 +14927,11 @@ def gerar_orcamento_por_planta(obra_id):
         if not imagem_base64:
             return jsonify({"erro": "Imagem não fornecida"}), 400
         
+        # Validar media_type (API Anthropic só aceita estes formatos)
+        tipos_validos = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+        if media_type not in tipos_validos:
+            return jsonify({"erro": f"Formato de imagem não suportado: {media_type}. Use JPG, PNG, GIF ou WEBP."}), 400
+        
         # Remover prefixo data:image se existir
         if ',' in imagem_base64:
             imagem_base64 = imagem_base64.split(',')[1]
