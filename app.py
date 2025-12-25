@@ -814,6 +814,8 @@ class Obra(db.Model):
     nome = db.Column(db.String(150), nullable=False)
     cliente = db.Column(db.String(150))
     concluida = db.Column(db.Boolean, default=False, nullable=False)  # NOVO: Marca obra como concluída
+    bdi = db.Column(db.Float, default=0)  # BDI do orçamento de engenharia (%)
+    area = db.Column(db.Float, nullable=True)  # Área da obra em m²
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
     servicos = db.relationship('Servico', backref='obra', lazy=True, cascade="all, delete-orphan")
     orcamentos = db.relationship('Orcamento', backref='obra', lazy=True, cascade="all, delete-orphan")
@@ -823,9 +825,17 @@ class Obra(db.Model):
     pagamentos_parcelados = db.relationship('PagamentoParcelado', backref='obra', lazy=True, cascade="all, delete-orphan")
     diarios = db.relationship('DiarioObra', backref='obra', lazy=True, cascade="all, delete-orphan")
     boletos = db.relationship('Boleto', backref='obra', lazy=True, cascade="all, delete-orphan")
+    orcamento_eng_etapas = db.relationship('OrcamentoEngEtapa', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
-        return { "id": self.id, "nome": self.nome, "cliente": self.cliente, "concluida": self.concluida }
+        return { 
+            "id": self.id, 
+            "nome": self.nome, 
+            "cliente": self.cliente, 
+            "concluida": self.concluida,
+            "bdi": self.bdi or 0,
+            "area": self.area
+        }
 
 class Lancamento(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1414,6 +1424,225 @@ class DiarioImagem(db.Model):
             'ordem': self.ordem,
             'criado_em': self.criado_em.strftime('%Y-%m-%d %H:%M:%S') if self.criado_em else None
         }
+
+
+# ==============================================================================
+# MÓDULO DE ORÇAMENTO DE ENGENHARIA
+# ==============================================================================
+
+class ServicoBase(db.Model):
+    """
+    Base de serviços de referência (estilo SINAPI/TCPO)
+    Tabela readonly - populada com seed inicial
+    """
+    __tablename__ = 'servico_base'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    categoria = db.Column(db.String(50), nullable=False)  # preliminares, fundacao, estrutura, etc
+    codigo_ref = db.Column(db.String(20), nullable=True)  # Código SINAPI/TCPO se aplicável
+    descricao = db.Column(db.String(255), nullable=False)
+    unidade = db.Column(db.String(10), nullable=False)  # m², m³, m, kg, un, pt, vb
+    
+    # Tipo de composição
+    tipo_composicao = db.Column(db.String(20), nullable=False, default='separado')  # separado | composto
+    
+    # Se separado
+    preco_mao_obra = db.Column(db.Float, nullable=True)
+    preco_material = db.Column(db.Float, nullable=True)
+    
+    # Se composto
+    preco_unitario = db.Column(db.Float, nullable=True)
+    rateio_mo = db.Column(db.Integer, nullable=True, default=50)  # % estimado para MO
+    rateio_mat = db.Column(db.Integer, nullable=True, default=50)  # % estimado para Material
+    
+    ativo = db.Column(db.Boolean, default=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'categoria': self.categoria,
+            'codigo_ref': self.codigo_ref,
+            'descricao': self.descricao,
+            'unidade': self.unidade,
+            'tipo_composicao': self.tipo_composicao,
+            'preco_mao_obra': self.preco_mao_obra,
+            'preco_material': self.preco_material,
+            'preco_unitario': self.preco_unitario,
+            'rateio_mo': self.rateio_mo,
+            'rateio_mat': self.rateio_mat,
+            'fonte': 'base'
+        }
+
+
+class ServicoUsuario(db.Model):
+    """
+    Serviços personalizados salvos pelo usuário
+    Compartilhados por conta (todos os usuários da mesma empresa)
+    """
+    __tablename__ = 'servico_usuario'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # Criador
+    
+    categoria = db.Column(db.String(50), nullable=True)
+    descricao = db.Column(db.String(255), nullable=False)
+    unidade = db.Column(db.String(10), nullable=False)
+    
+    # Tipo de composição
+    tipo_composicao = db.Column(db.String(20), nullable=False, default='separado')
+    
+    # Se separado
+    preco_mao_obra = db.Column(db.Float, nullable=True)
+    preco_material = db.Column(db.Float, nullable=True)
+    
+    # Se composto
+    preco_unitario = db.Column(db.Float, nullable=True)
+    rateio_mo = db.Column(db.Integer, nullable=True, default=50)
+    rateio_mat = db.Column(db.Integer, nullable=True, default=50)
+    
+    # Estatísticas de uso
+    vezes_usado = db.Column(db.Integer, default=0)
+    ultima_utilizacao = db.Column(db.DateTime, nullable=True)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    ativo = db.Column(db.Boolean, default=True)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'categoria': self.categoria,
+            'descricao': self.descricao,
+            'unidade': self.unidade,
+            'tipo_composicao': self.tipo_composicao,
+            'preco_mao_obra': self.preco_mao_obra,
+            'preco_material': self.preco_material,
+            'preco_unitario': self.preco_unitario,
+            'rateio_mo': self.rateio_mo,
+            'rateio_mat': self.rateio_mat,
+            'vezes_usado': self.vezes_usado,
+            'ultima_utilizacao': self.ultima_utilizacao.isoformat() if self.ultima_utilizacao else None,
+            'fonte': 'usuario'
+        }
+
+
+class OrcamentoEngEtapa(db.Model):
+    """
+    Etapas do orçamento de engenharia (ex: Fundação, Estrutura, Alvenaria)
+    """
+    __tablename__ = 'orcamento_eng_etapa'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    
+    codigo = db.Column(db.String(10), nullable=False)  # 01, 02, 03...
+    nome = db.Column(db.String(100), nullable=False)  # FUNDAÇÃO, ESTRUTURA...
+    ordem = db.Column(db.Integer, default=0)
+    
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relacionamento com itens
+    itens = db.relationship('OrcamentoEngItem', backref='etapa', lazy=True, cascade="all, delete-orphan")
+    
+    def to_dict(self, include_itens=True):
+        result = {
+            'id': self.id,
+            'obra_id': self.obra_id,
+            'codigo': self.codigo,
+            'nome': self.nome,
+            'ordem': self.ordem
+        }
+        if include_itens:
+            result['itens'] = [item.to_dict() for item in self.itens]
+        return result
+
+
+class OrcamentoEngItem(db.Model):
+    """
+    Itens do orçamento de engenharia
+    Cada item pode ser vinculado a um Serviço (Kanban)
+    """
+    __tablename__ = 'orcamento_eng_item'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    etapa_id = db.Column(db.Integer, db.ForeignKey('orcamento_eng_etapa.id'), nullable=False)
+    
+    codigo = db.Column(db.String(15), nullable=False)  # 01.01, 01.02...
+    descricao = db.Column(db.String(255), nullable=False)
+    unidade = db.Column(db.String(10), nullable=False)
+    quantidade = db.Column(db.Float, nullable=False, default=0)
+    
+    # Tipo de composição
+    tipo_composicao = db.Column(db.String(20), nullable=False, default='separado')  # separado | composto
+    
+    # Se separado
+    preco_mao_obra = db.Column(db.Float, nullable=True, default=0)
+    preco_material = db.Column(db.Float, nullable=True, default=0)
+    
+    # Se composto
+    preco_unitario = db.Column(db.Float, nullable=True)
+    rateio_mo = db.Column(db.Integer, nullable=True, default=50)
+    rateio_mat = db.Column(db.Integer, nullable=True, default=50)
+    
+    # Vinculação com Serviço (Kanban)
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
+    servico = db.relationship('Servico', backref='orcamento_itens', lazy=True)
+    
+    # Valores pagos (calculados a partir dos pagamentos do Serviço)
+    # Esses campos são atualizados automaticamente quando há pagamentos
+    valor_pago_mo = db.Column(db.Float, default=0)
+    valor_pago_mat = db.Column(db.Float, default=0)
+    
+    ordem = db.Column(db.Integer, default=0)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    def calcular_totais(self):
+        """Calcula totais do item baseado no tipo de composição"""
+        if self.tipo_composicao == 'composto':
+            total = (self.preco_unitario or 0) * (self.quantidade or 0)
+            total_mo = total * (self.rateio_mo or 50) / 100
+            total_mat = total * (self.rateio_mat or 50) / 100
+        else:
+            total_mo = (self.preco_mao_obra or 0) * (self.quantidade or 0)
+            total_mat = (self.preco_material or 0) * (self.quantidade or 0)
+            total = total_mo + total_mat
+        
+        return {
+            'total_mao_obra': total_mo,
+            'total_material': total_mat,
+            'total': total
+        }
+    
+    def to_dict(self):
+        totais = self.calcular_totais()
+        total_pago = (self.valor_pago_mo or 0) + (self.valor_pago_mat or 0)
+        percentual = (total_pago / totais['total'] * 100) if totais['total'] > 0 else 0
+        
+        return {
+            'id': self.id,
+            'etapa_id': self.etapa_id,
+            'codigo': self.codigo,
+            'descricao': self.descricao,
+            'unidade': self.unidade,
+            'quantidade': self.quantidade,
+            'tipo_composicao': self.tipo_composicao,
+            'preco_mao_obra': self.preco_mao_obra,
+            'preco_material': self.preco_material,
+            'preco_unitario': self.preco_unitario,
+            'rateio_mo': self.rateio_mo,
+            'rateio_mat': self.rateio_mat,
+            'servico_id': self.servico_id,
+            'servico_nome': self.servico.nome if self.servico else None,
+            'valor_pago_mo': self.valor_pago_mo or 0,
+            'valor_pago_mat': self.valor_pago_mat or 0,
+            'total_mao_obra': totais['total_mao_obra'],
+            'total_material': totais['total_material'],
+            'total': totais['total'],
+            'total_pago': total_pago,
+            'percentual_executado': round(percentual, 1),
+            'ordem': self.ordem
+        }
+
 
 # (Funções auxiliares e de permissão permanecem as mesmas)
 def formatar_real(valor):
@@ -13664,6 +13893,886 @@ def bi_projecao():
     except Exception as e:
         print(f"[BI] Erro ao buscar projeção: {e}")
         return jsonify({"erro": str(e)}), 500
+
+
+# ==============================================================================
+# ENDPOINTS DE ORÇAMENTO DE ENGENHARIA
+# ==============================================================================
+
+@app.route('/servicos-base', methods=['GET'])
+@jwt_required()
+def listar_servicos_base():
+    """
+    Lista serviços da base de referência com autocomplete
+    Query params: q (busca), categoria
+    """
+    try:
+        q = request.args.get('q', '').strip().lower()
+        categoria = request.args.get('categoria', '')
+        
+        query = ServicoBase.query.filter(ServicoBase.ativo == True)
+        
+        if q:
+            query = query.filter(ServicoBase.descricao.ilike(f'%{q}%'))
+        
+        if categoria:
+            query = query.filter(ServicoBase.categoria == categoria)
+        
+        servicos = query.order_by(ServicoBase.categoria, ServicoBase.descricao).limit(50).all()
+        
+        # Agrupar por categoria
+        categorias = {}
+        for s in servicos:
+            if s.categoria not in categorias:
+                categorias[s.categoria] = []
+            categorias[s.categoria].append(s.to_dict())
+        
+        return jsonify({
+            'servicos': [s.to_dict() for s in servicos],
+            'por_categoria': categorias,
+            'total': len(servicos)
+        })
+        
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/servicos-usuario', methods=['GET'])
+@jwt_required()
+def listar_servicos_usuario():
+    """
+    Lista serviços personalizados do usuário com autocomplete
+    Query params: q (busca)
+    """
+    try:
+        user = get_current_user()
+        q = request.args.get('q', '').strip().lower()
+        
+        query = ServicoUsuario.query.filter(
+            ServicoUsuario.user_id == user.id,
+            ServicoUsuario.ativo == True
+        )
+        
+        if q:
+            query = query.filter(ServicoUsuario.descricao.ilike(f'%{q}%'))
+        
+        # Ordenar por mais usados primeiro
+        servicos = query.order_by(
+            ServicoUsuario.vezes_usado.desc(),
+            ServicoUsuario.ultima_utilizacao.desc()
+        ).limit(30).all()
+        
+        return jsonify({
+            'servicos': [s.to_dict() for s in servicos],
+            'total': len(servicos)
+        })
+        
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/servicos-usuario', methods=['POST'])
+@jwt_required()
+def criar_servico_usuario():
+    """
+    Salva um novo serviço na biblioteca do usuário
+    """
+    try:
+        user = get_current_user()
+        dados = request.json
+        
+        servico = ServicoUsuario(
+            user_id=user.id,
+            categoria=dados.get('categoria'),
+            descricao=dados['descricao'],
+            unidade=dados['unidade'],
+            tipo_composicao=dados.get('tipo_composicao', 'separado'),
+            preco_mao_obra=dados.get('preco_mao_obra'),
+            preco_material=dados.get('preco_material'),
+            preco_unitario=dados.get('preco_unitario'),
+            rateio_mo=dados.get('rateio_mo', 50),
+            rateio_mat=dados.get('rateio_mat', 50),
+            vezes_usado=1,
+            ultima_utilizacao=datetime.utcnow()
+        )
+        
+        db.session.add(servico)
+        db.session.commit()
+        
+        return jsonify(servico.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/servicos-autocomplete', methods=['GET'])
+@jwt_required()
+def autocomplete_servicos():
+    """
+    Autocomplete híbrido: primeiro serviços do usuário, depois base de referência
+    """
+    try:
+        user = get_current_user()
+        q = request.args.get('q', '').strip().lower()
+        
+        if len(q) < 2:
+            return jsonify({'servicos_usuario': [], 'servicos_base': []})
+        
+        # Buscar serviços do usuário
+        servicos_usuario = ServicoUsuario.query.filter(
+            ServicoUsuario.user_id == user.id,
+            ServicoUsuario.ativo == True,
+            ServicoUsuario.descricao.ilike(f'%{q}%')
+        ).order_by(ServicoUsuario.vezes_usado.desc()).limit(10).all()
+        
+        # Buscar serviços da base
+        servicos_base = ServicoBase.query.filter(
+            ServicoBase.ativo == True,
+            ServicoBase.descricao.ilike(f'%{q}%')
+        ).order_by(ServicoBase.descricao).limit(15).all()
+        
+        return jsonify({
+            'servicos_usuario': [s.to_dict() for s in servicos_usuario],
+            'servicos_base': [s.to_dict() for s in servicos_base]
+        })
+        
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng', methods=['GET'])
+@jwt_required()
+def obter_orcamento_eng(obra_id):
+    """
+    Retorna o orçamento de engenharia completo da obra
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        # Verificar permissão
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        # Buscar etapas com itens
+        etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).order_by(OrcamentoEngEtapa.ordem, OrcamentoEngEtapa.codigo).all()
+        
+        # Calcular totais
+        total_mo = 0
+        total_mat = 0
+        total_pago_mo = 0
+        total_pago_mat = 0
+        total_itens = 0
+        itens_vinculados = 0
+        
+        etapas_dict = []
+        for etapa in etapas:
+            etapa_mo = 0
+            etapa_mat = 0
+            etapa_pago_mo = 0
+            etapa_pago_mat = 0
+            
+            itens_dict = []
+            for item in etapa.itens:
+                totais = item.calcular_totais()
+                etapa_mo += totais['total_mao_obra']
+                etapa_mat += totais['total_material']
+                etapa_pago_mo += item.valor_pago_mo or 0
+                etapa_pago_mat += item.valor_pago_mat or 0
+                total_itens += 1
+                if item.servico_id:
+                    itens_vinculados += 1
+                itens_dict.append(item.to_dict())
+            
+            total_mo += etapa_mo
+            total_mat += etapa_mat
+            total_pago_mo += etapa_pago_mo
+            total_pago_mat += etapa_pago_mat
+            
+            etapa_total = etapa_mo + etapa_mat
+            etapa_pago = etapa_pago_mo + etapa_pago_mat
+            
+            etapas_dict.append({
+                **etapa.to_dict(include_itens=False),
+                'itens': itens_dict,
+                'total_mao_obra': etapa_mo,
+                'total_material': etapa_mat,
+                'total': etapa_total,
+                'total_pago_mo': etapa_pago_mo,
+                'total_pago_mat': etapa_pago_mat,
+                'total_pago': etapa_pago,
+                'percentual': round((etapa_pago / etapa_total * 100) if etapa_total > 0 else 0, 1)
+            })
+        
+        subtotal = total_mo + total_mat
+        total_pago = total_pago_mo + total_pago_mat
+        bdi = obra.bdi if hasattr(obra, 'bdi') else 0
+        valor_bdi = subtotal * (bdi / 100) if bdi else 0
+        total_geral = subtotal + valor_bdi
+        
+        return jsonify({
+            'obra_id': obra_id,
+            'obra_nome': obra.nome,
+            'etapas': etapas_dict,
+            'resumo': {
+                'total_mao_obra': total_mo,
+                'total_material': total_mat,
+                'subtotal': subtotal,
+                'bdi': bdi,
+                'valor_bdi': valor_bdi,
+                'total_geral': total_geral,
+                'total_pago_mo': total_pago_mo,
+                'total_pago_mat': total_pago_mat,
+                'total_pago': total_pago,
+                'percentual_executado': round((total_pago / subtotal * 100) if subtotal > 0 else 0, 1),
+                'total_etapas': len(etapas),
+                'total_itens': total_itens,
+                'itens_vinculados': itens_vinculados
+            }
+        })
+        
+    except Exception as e:
+        print(f"[ORCAMENTO-ENG] Erro: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/etapas', methods=['POST'])
+@jwt_required()
+def criar_etapa_orcamento(obra_id):
+    """
+    Cria uma nova etapa no orçamento de engenharia
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        dados = request.json
+        
+        # Gerar código automaticamente se não fornecido
+        if not dados.get('codigo'):
+            ultima_etapa = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).order_by(OrcamentoEngEtapa.codigo.desc()).first()
+            if ultima_etapa:
+                try:
+                    ultimo_num = int(ultima_etapa.codigo)
+                    dados['codigo'] = f"{ultimo_num + 1:02d}"
+                except:
+                    dados['codigo'] = "01"
+            else:
+                dados['codigo'] = "01"
+        
+        # Calcular ordem
+        max_ordem = db.session.query(db.func.max(OrcamentoEngEtapa.ordem)).filter_by(obra_id=obra_id).scalar() or 0
+        
+        etapa = OrcamentoEngEtapa(
+            obra_id=obra_id,
+            codigo=dados['codigo'],
+            nome=dados['nome'].upper(),
+            ordem=max_ordem + 1
+        )
+        
+        db.session.add(etapa)
+        db.session.commit()
+        
+        return jsonify(etapa.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/etapas/<int:etapa_id>', methods=['PUT'])
+@jwt_required()
+def editar_etapa_orcamento(obra_id, etapa_id):
+    """
+    Edita uma etapa do orçamento
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
+        dados = request.json
+        
+        if 'codigo' in dados:
+            etapa.codigo = dados['codigo']
+        if 'nome' in dados:
+            etapa.nome = dados['nome'].upper()
+        if 'ordem' in dados:
+            etapa.ordem = dados['ordem']
+        
+        db.session.commit()
+        
+        return jsonify(etapa.to_dict())
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/etapas/<int:etapa_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_etapa_orcamento(obra_id, etapa_id):
+    """
+    Deleta uma etapa e todos os seus itens (e serviços vinculados)
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
+        
+        # Deletar serviços vinculados aos itens
+        for item in etapa.itens:
+            if item.servico_id:
+                servico = Servico.query.get(item.servico_id)
+                if servico:
+                    db.session.delete(servico)
+        
+        db.session.delete(etapa)
+        db.session.commit()
+        
+        return jsonify({"mensagem": "Etapa deletada com sucesso"})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/itens', methods=['POST'])
+@jwt_required()
+def criar_item_orcamento(obra_id):
+    """
+    Cria um novo item no orçamento de engenharia
+    Pode criar serviço automaticamente no Kanban
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        dados = request.json
+        etapa_id = dados['etapa_id']
+        
+        # Verificar se etapa existe
+        etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
+        if etapa.obra_id != obra_id:
+            return jsonify({"erro": "Etapa não pertence a esta obra"}), 400
+        
+        # Gerar código automaticamente se não fornecido
+        if not dados.get('codigo'):
+            ultimo_item = OrcamentoEngItem.query.filter_by(etapa_id=etapa_id).order_by(OrcamentoEngItem.codigo.desc()).first()
+            if ultimo_item:
+                try:
+                    partes = ultimo_item.codigo.split('.')
+                    ultimo_num = int(partes[-1])
+                    dados['codigo'] = f"{etapa.codigo}.{ultimo_num + 1:02d}"
+                except:
+                    dados['codigo'] = f"{etapa.codigo}.01"
+            else:
+                dados['codigo'] = f"{etapa.codigo}.01"
+        
+        # Calcular ordem
+        max_ordem = db.session.query(db.func.max(OrcamentoEngItem.ordem)).filter_by(etapa_id=etapa_id).scalar() or 0
+        
+        # Criar item
+        item = OrcamentoEngItem(
+            etapa_id=etapa_id,
+            codigo=dados['codigo'],
+            descricao=dados['descricao'],
+            unidade=dados['unidade'],
+            quantidade=dados.get('quantidade', 0),
+            tipo_composicao=dados.get('tipo_composicao', 'separado'),
+            preco_mao_obra=dados.get('preco_mao_obra'),
+            preco_material=dados.get('preco_material'),
+            preco_unitario=dados.get('preco_unitario'),
+            rateio_mo=dados.get('rateio_mo', 50),
+            rateio_mat=dados.get('rateio_mat', 50),
+            ordem=max_ordem + 1
+        )
+        
+        db.session.add(item)
+        db.session.flush()  # Para obter o ID do item
+        
+        # Opção de serviço
+        opcao_servico = dados.get('opcao_servico', 'criar')  # criar | vincular | nao
+        
+        if opcao_servico == 'criar':
+            # Criar serviço automaticamente no Kanban
+            totais = item.calcular_totais()
+            
+            servico = Servico(
+                obra_id=obra_id,
+                nome=dados['descricao'],
+                responsavel=dados.get('responsavel'),
+                valor_global_mao_de_obra=totais['total_mao_obra'],
+                valor_global_material=totais['total_material']
+            )
+            db.session.add(servico)
+            db.session.flush()
+            
+            item.servico_id = servico.id
+            
+        elif opcao_servico == 'vincular' and dados.get('servico_id'):
+            # Vincular a serviço existente
+            servico_existente = Servico.query.get(dados['servico_id'])
+            if servico_existente and servico_existente.obra_id == obra_id:
+                item.servico_id = servico_existente.id
+                
+                # Atualizar valores do serviço (somar)
+                totais = item.calcular_totais()
+                servico_existente.valor_global_mao_de_obra += totais['total_mao_obra']
+                servico_existente.valor_global_material += totais['total_material']
+        
+        # Salvar na biblioteca do usuário (opcional)
+        if dados.get('salvar_biblioteca'):
+            servico_usuario = ServicoUsuario.query.filter_by(
+                user_id=user.id,
+                descricao=dados['descricao'],
+                unidade=dados['unidade']
+            ).first()
+            
+            if servico_usuario:
+                # Atualizar existente
+                servico_usuario.vezes_usado += 1
+                servico_usuario.ultima_utilizacao = datetime.utcnow()
+                if dados.get('tipo_composicao') == 'separado':
+                    servico_usuario.preco_mao_obra = dados.get('preco_mao_obra')
+                    servico_usuario.preco_material = dados.get('preco_material')
+                else:
+                    servico_usuario.preco_unitario = dados.get('preco_unitario')
+            else:
+                # Criar novo
+                novo_servico_usuario = ServicoUsuario(
+                    user_id=user.id,
+                    categoria=dados.get('categoria'),
+                    descricao=dados['descricao'],
+                    unidade=dados['unidade'],
+                    tipo_composicao=dados.get('tipo_composicao', 'separado'),
+                    preco_mao_obra=dados.get('preco_mao_obra'),
+                    preco_material=dados.get('preco_material'),
+                    preco_unitario=dados.get('preco_unitario'),
+                    rateio_mo=dados.get('rateio_mo', 50),
+                    rateio_mat=dados.get('rateio_mat', 50),
+                    vezes_usado=1,
+                    ultima_utilizacao=datetime.utcnow()
+                )
+                db.session.add(novo_servico_usuario)
+        
+        db.session.commit()
+        
+        return jsonify(item.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ORCAMENTO-ENG] Erro ao criar item: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/itens/<int:item_id>', methods=['PUT'])
+@jwt_required()
+def editar_item_orcamento(obra_id, item_id):
+    """
+    Edita um item do orçamento
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        item = OrcamentoEngItem.query.get_or_404(item_id)
+        dados = request.json
+        
+        # Guardar totais antigos para atualizar serviço
+        totais_antigos = item.calcular_totais() if item.servico_id else None
+        
+        # Atualizar campos
+        if 'codigo' in dados:
+            item.codigo = dados['codigo']
+        if 'descricao' in dados:
+            item.descricao = dados['descricao']
+        if 'unidade' in dados:
+            item.unidade = dados['unidade']
+        if 'quantidade' in dados:
+            item.quantidade = dados['quantidade']
+        if 'tipo_composicao' in dados:
+            item.tipo_composicao = dados['tipo_composicao']
+        if 'preco_mao_obra' in dados:
+            item.preco_mao_obra = dados['preco_mao_obra']
+        if 'preco_material' in dados:
+            item.preco_material = dados['preco_material']
+        if 'preco_unitario' in dados:
+            item.preco_unitario = dados['preco_unitario']
+        if 'rateio_mo' in dados:
+            item.rateio_mo = dados['rateio_mo']
+        if 'rateio_mat' in dados:
+            item.rateio_mat = dados['rateio_mat']
+        
+        # Atualizar serviço vinculado se existir
+        if item.servico_id and totais_antigos:
+            servico = Servico.query.get(item.servico_id)
+            if servico:
+                totais_novos = item.calcular_totais()
+                
+                # Calcular diferença e atualizar
+                diff_mo = totais_novos['total_mao_obra'] - totais_antigos['total_mao_obra']
+                diff_mat = totais_novos['total_material'] - totais_antigos['total_material']
+                
+                servico.valor_global_mao_de_obra = max(0, servico.valor_global_mao_de_obra + diff_mo)
+                servico.valor_global_material = max(0, servico.valor_global_material + diff_mat)
+                
+                # Atualizar nome do serviço se descrição mudou
+                if 'descricao' in dados:
+                    servico.nome = dados['descricao']
+        
+        db.session.commit()
+        
+        return jsonify(item.to_dict())
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/itens/<int:item_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_item_orcamento(obra_id, item_id):
+    """
+    Deleta um item do orçamento E o serviço vinculado
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        item = OrcamentoEngItem.query.get_or_404(item_id)
+        
+        # Deletar serviço vinculado
+        if item.servico_id:
+            servico = Servico.query.get(item.servico_id)
+            if servico:
+                # Verificar se há outros itens usando este serviço
+                outros_itens = OrcamentoEngItem.query.filter(
+                    OrcamentoEngItem.servico_id == item.servico_id,
+                    OrcamentoEngItem.id != item_id
+                ).count()
+                
+                if outros_itens > 0:
+                    # Outros itens usam este serviço, apenas desvincular
+                    totais = item.calcular_totais()
+                    servico.valor_global_mao_de_obra = max(0, servico.valor_global_mao_de_obra - totais['total_mao_obra'])
+                    servico.valor_global_material = max(0, servico.valor_global_material - totais['total_material'])
+                else:
+                    # Nenhum outro item usa, deletar serviço
+                    db.session.delete(servico)
+        
+        db.session.delete(item)
+        db.session.commit()
+        
+        return jsonify({"mensagem": "Item deletado com sucesso"})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/sincronizar-pagamentos', methods=['POST'])
+@jwt_required()
+def sincronizar_pagamentos_orcamento(obra_id):
+    """
+    Sincroniza os valores pagos dos itens do orçamento com os pagamentos do Kanban
+    Deve ser chamado após registrar/deletar pagamentos
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        # Buscar todos os itens do orçamento desta obra
+        etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).all()
+        
+        itens_atualizados = 0
+        
+        for etapa in etapas:
+            for item in etapa.itens:
+                if item.servico_id:
+                    servico = Servico.query.get(item.servico_id)
+                    if servico:
+                        # Calcular total pago no serviço
+                        valor_pago_mo = 0
+                        valor_pago_mat = 0
+                        
+                        for pag in servico.pagamentos:
+                            if pag.status == 'Pago':
+                                if pag.tipo_pagamento == 'mao_de_obra':
+                                    valor_pago_mo += pag.valor_pago or pag.valor_total or 0
+                                else:
+                                    valor_pago_mat += pag.valor_pago or pag.valor_total or 0
+                        
+                        # Verificar se há outros itens usando o mesmo serviço
+                        itens_mesmo_servico = OrcamentoEngItem.query.filter_by(servico_id=item.servico_id).all()
+                        
+                        if len(itens_mesmo_servico) > 1:
+                            # Ratear proporcionalmente entre os itens
+                            total_mo_servico = sum(i.calcular_totais()['total_mao_obra'] for i in itens_mesmo_servico)
+                            total_mat_servico = sum(i.calcular_totais()['total_material'] for i in itens_mesmo_servico)
+                            
+                            totais_item = item.calcular_totais()
+                            
+                            if total_mo_servico > 0:
+                                proporcao_mo = totais_item['total_mao_obra'] / total_mo_servico
+                                item.valor_pago_mo = valor_pago_mo * proporcao_mo
+                            
+                            if total_mat_servico > 0:
+                                proporcao_mat = totais_item['total_material'] / total_mat_servico
+                                item.valor_pago_mat = valor_pago_mat * proporcao_mat
+                        else:
+                            # Item único para este serviço
+                            item.valor_pago_mo = valor_pago_mo
+                            item.valor_pago_mat = valor_pago_mat
+                        
+                        itens_atualizados += 1
+        
+        db.session.commit()
+        
+        return jsonify({
+            "mensagem": "Pagamentos sincronizados",
+            "itens_atualizados": itens_atualizados
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/popular-servicos-base', methods=['POST'])
+@jwt_required()
+def popular_servicos_base():
+    """
+    Popula a base de serviços de referência (executar apenas uma vez)
+    Requer role master
+    """
+    try:
+        user = get_current_user()
+        if user.role != 'master':
+            return jsonify({"erro": "Apenas master pode executar"}), 403
+        
+        # Verificar se já está populado
+        if ServicoBase.query.count() > 0:
+            return jsonify({"mensagem": "Base já populada", "total": ServicoBase.query.count()})
+        
+        # Base de serviços comuns
+        servicos = [
+            # SERVIÇOS PRELIMINARES
+            {"categoria": "preliminares", "descricao": "Limpeza de terreno", "unidade": "m²", "tipo": "composto", "preco": 5.50, "rateio_mo": 80},
+            {"categoria": "preliminares", "descricao": "Locação de obra", "unidade": "m²", "tipo": "composto", "preco": 8.00, "rateio_mo": 90},
+            {"categoria": "preliminares", "descricao": "Tapume em chapa compensada", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 50.00},
+            {"categoria": "preliminares", "descricao": "Barracão de obra", "unidade": "m²", "tipo": "composto", "preco": 320.00, "rateio_mo": 40},
+            {"categoria": "preliminares", "descricao": "Placa de obra", "unidade": "m²", "tipo": "separado", "mo": 50.00, "mat": 120.00},
+            {"categoria": "preliminares", "descricao": "Instalações provisórias (água/luz)", "unidade": "vb", "tipo": "composto", "preco": 2500.00, "rateio_mo": 30},
+            
+            # FUNDAÇÃO
+            {"categoria": "fundacao", "descricao": "Escavação manual até 1,5m", "unidade": "m³", "tipo": "composto", "preco": 65.00, "rateio_mo": 95},
+            {"categoria": "fundacao", "descricao": "Escavação mecânica", "unidade": "m³", "tipo": "composto", "preco": 28.00, "rateio_mo": 30},
+            {"categoria": "fundacao", "descricao": "Apiloamento manual", "unidade": "m²", "tipo": "composto", "preco": 8.00, "rateio_mo": 100},
+            {"categoria": "fundacao", "descricao": "Lastro de concreto magro", "unidade": "m³", "tipo": "separado", "mo": 80.00, "mat": 200.00},
+            {"categoria": "fundacao", "descricao": "Forma para sapata", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 20.00},
+            {"categoria": "fundacao", "descricao": "Forma para baldrame", "unidade": "m²", "tipo": "separado", "mo": 28.00, "mat": 22.00},
+            {"categoria": "fundacao", "descricao": "Armação CA-50", "unidade": "kg", "tipo": "separado", "mo": 4.50, "mat": 8.00},
+            {"categoria": "fundacao", "descricao": "Armação CA-60", "unidade": "kg", "tipo": "separado", "mo": 4.50, "mat": 8.50},
+            {"categoria": "fundacao", "descricao": "Concreto fck 20 MPa", "unidade": "m³", "tipo": "separado", "mo": 70.00, "mat": 250.00},
+            {"categoria": "fundacao", "descricao": "Concreto fck 25 MPa", "unidade": "m³", "tipo": "separado", "mo": 80.00, "mat": 300.00},
+            {"categoria": "fundacao", "descricao": "Concreto fck 30 MPa", "unidade": "m³", "tipo": "separado", "mo": 90.00, "mat": 330.00},
+            {"categoria": "fundacao", "descricao": "Impermeabilização de baldrame", "unidade": "m²", "tipo": "separado", "mo": 15.00, "mat": 20.00},
+            {"categoria": "fundacao", "descricao": "Estaca broca d=25cm", "unidade": "m", "tipo": "separado", "mo": 35.00, "mat": 45.00},
+            {"categoria": "fundacao", "descricao": "Estaca broca d=30cm", "unidade": "m", "tipo": "separado", "mo": 40.00, "mat": 55.00},
+            
+            # ESTRUTURA
+            {"categoria": "estrutura", "descricao": "Forma para pilar", "unidade": "m²", "tipo": "separado", "mo": 30.00, "mat": 25.00},
+            {"categoria": "estrutura", "descricao": "Forma para viga", "unidade": "m²", "tipo": "separado", "mo": 28.00, "mat": 24.00},
+            {"categoria": "estrutura", "descricao": "Forma para laje", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 23.00},
+            {"categoria": "estrutura", "descricao": "Escoramento de laje", "unidade": "m²", "tipo": "separado", "mo": 8.00, "mat": 10.00},
+            {"categoria": "estrutura", "descricao": "Laje pré-moldada h=12cm", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 60.00},
+            {"categoria": "estrutura", "descricao": "Laje pré-moldada h=16cm", "unidade": "m²", "tipo": "separado", "mo": 28.00, "mat": 72.00},
+            {"categoria": "estrutura", "descricao": "Laje pré-moldada h=20cm", "unidade": "m²", "tipo": "separado", "mo": 32.00, "mat": 85.00},
+            {"categoria": "estrutura", "descricao": "Verga/contraverga concreto", "unidade": "m", "tipo": "separado", "mo": 20.00, "mat": 25.00},
+            {"categoria": "estrutura", "descricao": "Cinta de amarração", "unidade": "m", "tipo": "separado", "mo": 18.00, "mat": 22.00},
+            
+            # ALVENARIA
+            {"categoria": "alvenaria", "descricao": "Alvenaria bloco cerâmico 9x19x19", "unidade": "m²", "tipo": "separado", "mo": 28.00, "mat": 30.00},
+            {"categoria": "alvenaria", "descricao": "Alvenaria bloco cerâmico 14x19x39", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 40.00},
+            {"categoria": "alvenaria", "descricao": "Alvenaria bloco concreto 14x19x39", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 47.00},
+            {"categoria": "alvenaria", "descricao": "Alvenaria bloco concreto 19x19x39", "unidade": "m²", "tipo": "separado", "mo": 40.00, "mat": 55.00},
+            {"categoria": "alvenaria", "descricao": "Encunhamento de alvenaria", "unidade": "m", "tipo": "separado", "mo": 8.00, "mat": 4.00},
+            {"categoria": "alvenaria", "descricao": "Fixação de batente", "unidade": "un", "tipo": "composto", "preco": 85.00, "rateio_mo": 70},
+            
+            # INSTALAÇÕES HIDRÁULICAS
+            {"categoria": "hidraulica", "descricao": "Ponto de água fria PVC", "unidade": "pt", "tipo": "separado", "mo": 85.00, "mat": 100.00},
+            {"categoria": "hidraulica", "descricao": "Ponto de água quente CPVC", "unidade": "pt", "tipo": "separado", "mo": 90.00, "mat": 130.00},
+            {"categoria": "hidraulica", "descricao": "Ponto de água quente PPR", "unidade": "pt", "tipo": "separado", "mo": 95.00, "mat": 140.00},
+            {"categoria": "hidraulica", "descricao": "Ponto de esgoto PVC", "unidade": "pt", "tipo": "separado", "mo": 75.00, "mat": 90.00},
+            {"categoria": "hidraulica", "descricao": "Caixa sifonada 100x100", "unidade": "un", "tipo": "separado", "mo": 45.00, "mat": 50.00},
+            {"categoria": "hidraulica", "descricao": "Caixa de gordura", "unidade": "un", "tipo": "separado", "mo": 120.00, "mat": 180.00},
+            {"categoria": "hidraulica", "descricao": "Caixa de inspeção", "unidade": "un", "tipo": "separado", "mo": 150.00, "mat": 200.00},
+            {"categoria": "hidraulica", "descricao": "Vaso sanitário com caixa acoplada", "unidade": "un", "tipo": "separado", "mo": 150.00, "mat": 700.00},
+            {"categoria": "hidraulica", "descricao": "Lavatório com coluna", "unidade": "un", "tipo": "separado", "mo": 120.00, "mat": 400.00},
+            {"categoria": "hidraulica", "descricao": "Tanque de louça", "unidade": "un", "tipo": "separado", "mo": 100.00, "mat": 380.00},
+            {"categoria": "hidraulica", "descricao": "Pia de cozinha inox", "unidade": "un", "tipo": "separado", "mo": 120.00, "mat": 450.00},
+            {"categoria": "hidraulica", "descricao": "Registro de gaveta 3/4\"", "unidade": "un", "tipo": "separado", "mo": 35.00, "mat": 50.00},
+            {"categoria": "hidraulica", "descricao": "Registro de pressão 3/4\"", "unidade": "un", "tipo": "separado", "mo": 35.00, "mat": 65.00},
+            
+            # INSTALAÇÕES ELÉTRICAS
+            {"categoria": "eletrica", "descricao": "Ponto de luz", "unidade": "pt", "tipo": "separado", "mo": 55.00, "mat": 70.00},
+            {"categoria": "eletrica", "descricao": "Ponto de tomada 2P+T", "unidade": "pt", "tipo": "separado", "mo": 40.00, "mat": 55.00},
+            {"categoria": "eletrica", "descricao": "Ponto de tomada alta", "unidade": "pt", "tipo": "separado", "mo": 45.00, "mat": 65.00},
+            {"categoria": "eletrica", "descricao": "Ponto de interruptor simples", "unidade": "pt", "tipo": "separado", "mo": 35.00, "mat": 50.00},
+            {"categoria": "eletrica", "descricao": "Ponto de interruptor duplo", "unidade": "pt", "tipo": "separado", "mo": 40.00, "mat": 60.00},
+            {"categoria": "eletrica", "descricao": "Ponto de ar condicionado", "unidade": "pt", "tipo": "separado", "mo": 85.00, "mat": 120.00},
+            {"categoria": "eletrica", "descricao": "Ponto de chuveiro elétrico", "unidade": "pt", "tipo": "separado", "mo": 75.00, "mat": 95.00},
+            {"categoria": "eletrica", "descricao": "Quadro distribuição 12 circuitos", "unidade": "un", "tipo": "separado", "mo": 200.00, "mat": 450.00},
+            {"categoria": "eletrica", "descricao": "Quadro distribuição 24 circuitos", "unidade": "un", "tipo": "separado", "mo": 250.00, "mat": 700.00},
+            {"categoria": "eletrica", "descricao": "Ponto de telefone/internet", "unidade": "pt", "tipo": "separado", "mo": 45.00, "mat": 55.00},
+            {"categoria": "eletrica", "descricao": "Ponto de TV/antena", "unidade": "pt", "tipo": "separado", "mo": 45.00, "mat": 50.00},
+            
+            # REVESTIMENTOS
+            {"categoria": "revestimento", "descricao": "Chapisco interno", "unidade": "m²", "tipo": "separado", "mo": 5.50, "mat": 3.00},
+            {"categoria": "revestimento", "descricao": "Chapisco externo", "unidade": "m²", "tipo": "separado", "mo": 6.50, "mat": 3.50},
+            {"categoria": "revestimento", "descricao": "Reboco interno e=2cm", "unidade": "m²", "tipo": "separado", "mo": 22.00, "mat": 10.00},
+            {"categoria": "revestimento", "descricao": "Reboco externo e=2,5cm", "unidade": "m²", "tipo": "separado", "mo": 26.00, "mat": 12.00},
+            {"categoria": "revestimento", "descricao": "Reboco paulista", "unidade": "m²", "tipo": "separado", "mo": 28.00, "mat": 14.00},
+            {"categoria": "revestimento", "descricao": "Gesso liso", "unidade": "m²", "tipo": "separado", "mo": 20.00, "mat": 8.00},
+            {"categoria": "revestimento", "descricao": "Forro de gesso", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 20.00},
+            {"categoria": "revestimento", "descricao": "Forro de PVC", "unidade": "m²", "tipo": "separado", "mo": 20.00, "mat": 35.00},
+            {"categoria": "revestimento", "descricao": "Contrapiso e=5cm", "unidade": "m²", "tipo": "separado", "mo": 22.00, "mat": 26.00},
+            {"categoria": "revestimento", "descricao": "Contrapiso e=7cm", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 32.00},
+            {"categoria": "revestimento", "descricao": "Piso cerâmico PEI-4", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 60.00},
+            {"categoria": "revestimento", "descricao": "Piso cerâmico PEI-5", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 75.00},
+            {"categoria": "revestimento", "descricao": "Piso porcelanato polido", "unidade": "m²", "tipo": "separado", "mo": 45.00, "mat": 100.00},
+            {"categoria": "revestimento", "descricao": "Piso porcelanato acetinado", "unidade": "m²", "tipo": "separado", "mo": 45.00, "mat": 85.00},
+            {"categoria": "revestimento", "descricao": "Azulejo 30x60", "unidade": "m²", "tipo": "separado", "mo": 40.00, "mat": 65.00},
+            {"categoria": "revestimento", "descricao": "Rodapé cerâmico h=10cm", "unidade": "m", "tipo": "separado", "mo": 10.00, "mat": 12.00},
+            {"categoria": "revestimento", "descricao": "Soleira granito", "unidade": "m", "tipo": "separado", "mo": 35.00, "mat": 60.00},
+            {"categoria": "revestimento", "descricao": "Peitoril granito", "unidade": "m", "tipo": "separado", "mo": 30.00, "mat": 55.00},
+            {"categoria": "revestimento", "descricao": "Bancada granito", "unidade": "m²", "tipo": "separado", "mo": 80.00, "mat": 350.00},
+            
+            # PINTURA
+            {"categoria": "pintura", "descricao": "Massa corrida PVA", "unidade": "m²", "tipo": "separado", "mo": 12.00, "mat": 6.00},
+            {"categoria": "pintura", "descricao": "Massa acrílica", "unidade": "m²", "tipo": "separado", "mo": 14.00, "mat": 8.00},
+            {"categoria": "pintura", "descricao": "Pintura látex PVA 2 demãos", "unidade": "m²", "tipo": "separado", "mo": 12.00, "mat": 6.00},
+            {"categoria": "pintura", "descricao": "Pintura acrílica 2 demãos", "unidade": "m²", "tipo": "separado", "mo": 14.00, "mat": 8.00},
+            {"categoria": "pintura", "descricao": "Pintura acrílica semi-brilho", "unidade": "m²", "tipo": "separado", "mo": 15.00, "mat": 10.00},
+            {"categoria": "pintura", "descricao": "Textura acrílica", "unidade": "m²", "tipo": "separado", "mo": 16.00, "mat": 12.00},
+            {"categoria": "pintura", "descricao": "Grafiato", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 20.00},
+            {"categoria": "pintura", "descricao": "Pintura esmalte em madeira", "unidade": "m²", "tipo": "separado", "mo": 18.00, "mat": 12.00},
+            {"categoria": "pintura", "descricao": "Pintura esmalte em ferro", "unidade": "m²", "tipo": "separado", "mo": 20.00, "mat": 15.00},
+            {"categoria": "pintura", "descricao": "Verniz em madeira", "unidade": "m²", "tipo": "separado", "mo": 15.00, "mat": 10.00},
+            
+            # ESQUADRIAS
+            {"categoria": "esquadria", "descricao": "Porta madeira 80x210 completa", "unidade": "un", "tipo": "separado", "mo": 150.00, "mat": 600.00},
+            {"categoria": "esquadria", "descricao": "Porta madeira 70x210 completa", "unidade": "un", "tipo": "separado", "mo": 150.00, "mat": 530.00},
+            {"categoria": "esquadria", "descricao": "Porta madeira 60x210 completa", "unidade": "un", "tipo": "separado", "mo": 150.00, "mat": 480.00},
+            {"categoria": "esquadria", "descricao": "Janela alumínio correr 120x120", "unidade": "un", "tipo": "separado", "mo": 150.00, "mat": 700.00},
+            {"categoria": "esquadria", "descricao": "Janela alumínio correr 150x120", "unidade": "un", "tipo": "separado", "mo": 180.00, "mat": 850.00},
+            {"categoria": "esquadria", "descricao": "Janela alumínio correr 200x120", "unidade": "un", "tipo": "separado", "mo": 200.00, "mat": 1100.00},
+            {"categoria": "esquadria", "descricao": "Janela alumínio maxim-ar 60x60", "unidade": "un", "tipo": "separado", "mo": 80.00, "mat": 300.00},
+            {"categoria": "esquadria", "descricao": "Porta alumínio correr 200x210", "unidade": "un", "tipo": "separado", "mo": 300.00, "mat": 1500.00},
+            {"categoria": "esquadria", "descricao": "Porta alumínio pivotante", "unidade": "un", "tipo": "separado", "mo": 350.00, "mat": 2000.00},
+            {"categoria": "esquadria", "descricao": "Box vidro temperado", "unidade": "m²", "tipo": "separado", "mo": 80.00, "mat": 300.00},
+            {"categoria": "esquadria", "descricao": "Espelho 4mm", "unidade": "m²", "tipo": "separado", "mo": 50.00, "mat": 120.00},
+            
+            # COBERTURA
+            {"categoria": "cobertura", "descricao": "Estrutura madeira para telha", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 60.00},
+            {"categoria": "cobertura", "descricao": "Estrutura metálica para telha", "unidade": "m²", "tipo": "separado", "mo": 40.00, "mat": 80.00},
+            {"categoria": "cobertura", "descricao": "Telha cerâmica", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 40.00},
+            {"categoria": "cobertura", "descricao": "Telha de concreto", "unidade": "m²", "tipo": "separado", "mo": 25.00, "mat": 45.00},
+            {"categoria": "cobertura", "descricao": "Telha fibrocimento 6mm", "unidade": "m²", "tipo": "separado", "mo": 20.00, "mat": 35.00},
+            {"categoria": "cobertura", "descricao": "Telha sanduíche", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 110.00},
+            {"categoria": "cobertura", "descricao": "Cumeeira cerâmica", "unidade": "m", "tipo": "separado", "mo": 15.00, "mat": 30.00},
+            {"categoria": "cobertura", "descricao": "Calha galvanizada", "unidade": "m", "tipo": "separado", "mo": 30.00, "mat": 55.00},
+            {"categoria": "cobertura", "descricao": "Rufo galvanizado", "unidade": "m", "tipo": "separado", "mo": 25.00, "mat": 40.00},
+            {"categoria": "cobertura", "descricao": "Manta subcobertura", "unidade": "m²", "tipo": "separado", "mo": 8.00, "mat": 12.00},
+            
+            # IMPERMEABILIZAÇÃO
+            {"categoria": "impermeabilizacao", "descricao": "Impermeabilização manta asfáltica 3mm", "unidade": "m²", "tipo": "separado", "mo": 35.00, "mat": 50.00},
+            {"categoria": "impermeabilizacao", "descricao": "Impermeabilização manta asfáltica 4mm", "unidade": "m²", "tipo": "separado", "mo": 40.00, "mat": 65.00},
+            {"categoria": "impermeabilizacao", "descricao": "Impermeabilização argamassa polimérica", "unidade": "m²", "tipo": "separado", "mo": 20.00, "mat": 25.00},
+            {"categoria": "impermeabilizacao", "descricao": "Impermeabilização acrílica", "unidade": "m²", "tipo": "separado", "mo": 15.00, "mat": 18.00},
+            
+            # LIMPEZA E ACABAMENTO
+            {"categoria": "limpeza", "descricao": "Limpeza final da obra", "unidade": "m²", "tipo": "composto", "preco": 8.00, "rateio_mo": 90},
+            {"categoria": "limpeza", "descricao": "Remoção de entulho", "unidade": "m³", "tipo": "composto", "preco": 95.00, "rateio_mo": 40},
+            {"categoria": "limpeza", "descricao": "Regularização de terreno", "unidade": "m²", "tipo": "composto", "preco": 12.00, "rateio_mo": 80},
+        ]
+        
+        # Inserir serviços
+        for s in servicos:
+            servico_base = ServicoBase(
+                categoria=s['categoria'],
+                descricao=s['descricao'],
+                unidade=s['unidade'],
+                tipo_composicao=s['tipo'],
+                preco_mao_obra=s.get('mo'),
+                preco_material=s.get('mat'),
+                preco_unitario=s.get('preco'),
+                rateio_mo=s.get('rateio_mo', 50),
+                rateio_mat=100 - s.get('rateio_mo', 50) if s.get('rateio_mo') else 50
+            )
+            db.session.add(servico_base)
+        
+        db.session.commit()
+        
+        return jsonify({
+            "mensagem": "Base populada com sucesso",
+            "total": len(servicos)
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/categorias-servico', methods=['GET'])
+@jwt_required()
+def listar_categorias():
+    """
+    Lista todas as categorias de serviços disponíveis
+    """
+    categorias = [
+        {"id": "preliminares", "nome": "Serviços Preliminares", "icone": "🏗️"},
+        {"id": "fundacao", "nome": "Fundação", "icone": "🧱"},
+        {"id": "estrutura", "nome": "Estrutura", "icone": "🏛️"},
+        {"id": "alvenaria", "nome": "Alvenaria", "icone": "🧱"},
+        {"id": "hidraulica", "nome": "Instalações Hidráulicas", "icone": "🚿"},
+        {"id": "eletrica", "nome": "Instalações Elétricas", "icone": "⚡"},
+        {"id": "revestimento", "nome": "Revestimentos", "icone": "🎨"},
+        {"id": "pintura", "nome": "Pintura", "icone": "🖌️"},
+        {"id": "esquadria", "nome": "Esquadrias", "icone": "🚪"},
+        {"id": "cobertura", "nome": "Cobertura", "icone": "🏠"},
+        {"id": "impermeabilizacao", "nome": "Impermeabilização", "icone": "💧"},
+        {"id": "limpeza", "nome": "Limpeza e Acabamento", "icone": "🧹"},
+    ]
+    return jsonify(categorias)
 
 
 # ==============================================================================
