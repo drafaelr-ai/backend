@@ -7,8 +7,9 @@ import os
 import traceback  # Importado para log de erros detalhado
 import re  # Importado para o CORS com regex
 import zipfile  # Importado para criar ZIP de notas fiscais
-import requests  # Para chamar API externa (Claude Vision)
 import json  # Para parsing de JSON
+import urllib.request  # Para chamar API externa (nativo do Python)
+import urllib.error  # Para tratamento de erros HTTP
 from flask import Flask, jsonify, request, make_response, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -15134,18 +15135,24 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
         }
         
         print("[PLANTA-IA] Enviando para Claude Vision...")
-        response = requests.post(
+        
+        # Usar urllib (nativo do Python) para chamar API
+        req = urllib.request.Request(
             'https://api.anthropic.com/v1/messages',
+            data=json.dumps(payload).encode('utf-8'),
             headers=headers,
-            json=payload,
-            timeout=120
+            method='POST'
         )
         
-        if response.status_code != 200:
-            print(f"[PLANTA-IA] Erro da API: {response.status_code} - {response.text}")
-            return jsonify({"erro": f"Erro na API de IA: {response.status_code}"}), 500
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                response_data = response.read().decode('utf-8')
+                result = json.loads(response_data)
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8') if e.fp else str(e)
+            print(f"[PLANTA-IA] Erro da API: {e.code} - {error_body}")
+            return jsonify({"erro": f"Erro na API de IA: {e.code}"}), 500
         
-        result = response.json()
         print("[PLANTA-IA] Resposta recebida, processando...")
         
         # Extrair texto da resposta
@@ -15240,9 +15247,11 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
         
         return jsonify(orcamento_gerado)
         
-    except requests.exceptions.Timeout:
-        print("[PLANTA-IA] Timeout na requisição")
-        return jsonify({"erro": "Timeout ao processar imagem. Tente novamente."}), 504
+    except urllib.error.URLError as e:
+        print(f"[PLANTA-IA] Erro de conexão: {e}")
+        if hasattr(e, 'reason') and 'timed out' in str(e.reason).lower():
+            return jsonify({"erro": "Timeout ao processar imagem. Tente novamente."}), 504
+        return jsonify({"erro": f"Erro de conexão: {e.reason}"}), 500
     except Exception as e:
         print(f"[PLANTA-IA] Erro: {e}")
         import traceback
