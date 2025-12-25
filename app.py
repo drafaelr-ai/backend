@@ -211,6 +211,124 @@ def run_auto_migration():
             print("✅ Tabela boleto criada!")
         else:
             print("   ℹ️ Tabela boleto já existe")
+        
+        # =================================================================
+        # MÓDULO ORÇAMENTO DE ENGENHARIA - NOVAS TABELAS E CAMPOS
+        # =================================================================
+        print("🔄 Verificando estrutura do módulo de Orçamento de Engenharia...")
+        
+        # 1. Adicionar campos bdi e area na tabela obra
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'obra' AND column_name = 'bdi';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE obra ADD COLUMN bdi FLOAT DEFAULT 0;")
+            print("✅ Coluna bdi adicionada em obra")
+        
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'obra' AND column_name = 'area';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE obra ADD COLUMN area FLOAT;")
+            print("✅ Coluna area adicionada em obra")
+        
+        # 2. Criar tabela servico_base (base de referência tipo SINAPI)
+        cur.execute("SELECT to_regclass('public.servico_base');")
+        if not cur.fetchone()[0]:
+            cur.execute("""
+                CREATE TABLE servico_base (
+                    id SERIAL PRIMARY KEY,
+                    categoria VARCHAR(100) NOT NULL,
+                    codigo_ref VARCHAR(50),
+                    descricao VARCHAR(500) NOT NULL,
+                    unidade VARCHAR(20) NOT NULL,
+                    tipo_composicao VARCHAR(20) DEFAULT 'separado',
+                    preco_mao_obra FLOAT,
+                    preco_material FLOAT,
+                    preco_unitario FLOAT,
+                    rateio_mo FLOAT DEFAULT 50,
+                    rateio_mat FLOAT DEFAULT 50,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX idx_servico_base_categoria ON servico_base(categoria);
+                CREATE INDEX idx_servico_base_descricao ON servico_base(descricao);
+            """)
+            print("✅ Tabela servico_base criada!")
+        else:
+            print("   ℹ️ Tabela servico_base já existe")
+        
+        # 3. Criar tabela servico_usuario (biblioteca do usuário)
+        cur.execute("SELECT to_regclass('public.servico_usuario');")
+        if not cur.fetchone()[0]:
+            cur.execute("""
+                CREATE TABLE servico_usuario (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    categoria VARCHAR(100),
+                    descricao VARCHAR(500) NOT NULL,
+                    unidade VARCHAR(20) NOT NULL,
+                    tipo_composicao VARCHAR(20) DEFAULT 'separado',
+                    preco_mao_obra FLOAT,
+                    preco_material FLOAT,
+                    preco_unitario FLOAT,
+                    rateio_mo FLOAT DEFAULT 50,
+                    rateio_mat FLOAT DEFAULT 50,
+                    vezes_usado INTEGER DEFAULT 0,
+                    ultima_utilizacao TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX idx_servico_usuario_user ON servico_usuario(user_id);
+                CREATE INDEX idx_servico_usuario_descricao ON servico_usuario(descricao);
+            """)
+            print("✅ Tabela servico_usuario criada!")
+        else:
+            print("   ℹ️ Tabela servico_usuario já existe")
+        
+        # 4. Criar tabela orcamento_eng_etapa
+        cur.execute("SELECT to_regclass('public.orcamento_eng_etapa');")
+        if not cur.fetchone()[0]:
+            cur.execute("""
+                CREATE TABLE orcamento_eng_etapa (
+                    id SERIAL PRIMARY KEY,
+                    obra_id INTEGER NOT NULL REFERENCES obra(id) ON DELETE CASCADE,
+                    codigo VARCHAR(20),
+                    nome VARCHAR(200) NOT NULL,
+                    ordem INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX idx_orc_etapa_obra ON orcamento_eng_etapa(obra_id);
+            """)
+            print("✅ Tabela orcamento_eng_etapa criada!")
+        else:
+            print("   ℹ️ Tabela orcamento_eng_etapa já existe")
+        
+        # 5. Criar tabela orcamento_eng_item
+        cur.execute("SELECT to_regclass('public.orcamento_eng_item');")
+        if not cur.fetchone()[0]:
+            cur.execute("""
+                CREATE TABLE orcamento_eng_item (
+                    id SERIAL PRIMARY KEY,
+                    etapa_id INTEGER NOT NULL REFERENCES orcamento_eng_etapa(id) ON DELETE CASCADE,
+                    codigo VARCHAR(20),
+                    descricao VARCHAR(500) NOT NULL,
+                    unidade VARCHAR(20) NOT NULL,
+                    quantidade FLOAT DEFAULT 0,
+                    tipo_composicao VARCHAR(20) DEFAULT 'separado',
+                    preco_mao_obra FLOAT,
+                    preco_material FLOAT,
+                    preco_unitario FLOAT,
+                    rateio_mo FLOAT DEFAULT 50,
+                    rateio_mat FLOAT DEFAULT 50,
+                    servico_id INTEGER,
+                    valor_pago_mo FLOAT DEFAULT 0,
+                    valor_pago_mat FLOAT DEFAULT 0,
+                    ordem INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX idx_orc_item_etapa ON orcamento_eng_item(etapa_id);
+                CREATE INDEX idx_orc_item_servico ON orcamento_eng_item(servico_id);
+            """)
+            print("✅ Tabela orcamento_eng_item criada!")
+        else:
+            print("   ℹ️ Tabela orcamento_eng_item já existe")
+        
+        print("✅ Módulo de Orçamento de Engenharia verificado!")
             
         conn.commit()
         cur.close()
@@ -831,13 +949,19 @@ class Obra(db.Model):
     orcamento_eng_etapas = db.relationship('OrcamentoEngEtapa', backref='obra', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
+        try:
+            bdi_val = self.bdi if hasattr(self, 'bdi') and self.bdi is not None else 0
+            area_val = self.area if hasattr(self, 'area') else None
+        except:
+            bdi_val = 0
+            area_val = None
         return { 
             "id": self.id, 
             "nome": self.nome, 
             "cliente": self.cliente, 
-            "concluida": self.concluida,
-            "bdi": self.bdi or 0,
-            "area": self.area
+            "concluida": self.concluida if hasattr(self, 'concluida') else False,
+            "bdi": bdi_val,
+            "area": area_val
         }
 
 class Lancamento(db.Model):
