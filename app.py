@@ -15272,7 +15272,33 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
         except urllib.error.HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else str(e)
             print(f"[PLANTA-IA] Erro da API: {e.code} - {error_body}")
-            return jsonify({"erro": f"Erro na API de IA: {e.code}"}), 500
+            
+            # Mensagens de erro mais claras
+            erro_msg = f"Erro na API de IA: {e.code}"
+            try:
+                error_json = json.loads(error_body)
+                error_type = error_json.get('error', {}).get('type', '')
+                error_message = error_json.get('error', {}).get('message', '')
+                
+                if e.code == 400:
+                    if 'credit' in error_message.lower() or 'billing' in error_message.lower():
+                        erro_msg = "Créditos insuficientes na conta Anthropic. Adicione créditos em console.anthropic.com/billing"
+                    elif 'invalid' in error_message.lower():
+                        erro_msg = "API Key inválida. Verifique a configuração no Railway."
+                    else:
+                        erro_msg = f"Erro na requisição: {error_message}"
+                elif e.code == 401:
+                    erro_msg = "API Key inválida ou expirada. Crie uma nova chave em console.anthropic.com"
+                elif e.code == 429:
+                    erro_msg = "Limite de requisições excedido. Aguarde alguns minutos."
+                elif e.code == 500:
+                    erro_msg = "Erro interno da API Anthropic. Tente novamente."
+                else:
+                    erro_msg = f"Erro {e.code}: {error_message or error_body[:200]}"
+            except:
+                pass
+            
+            return jsonify({"erro": erro_msg}), 500
         
         print("[PLANTA-IA] Resposta recebida, processando...")
         
