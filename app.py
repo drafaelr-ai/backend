@@ -1565,13 +1565,13 @@ class ServicoBase(db.Model):
     __tablename__ = 'servico_base'
     
     id = db.Column(db.Integer, primary_key=True)
-    categoria = db.Column(db.String(50), nullable=False)  # preliminares, fundacao, estrutura, etc
-    codigo_ref = db.Column(db.String(20), nullable=True)  # Código SINAPI/TCPO se aplicável
-    descricao = db.Column(db.String(255), nullable=False)
-    unidade = db.Column(db.String(10), nullable=False)  # m², m³, m, kg, un, pt, vb
+    categoria = db.Column(db.String(100), nullable=False)  # preliminares, fundacao, estrutura, etc
+    codigo_ref = db.Column(db.String(50), nullable=True)  # Código SINAPI/TCPO se aplicável
+    descricao = db.Column(db.String(500), nullable=False)
+    unidade = db.Column(db.String(20), nullable=False)  # m², m³, m, kg, un, pt, vb
     
     # Tipo de composição
-    tipo_composicao = db.Column(db.String(20), nullable=False, default='separado')  # separado | composto
+    tipo_composicao = db.Column(db.String(20), default='separado')  # separado | composto
     
     # Se separado
     preco_mao_obra = db.Column(db.Float, nullable=True)
@@ -1579,10 +1579,10 @@ class ServicoBase(db.Model):
     
     # Se composto
     preco_unitario = db.Column(db.Float, nullable=True)
-    rateio_mo = db.Column(db.Integer, nullable=True, default=50)  # % estimado para MO
-    rateio_mat = db.Column(db.Integer, nullable=True, default=50)  # % estimado para Material
+    rateio_mo = db.Column(db.Float, default=50)  # % estimado para MO
+    rateio_mat = db.Column(db.Float, default=50)  # % estimado para Material
     
-    ativo = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def to_dict(self):
         return {
@@ -1611,12 +1611,12 @@ class ServicoUsuario(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # Criador
     
-    categoria = db.Column(db.String(50), nullable=True)
-    descricao = db.Column(db.String(255), nullable=False)
-    unidade = db.Column(db.String(10), nullable=False)
+    categoria = db.Column(db.String(100), nullable=True)
+    descricao = db.Column(db.String(500), nullable=False)
+    unidade = db.Column(db.String(20), nullable=False)
     
     # Tipo de composição
-    tipo_composicao = db.Column(db.String(20), nullable=False, default='separado')
+    tipo_composicao = db.Column(db.String(20), default='separado')
     
     # Se separado
     preco_mao_obra = db.Column(db.Float, nullable=True)
@@ -1624,15 +1624,13 @@ class ServicoUsuario(db.Model):
     
     # Se composto
     preco_unitario = db.Column(db.Float, nullable=True)
-    rateio_mo = db.Column(db.Integer, nullable=True, default=50)
-    rateio_mat = db.Column(db.Integer, nullable=True, default=50)
+    rateio_mo = db.Column(db.Float, default=50)
+    rateio_mat = db.Column(db.Float, default=50)
     
     # Estatísticas de uso
     vezes_usado = db.Column(db.Integer, default=0)
     ultima_utilizacao = db.Column(db.DateTime, nullable=True)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    ativo = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def to_dict(self):
         return {
@@ -1662,11 +1660,11 @@ class OrcamentoEngEtapa(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
     
-    codigo = db.Column(db.String(10), nullable=False)  # 01, 02, 03...
-    nome = db.Column(db.String(100), nullable=False)  # FUNDAÇÃO, ESTRUTURA...
+    codigo = db.Column(db.String(20))  # 01, 02, 03...
+    nome = db.Column(db.String(200), nullable=False)  # FUNDAÇÃO, ESTRUTURA...
     ordem = db.Column(db.Integer, default=0)
     
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relacionamento com itens
     itens = db.relationship('OrcamentoEngItem', backref='etapa', lazy=True, cascade="all, delete-orphan")
@@ -1694,34 +1692,33 @@ class OrcamentoEngItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     etapa_id = db.Column(db.Integer, db.ForeignKey('orcamento_eng_etapa.id'), nullable=False)
     
-    codigo = db.Column(db.String(15), nullable=False)  # 01.01, 01.02...
-    descricao = db.Column(db.String(255), nullable=False)
-    unidade = db.Column(db.String(10), nullable=False)
-    quantidade = db.Column(db.Float, nullable=False, default=0)
+    codigo = db.Column(db.String(20))  # 01.01, 01.02...
+    descricao = db.Column(db.String(500), nullable=False)
+    unidade = db.Column(db.String(20), nullable=False)
+    quantidade = db.Column(db.Float, default=0)
     
     # Tipo de composição
-    tipo_composicao = db.Column(db.String(20), nullable=False, default='separado')  # separado | composto
+    tipo_composicao = db.Column(db.String(20), default='separado')  # separado | composto
     
     # Se separado
-    preco_mao_obra = db.Column(db.Float, nullable=True, default=0)
-    preco_material = db.Column(db.Float, nullable=True, default=0)
+    preco_mao_obra = db.Column(db.Float, nullable=True)
+    preco_material = db.Column(db.Float, nullable=True)
     
     # Se composto
     preco_unitario = db.Column(db.Float, nullable=True)
-    rateio_mo = db.Column(db.Integer, nullable=True, default=50)
-    rateio_mat = db.Column(db.Integer, nullable=True, default=50)
+    rateio_mo = db.Column(db.Float, default=50)
+    rateio_mat = db.Column(db.Float, default=50)
     
     # Vinculação com Serviço (Kanban)
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     servico = db.relationship('Servico', backref='orcamento_itens', lazy=True)
     
     # Valores pagos (calculados a partir dos pagamentos do Serviço)
-    # Esses campos são atualizados automaticamente quando há pagamentos
     valor_pago_mo = db.Column(db.Float, default=0)
     valor_pago_mat = db.Column(db.Float, default=0)
     
     ordem = db.Column(db.Integer, default=0)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def calcular_totais(self):
         """Calcula totais do item baseado no tipo de composição"""
