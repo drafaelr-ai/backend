@@ -14101,7 +14101,7 @@ def listar_servicos_base():
         q = request.args.get('q', '').strip().lower()
         categoria = request.args.get('categoria', '')
         
-        query = ServicoBase.query.filter(ServicoBase.ativo == True)
+        query = ServicoBase.query
         
         if q:
             query = query.filter(ServicoBase.descricao.ilike(f'%{q}%'))
@@ -14140,8 +14140,7 @@ def listar_servicos_usuario():
         q = request.args.get('q', '').strip().lower()
         
         query = ServicoUsuario.query.filter(
-            ServicoUsuario.user_id == user.id,
-            ServicoUsuario.ativo == True
+            ServicoUsuario.user_id == user.id
         )
         
         if q:
@@ -14213,15 +14212,15 @@ def autocomplete_servicos():
         # Buscar serviços do usuário
         servicos_usuario = ServicoUsuario.query.filter(
             ServicoUsuario.user_id == user.id,
-            ServicoUsuario.ativo == True,
             ServicoUsuario.descricao.ilike(f'%{q}%')
         ).order_by(ServicoUsuario.vezes_usado.desc()).limit(10).all()
         
         # Buscar serviços da base
         servicos_base = ServicoBase.query.filter(
-            ServicoBase.ativo == True,
             ServicoBase.descricao.ilike(f'%{q}%')
         ).order_by(ServicoBase.descricao).limit(15).all()
+        
+        print(f"[AUTOCOMPLETE] Busca: '{q}' -> Usuario: {len(servicos_usuario)}, Base: {len(servicos_base)}")
         
         return jsonify({
             'servicos_usuario': [s.to_dict() for s in servicos_usuario],
@@ -14229,6 +14228,9 @@ def autocomplete_servicos():
         })
         
     except Exception as e:
+        print(f"[AUTOCOMPLETE] Erro: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
 
