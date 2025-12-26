@@ -329,6 +329,20 @@ def run_auto_migration():
             print("   ℹ️ Tabela orcamento_eng_item já existe")
         
         print("✅ Módulo de Orçamento de Engenharia verificado!")
+        
+        # =================================================================
+        # CAMPO CONCLUÍDO NO SERVIÇO
+        # =================================================================
+        print("🔄 Verificando campo concluido em servico...")
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'servico' AND column_name = 'concluido';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE servico ADD COLUMN concluido BOOLEAN DEFAULT FALSE;")
+            print("✅ Coluna concluido adicionada em servico")
+        
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'servico' AND column_name = 'data_conclusao';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE servico ADD COLUMN data_conclusao DATE;")
+            print("✅ Coluna data_conclusao adicionada em servico")
             
         conn.commit()
         cur.close()
@@ -1018,6 +1032,8 @@ class Servico(db.Model):
     valor_global_mao_de_obra = db.Column(db.Float, nullable=False, default=0.0)
     valor_global_material = db.Column(db.Float, nullable=False, default=0.0) 
     pix = db.Column(db.String(100))
+    concluido = db.Column(db.Boolean, default=False)  # NOVO: Marcar serviço como concluído
+    data_conclusao = db.Column(db.Date, nullable=True)  # NOVO: Data da conclusão
     pagamentos = db.relationship('PagamentoServico', backref='servico', lazy=True, cascade="all, delete-orphan")
     
     def to_dict(self):
@@ -1027,6 +1043,8 @@ class Servico(db.Model):
             "valor_global_mao_de_obra": self.valor_global_mao_de_obra,
             "valor_global_material": self.valor_global_material,
             "pix": self.pix,
+            "concluido": self.concluido or False,
+            "data_conclusao": self.data_conclusao.isoformat() if self.data_conclusao else None,
             "pagamentos": [p.to_dict() for p in self.pagamentos]
         }
 
@@ -3069,6 +3087,55 @@ def deletar_servico(servico_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         print(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e), "details": error_details}), 500
+
+
+@app.route('/servicos/<int:servico_id>/concluir', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def toggle_servico_concluido(servico_id):
+    """
+    Marca/desmarca um serviço como concluído
+    Um serviço pode estar concluído mesmo sem ter sido totalmente pago
+    """
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    print(f"--- [LOG] Rota /servicos/{servico_id}/concluir (PATCH) acessada ---")
+    try:
+        user = get_current_user()
+        servico = Servico.query.get_or_404(servico_id)
+        
+        if not user_has_access_to_obra(user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+        
+        dados = request.json or {}
+        
+        # Toggle ou valor específico
+        if 'concluido' in dados:
+            servico.concluido = dados['concluido']
+        else:
+            # Toggle: se não especificado, inverte o valor atual
+            servico.concluido = not (servico.concluido or False)
+        
+        # Definir data de conclusão
+        if servico.concluido:
+            servico.data_conclusao = dados.get('data_conclusao', date.today()) if isinstance(dados.get('data_conclusao'), date) else date.fromisoformat(dados['data_conclusao']) if dados.get('data_conclusao') else date.today()
+        else:
+            servico.data_conclusao = None
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] Serviço {servico_id} marcado como {'CONCLUÍDO' if servico.concluido else 'NÃO CONCLUÍDO'} ---")
+        
+        return jsonify({
+            "sucesso": f"Serviço {'marcado como concluído' if servico.concluido else 'desmarcado como concluído'}",
+            "servico": servico.to_dict()
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /servicos/{servico_id}/concluir (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
