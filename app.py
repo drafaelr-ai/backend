@@ -2271,11 +2271,79 @@ def get_obra_detalhes(obra_id):
         # Isso evita DUPLICAÇÃO
         print(f"--- [DEBUG KPI] parcelas_pagas_sem_servico: NÃO SOMADO (já está no Lancamento) ---")
         
+        # === ORÇAMENTO DE ENGENHARIA ===
+        # Buscar total do Orçamento de Engenharia que NÃO está vinculado a serviços
+        # (itens com servico_id já são contabilizados via Serviço no Kanban)
+        try:
+            # Total de itens SEM serviço vinculado (para não duplicar)
+            orcamento_eng_items_sem_servico = db.session.query(
+                func.sum(
+                    db.case(
+                        (OrcamentoEngItem.tipo_composicao == 'separado',
+                         OrcamentoEngItem.quantidade * (
+                             func.coalesce(OrcamentoEngItem.preco_mao_obra, 0) +
+                             func.coalesce(OrcamentoEngItem.preco_material, 0)
+                         )),
+                        else_=OrcamentoEngItem.quantidade * func.coalesce(OrcamentoEngItem.preco_unitario, 0)
+                    )
+                ).label('total_eng')
+            ).join(OrcamentoEngEtapa).filter(
+                OrcamentoEngEtapa.obra_id == obra_id,
+                OrcamentoEngItem.servico_id.is_(None)  # Apenas itens sem serviço vinculado
+            ).first()
+            
+            total_orcamento_eng_sem_servico = float(orcamento_eng_items_sem_servico.total_eng or 0.0)
+            print(f"--- [DEBUG KPI] ORÇAMENTO ENG (sem serviço): R$ {total_orcamento_eng_sem_servico:.2f} ---")
+            
+            # Total de itens COM serviço vinculado (para corrigir valores do Kanban se necessário)
+            # Verifica se os serviços do Kanban têm valores zerados
+            orcamento_eng_com_servico = db.session.query(
+                func.sum(
+                    db.case(
+                        (OrcamentoEngItem.tipo_composicao == 'separado',
+                         OrcamentoEngItem.quantidade * func.coalesce(OrcamentoEngItem.preco_mao_obra, 0)),
+                        else_=OrcamentoEngItem.quantidade * func.coalesce(OrcamentoEngItem.preco_unitario, 0) * 
+                              func.coalesce(OrcamentoEngItem.rateio_mo, 50) / 100
+                    )
+                ).label('total_mo'),
+                func.sum(
+                    db.case(
+                        (OrcamentoEngItem.tipo_composicao == 'separado',
+                         OrcamentoEngItem.quantidade * func.coalesce(OrcamentoEngItem.preco_material, 0)),
+                        else_=OrcamentoEngItem.quantidade * func.coalesce(OrcamentoEngItem.preco_unitario, 0) * 
+                              func.coalesce(OrcamentoEngItem.rateio_mat, 50) / 100
+                    )
+                ).label('total_mat')
+            ).join(OrcamentoEngEtapa).filter(
+                OrcamentoEngEtapa.obra_id == obra_id,
+                OrcamentoEngItem.servico_id.isnot(None)  # Itens com serviço vinculado
+            ).first()
+            
+            total_eng_mo_com_servico = float(orcamento_eng_com_servico.total_mo or 0.0)
+            total_eng_mat_com_servico = float(orcamento_eng_com_servico.total_mat or 0.0)
+            print(f"--- [DEBUG KPI] ORÇAMENTO ENG (com serviço): MO R$ {total_eng_mo_com_servico:.2f}, MAT R$ {total_eng_mat_com_servico:.2f} ---")
+            
+            # Se os valores do Kanban estão zerados mas existem valores no Orçamento de Engenharia,
+            # usar os valores do Orçamento de Engenharia
+            if total_budget_mo == 0 and total_budget_mat == 0 and (total_eng_mo_com_servico > 0 or total_eng_mat_com_servico > 0):
+                print(f"--- [DEBUG KPI] ⚠️ Serviços do Kanban com valores zerados! Usando valores do Orçamento de Engenharia ---")
+                total_budget_mo = total_eng_mo_com_servico
+                total_budget_mat = total_eng_mat_com_servico
+            elif total_budget_mo < total_eng_mo_com_servico or total_budget_mat < total_eng_mat_com_servico:
+                # Se os valores do Orçamento de Engenharia são maiores, atualizar
+                print(f"--- [DEBUG KPI] ⚠️ Valores do Orçamento de Engenharia são maiores! Atualizando... ---")
+                total_budget_mo = max(total_budget_mo, total_eng_mo_com_servico)
+                total_budget_mat = max(total_budget_mat, total_eng_mat_com_servico)
+            
+        except Exception as e:
+            print(f"--- [DEBUG KPI] Erro ao buscar Orçamento de Engenharia: {e} ---")
+            total_orcamento_eng_sem_servico = 0.0
+        
         # KPI 1: ORÇAMENTO TOTAL
-        # = Orçamento dos Serviços (MO + Material) 
+        # = Orçamento dos Serviços (MO + Material) + Itens do Orçamento de Engenharia sem serviço
         # Pagamentos futuros/parcelas COM serviço são formas de PAGAR o orçamento, não são orçamento adicional
-        kpi_orcamento_total = total_budget_mo + total_budget_mat
-        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL (MO + Material) = R$ {kpi_orcamento_total:.2f} ---")
+        kpi_orcamento_total = total_budget_mo + total_budget_mat + total_orcamento_eng_sem_servico
+        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL (MO + Material + EngSemServ) = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS
         # Inclui: lançamentos pagos + pagamentos de serviço + parcelas pagas COM serviço
@@ -2349,6 +2417,10 @@ def get_obra_detalhes(obra_id):
             "valores_pagos": kpi_valores_pagos,            # Card 2 - Valores Pagos (Azul/Índigo)
             "liberado_pagamento": kpi_liberado_pagamento,  # Card 3 - Liberado p/ Pagamento (Verde)
             "despesas_extras": kpi_despesas_extras,        # Card 4 - Despesas Extras (Roxo/Amarelo)
+            
+            # Totais para o gráfico de distribuição de custos
+            "total_mao_obra": total_budget_mo,
+            "total_material": total_budget_mat,
             
             # Mantendo este para o Gráfico
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
@@ -14619,21 +14691,21 @@ def editar_item_orcamento(obra_id, item_id):
             item.rateio_mat = dados['rateio_mat']
         
         # Atualizar serviço vinculado se existir
-        if item.servico_id and totais_antigos:
+        if item.servico_id:
             servico = Servico.query.get(item.servico_id)
             if servico:
                 totais_novos = item.calcular_totais()
                 
-                # Calcular diferença e atualizar
-                diff_mo = totais_novos['total_mao_obra'] - totais_antigos['total_mao_obra']
-                diff_mat = totais_novos['total_material'] - totais_antigos['total_material']
-                
-                servico.valor_global_mao_de_obra = max(0, servico.valor_global_mao_de_obra + diff_mo)
-                servico.valor_global_material = max(0, servico.valor_global_material + diff_mat)
+                # Definir valores diretamente (não apenas diferença)
+                # Se o serviço estava zerado, isso corrige o problema
+                servico.valor_global_mao_de_obra = totais_novos['total_mao_obra']
+                servico.valor_global_material = totais_novos['total_material']
                 
                 # Atualizar nome do serviço se descrição mudou
                 if 'descricao' in dados:
                     servico.nome = dados['descricao']
+                
+                print(f"--- [LOG] Serviço {servico.id} atualizado: MO={totais_novos['total_mao_obra']}, MAT={totais_novos['total_material']} ---")
         
         db.session.commit()
         
@@ -14677,6 +14749,60 @@ def deletar_item_orcamento(obra_id, item_id):
                 else:
                     # Nenhum outro item usa, deletar serviço
                     db.session.delete(servico)
+        
+        db.session.delete(item)
+        db.session.commit()
+        
+        return jsonify({"mensagem": "Item deletado com sucesso"})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/sincronizar-servicos', methods=['POST'])
+@jwt_required()
+def sincronizar_servicos_com_orcamento(obra_id):
+    """
+    Sincroniza os valores de TODOS os serviços do Kanban com o Orçamento de Engenharia
+    Útil para corrigir dados existentes onde os serviços estão com valores zerados
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        # Buscar todos os itens do orçamento com serviço vinculado
+        itens = OrcamentoEngItem.query.join(OrcamentoEngEtapa).filter(
+            OrcamentoEngEtapa.obra_id == obra_id,
+            OrcamentoEngItem.servico_id.isnot(None)
+        ).all()
+        
+        servicos_atualizados = 0
+        
+        for item in itens:
+            servico = Servico.query.get(item.servico_id)
+            if servico:
+                totais = item.calcular_totais()
+                
+                # Atualizar valores do serviço
+                servico.valor_global_mao_de_obra = totais['total_mao_obra']
+                servico.valor_global_material = totais['total_material']
+                
+                servicos_atualizados += 1
+        
+        db.session.commit()
+        
+        return jsonify({
+            "mensagem": f"Sincronização concluída! {servicos_atualizados} serviços atualizados.",
+            "servicos_atualizados": servicos_atualizados
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
         
         db.session.delete(item)
         db.session.commit()
