@@ -14803,14 +14803,66 @@ def sincronizar_servicos_com_orcamento(obra_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/apagar-tudo', methods=['DELETE'])
+@jwt_required()
+def apagar_orcamento_completo(obra_id):
+    """
+    Apaga TODO o orçamento de engenharia da obra (etapas, itens e serviços vinculados)
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
         
-        db.session.delete(item)
+        # Apenas master e administrador podem apagar
+        if user.role not in ['master', 'administrador']:
+            return jsonify({"erro": "Apenas administradores podem apagar o orçamento completo"}), 403
+        
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        # Buscar todas as etapas
+        etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).all()
+        
+        itens_deletados = 0
+        etapas_deletadas = 0
+        servicos_deletados = 0
+        
+        for etapa in etapas:
+            for item in etapa.itens:
+                # Deletar serviço vinculado se existir
+                if item.servico_id:
+                    servico = Servico.query.get(item.servico_id)
+                    if servico:
+                        # Verificar se o serviço tem pagamentos
+                        if len(servico.pagamentos) > 0:
+                            # Não deletar serviço com pagamentos, apenas desvincular
+                            item.servico_id = None
+                        else:
+                            db.session.delete(servico)
+                            servicos_deletados += 1
+                
+                db.session.delete(item)
+                itens_deletados += 1
+            
+            db.session.delete(etapa)
+            etapas_deletadas += 1
+        
         db.session.commit()
         
-        return jsonify({"mensagem": "Item deletado com sucesso"})
+        return jsonify({
+            "mensagem": f"Orçamento apagado com sucesso!",
+            "etapas_deletadas": etapas_deletadas,
+            "itens_deletados": itens_deletados,
+            "servicos_deletados": servicos_deletados
+        })
         
     except Exception as e:
         db.session.rollback()
+        print(f"Erro ao apagar orçamento: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
 
