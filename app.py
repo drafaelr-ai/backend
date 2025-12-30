@@ -3248,6 +3248,78 @@ def toggle_servico_concluido(servico_id):
 #         return jsonify({"erro": str(e), "details": error_details}), 500
 # ===============================================================================
 
+# ===== ROTA PARA LIMPAR PAGAMENTOS DUPLICADOS DE PARCELAS =====
+@app.route('/obras/<int:obra_id>/limpar-pagamentos-parcelas-duplicados', methods=['POST'])
+@jwt_required()
+def limpar_pagamentos_parcelas_duplicados(obra_id):
+    """
+    Remove PagamentoServico que foram criados a partir de parcelas (antes da correção).
+    Isso evita duplicação no histórico do serviço, já que as parcelas pagas
+    agora aparecem via query de ParcelaIndividual.
+    """
+    try:
+        user = get_current_user()
+        
+        if user.role not in ['master', 'administrador']:
+            return jsonify({"erro": "Apenas administradores podem executar esta ação"}), 403
+        
+        obra = Obra.query.get_or_404(obra_id)
+        if user.role != 'master' and obra not in user.obras:
+            return jsonify({"erro": "Sem permissão para esta obra"}), 403
+        
+        # Buscar todos os pagamentos parcelados COM serviço desta obra
+        pagamentos_parcelados = PagamentoParcelado.query.filter(
+            PagamentoParcelado.obra_id == obra_id,
+            PagamentoParcelado.servico_id.isnot(None)
+        ).all()
+        
+        pagamentos_removidos = 0
+        detalhes = []
+        
+        for pag_parcelado in pagamentos_parcelados:
+            # Para cada parcela PAGA, verificar se existe um PagamentoServico duplicado
+            parcelas_pagas = ParcelaIndividual.query.filter(
+                ParcelaIndividual.pagamento_parcelado_id == pag_parcelado.id,
+                ParcelaIndividual.status == 'Pago'
+            ).all()
+            
+            for parcela in parcelas_pagas:
+                # Buscar PagamentoServico com mesmo valor e serviço
+                pagamentos_servico = PagamentoServico.query.filter(
+                    PagamentoServico.servico_id == pag_parcelado.servico_id,
+                    PagamentoServico.valor_total == parcela.valor_parcela
+                ).all()
+                
+                for pag_serv in pagamentos_servico:
+                    # Verificar se a data corresponde ou se é próxima
+                    if pag_serv.data_pagamento and parcela.data_pagamento:
+                        diff_dias = abs((pag_serv.data_pagamento - parcela.data_pagamento).days)
+                        if diff_dias <= 1:  # Mesma data ou 1 dia de diferença
+                            detalhes.append({
+                                "id": pag_serv.id,
+                                "valor": float(pag_serv.valor_total),
+                                "data": pag_serv.data_pagamento.isoformat() if pag_serv.data_pagamento else None,
+                                "parcela": f"{pag_parcelado.descricao} ({parcela.numero_parcela}/{pag_parcelado.numero_parcelas})"
+                            })
+                            db.session.delete(pag_serv)
+                            pagamentos_removidos += 1
+                            break
+        
+        db.session.commit()
+        
+        return jsonify({
+            "mensagem": f"Limpeza concluída! {pagamentos_removidos} pagamentos duplicados removidos.",
+            "pagamentos_removidos": pagamentos_removidos,
+            "detalhes": detalhes
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
 # ===== ROTA PARA DELETAR PAGAMENTO DE SERVIÇO =====
 @app.route('/servicos/<int:servico_id>/pagamentos/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
@@ -7174,6 +7246,7 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        print(f"      - servico_id: {pagamento.servico_id}")
         
         # Buscar parcela
         parcela = db.session.get(ParcelaIndividual, parcela_id)
@@ -7189,17 +7262,48 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
         print(f"      - valor: R$ {parcela.valor_parcela}")
         print(f"      - data_pagamento: {parcela.data_pagamento}")
         
-        # Se NÃO tem serviço vinculado, tentar remover o lançamento criado
-        if not pagamento.servico_id:
-            descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
-            lancamento_existente = Lancamento.query.filter_by(
-                obra_id=pagamento.obra_id,
-                descricao=descricao_lancamento
+        # Descrição padrão da parcela para buscar registros relacionados
+        descricao_parcela = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
+        descricao_parcela_alt = f"{pagamento.descricao} ({parcela.numero_parcela}/{pagamento.numero_parcelas})"
+        
+        # Se TEM serviço vinculado, verificar e remover PagamentoServico correspondente
+        if pagamento.servico_id:
+            # Buscar PagamentoServico que corresponda a esta parcela
+            # Pode ter sido criado antes da correção que removeu a criação automática
+            pagamentos_servico = PagamentoServico.query.filter(
+                PagamentoServico.servico_id == pagamento.servico_id,
+                PagamentoServico.valor_total == parcela.valor_parcela
+            ).all()
+            
+            # Tentar encontrar por descrição ou data
+            for pag_serv in pagamentos_servico:
+                # Verificar se é da mesma data ou descrição similar
+                if (pag_serv.data_pagamento and parcela.data_pagamento and 
+                    pag_serv.data_pagamento == parcela.data_pagamento):
+                    print(f"   🗑️ Removendo PagamentoServico ID={pag_serv.id} (mesmo valor e data)")
+                    db.session.delete(pag_serv)
+                    break
+                elif pag_serv.descricao and (descricao_parcela in pag_serv.descricao or descricao_parcela_alt in pag_serv.descricao):
+                    print(f"   🗑️ Removendo PagamentoServico ID={pag_serv.id} (descrição corresponde)")
+                    db.session.delete(pag_serv)
+                    break
+            else:
+                print(f"   ℹ️ Nenhum PagamentoServico correspondente encontrado (normal se criado após correção)")
+        else:
+            # Se NÃO tem serviço vinculado, tentar remover o lançamento criado
+            lancamento_existente = Lancamento.query.filter(
+                Lancamento.obra_id == pagamento.obra_id,
+                db.or_(
+                    Lancamento.descricao == descricao_parcela,
+                    Lancamento.descricao == descricao_parcela_alt
+                )
             ).first()
             
             if lancamento_existente:
                 print(f"   🗑️ Removendo lançamento ID={lancamento_existente.id}")
                 db.session.delete(lancamento_existente)
+            else:
+                print(f"   ℹ️ Nenhum lançamento correspondente encontrado")
         
         # Voltar parcela para status Previsto
         parcela.status = 'Previsto'
