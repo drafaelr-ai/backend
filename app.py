@@ -2117,15 +2117,6 @@ def get_obras():
             total_servicos_ajustado = max(0, total_servicos - float(servicos_orcamento))
             orcamento_total = total_servicos_ajustado + float(orcamento_eng)
             
-            # DEBUG: Log para verificar valores
-            print(f"=== DEBUG OBRA {obra.nome} ===")
-            print(f"    Serviços (MO+Mat): R$ {total_servicos:.2f}")
-            print(f"    Orçamento Eng: R$ {float(orcamento_eng):.2f}")
-            print(f"    Serviços do Orçamento: R$ {float(servicos_orcamento):.2f}")
-            print(f"    Serviços Ajustados: R$ {total_servicos_ajustado:.2f}")
-            print(f"    TOTAL FINAL: R$ {orcamento_total:.2f}")
-            print(f"==============================")
-            
             # KPI 2: Total Pago (Valores Efetivados)
             # Inclui: lançamentos + pagamentos de serviço + parcelas pagas COM serviço
             # NOTA: Parcelas pagas SEM serviço já estão em lanc_pago (Lancamento criado ao pagar)
@@ -2422,7 +2413,8 @@ def get_obra_detalhes(obra_id):
         # --- BOLETOS ---
         boletos_obra = Boleto.query.filter_by(obra_id=obra_id).all()
         
-        # Boletos COM serviço vinculado = fazem parte do orçamento
+        # Boletos COM serviço vinculado = são forma de PAGAMENTO do serviço, NÃO orçamento adicional
+        # O orçamento do serviço já está em valor_global_mao_de_obra + valor_global_material
         total_boletos_com_servico = sum(b.valor or 0 for b in boletos_obra if b.vinculado_servico_id)
         total_boletos_com_servico_pendentes = sum(b.valor or 0 for b in boletos_obra if b.vinculado_servico_id and b.status in ['Pendente', 'Vencido'])
         total_boletos_com_servico_pagos = sum(b.valor or 0 for b in boletos_obra if b.vinculado_servico_id and b.status == 'Pago')
@@ -2432,7 +2424,7 @@ def get_obra_detalhes(obra_id):
         total_boletos_sem_servico_pagos = sum(b.valor or 0 for b in boletos_obra if not b.vinculado_servico_id and b.status == 'Pago')
         
         # Atualizar KPIs com boletos
-        kpi_orcamento_total += total_boletos_com_servico  # Boletos com serviço aumentam o orçamento
+        # CORREÇÃO: Boletos com serviço NÃO aumentam orçamento - são forma de pagamento do serviço
         kpi_valores_pagos += total_boletos_com_servico_pagos + total_boletos_sem_servico_pagos  # TODOS boletos pagos vão para valores pagos
         kpi_liberado_pagamento += total_boletos_com_servico_pendentes  # Boletos pendentes com serviço vão para liberado
         kpi_despesas_extras += total_boletos_sem_servico_pendentes + total_boletos_sem_servico_pagos  # Boletos sem serviço vão para despesas extras
