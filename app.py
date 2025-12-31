@@ -343,6 +343,58 @@ def run_auto_migration():
         if not cur.fetchone():
             cur.execute("ALTER TABLE servico ADD COLUMN data_conclusao DATE;")
             print("✅ Coluna data_conclusao adicionada em servico")
+        
+        # =================================================================
+        # MÓDULO AGENDA DE DEMANDAS - NOVA TABELA
+        # =================================================================
+        print("🔄 Verificando tabela agenda_demanda...")
+        cur.execute("SELECT to_regclass('public.agenda_demanda');")
+        if not cur.fetchone()[0]:
+            print("📝 Criando tabela agenda_demanda...")
+            cur.execute("""
+                CREATE TABLE agenda_demanda (
+                    id SERIAL PRIMARY KEY,
+                    obra_id INTEGER NOT NULL REFERENCES obra(id) ON DELETE CASCADE,
+                    
+                    -- Dados básicos
+                    descricao VARCHAR(255) NOT NULL,
+                    tipo VARCHAR(50) NOT NULL DEFAULT 'material',
+                    fornecedor VARCHAR(255),
+                    telefone VARCHAR(50),
+                    
+                    -- Valores
+                    valor FLOAT,
+                    
+                    -- Datas
+                    data_prevista DATE NOT NULL,
+                    data_conclusao DATE,
+                    
+                    -- Status: aguardando, concluido, atrasado, cancelado
+                    status VARCHAR(50) NOT NULL DEFAULT 'aguardando',
+                    
+                    -- Origem: manual, pagamento, orcamento
+                    origem VARCHAR(50) NOT NULL DEFAULT 'manual',
+                    
+                    -- IDs de referência (para importações)
+                    pagamento_servico_id INTEGER,
+                    orcamento_item_id INTEGER,
+                    servico_id INTEGER,
+                    
+                    -- Observações
+                    observacoes TEXT,
+                    
+                    -- Timestamps
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX idx_agenda_demanda_obra ON agenda_demanda(obra_id);
+                CREATE INDEX idx_agenda_demanda_data ON agenda_demanda(data_prevista);
+                CREATE INDEX idx_agenda_demanda_status ON agenda_demanda(status);
+            """)
+            print("✅ Tabela agenda_demanda criada!")
+        else:
+            print("   ℹ️ Tabela agenda_demanda já existe")
             
         conn.commit()
         cur.close()
