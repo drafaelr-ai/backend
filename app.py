@@ -2008,8 +2008,36 @@ def get_obras():
          ) \
          .group_by(PagamentoParcelado.obra_id) \
          .subquery()
+        
+        # NOVO: 6a. Orçamento de Engenharia TOTAL por obra
+        orcamento_eng_sum = db.session.query(
+            OrcamentoEngEtapa.obra_id,
+            func.sum(
+                db.case(
+                    (OrcamentoEngItem.tipo_composicao == 'separado',
+                     OrcamentoEngItem.quantidade * (
+                         func.coalesce(OrcamentoEngItem.preco_mao_obra, 0) +
+                         func.coalesce(OrcamentoEngItem.preco_material, 0)
+                     )),
+                    else_=OrcamentoEngItem.quantidade * func.coalesce(OrcamentoEngItem.preco_unitario, 0)
+                )
+            ).label('total_orcamento_eng')
+        ).select_from(OrcamentoEngItem) \
+         .join(OrcamentoEngEtapa, OrcamentoEngItem.etapa_id == OrcamentoEngEtapa.id) \
+         .group_by(OrcamentoEngEtapa.obra_id) \
+         .subquery()
+        
+        # NOVO: 6b. Valores de Serviços vinculados ao Orçamento de Engenharia (para evitar duplicação)
+        servicos_orcamento_sum = db.session.query(
+            OrcamentoEngEtapa.obra_id,
+            func.sum(Servico.valor_global_mao_de_obra + Servico.valor_global_material).label('total_servicos_orcamento')
+        ).select_from(OrcamentoEngItem) \
+         .join(OrcamentoEngEtapa, OrcamentoEngItem.etapa_id == OrcamentoEngEtapa.id) \
+         .join(Servico, OrcamentoEngItem.servico_id == Servico.id) \
+         .group_by(OrcamentoEngEtapa.obra_id) \
+         .subquery()
 
-        # 6. Query Principal
+        # 7. Query Principal
         obras_query = db.session.query(
             Obra,
             func.coalesce(lancamentos_sum.c.total_geral_lanc, 0).label('lanc_geral'),
@@ -2024,7 +2052,9 @@ def get_obras():
             func.coalesce(pagamentos_futuros_extra_sum.c.total_futuro_extra, 0).label('futuro_extra'),
             func.coalesce(parcelas_extra_sum.c.total_parcelas_extra, 0).label('parcelas_extra'),
             func.coalesce(parcelas_pagas_com_servico_sum.c.total_parcelas_pagas, 0).label('parcelas_pagas_com_servico'),
-            func.coalesce(parcelas_pagas_sem_servico_sum.c.total_parcelas_pagas_sem, 0).label('parcelas_pagas_sem_servico')
+            func.coalesce(parcelas_pagas_sem_servico_sum.c.total_parcelas_pagas_sem, 0).label('parcelas_pagas_sem_servico'),
+            func.coalesce(orcamento_eng_sum.c.total_orcamento_eng, 0).label('orcamento_eng'),
+            func.coalesce(servicos_orcamento_sum.c.total_servicos_orcamento, 0).label('servicos_orcamento')
         ).outerjoin(
             lancamentos_sum, Obra.id == lancamentos_sum.c.obra_id
         ).outerjoin(
@@ -2043,6 +2073,10 @@ def get_obras():
             parcelas_pagas_com_servico_sum, Obra.id == parcelas_pagas_com_servico_sum.c.obra_id
         ).outerjoin(
             parcelas_pagas_sem_servico_sum, Obra.id == parcelas_pagas_sem_servico_sum.c.obra_id
+        ).outerjoin(
+            orcamento_eng_sum, Obra.id == orcamento_eng_sum.c.obra_id
+        ).outerjoin(
+            servicos_orcamento_sum, Obra.id == servicos_orcamento_sum.c.obra_id
         )
 
         # 7. Filtra permissões E status de conclusão
@@ -2070,15 +2104,19 @@ def get_obras():
 
         # 8. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico, parcelas_pagas_sem_servico in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico, parcelas_pagas_sem_servico, orcamento_eng, servicos_orcamento in obras_com_totais:
             
             # Calcular valores COM serviço
             futuro_com_servico = float(futuro_previsto) - float(futuro_extra)
             parcelas_com_servico = float(parcelas_previstas) - float(parcelas_extra)
             
-            # KPI 1: Orçamento Total (APENAS SERVIÇOS - MO + Material)
-            # Pagamentos futuros/parcelas são formas de PAGAR o orçamento, não orçamento adicional
-            orcamento_total = float(serv_budget_mo) + float(serv_budget_mat)
+            # KPI 1: Orçamento Total
+            # = Serviços do Kanban (não vinculados ao orçamento) + Orçamento de Engenharia completo
+            # Lógica: Se tem orçamento de engenharia, usar como fonte primária
+            # Subtrair do Kanban os serviços que vieram do orçamento para não duplicar
+            total_servicos = float(serv_budget_mo) + float(serv_budget_mat)
+            total_servicos_ajustado = max(0, total_servicos - float(servicos_orcamento))
+            orcamento_total = total_servicos_ajustado + float(orcamento_eng)
             
             # KPI 2: Total Pago (Valores Efetivados)
             # Inclui: lançamentos + pagamentos de serviço + parcelas pagas COM serviço
@@ -2410,8 +2448,9 @@ def get_obra_detalhes(obra_id):
             "despesas_extras": kpi_despesas_extras,        # Card 4 - Despesas Extras (Roxo/Amarelo)
             
             # Totais para o gráfico de distribuição de custos
-            "total_mao_obra": total_budget_mo,
-            "total_material": total_budget_mat,
+            # Inclui: Kanban ajustado + Orçamento de Engenharia
+            "total_mao_obra": total_budget_mo_ajustado + total_orcamento_eng_mo,
+            "total_material": total_budget_mat_ajustado + total_orcamento_eng_mat,
             
             # Mantendo este para o Gráfico
             "total_por_segmento_geral": {tipo: float(valor or 0.0) for tipo, valor in total_por_segmento},
