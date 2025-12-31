@@ -13038,9 +13038,9 @@ def listar_pagamentos_para_importar(obra_id):
         # Buscar pagamentos de material já pagos
         pagamentos = PagamentoServico.query.join(Servico).filter(
             Servico.obra_id == obra_id,
-            PagamentoServico.tipo == 'material',
+            PagamentoServico.tipo_pagamento == 'material',
             PagamentoServico.status == 'Pago'
-        ).order_by(PagamentoServico.data_pagamento.desc()).all()
+        ).order_by(PagamentoServico.data.desc()).all()
         
         # IDs já importados
         ids_importados = set(
@@ -13054,11 +13054,11 @@ def listar_pagamentos_para_importar(obra_id):
                 servico = Servico.query.get(p.servico_id)
                 resultado.append({
                     'id': p.id,
-                    'descricao': p.descricao or 'Material',
+                    'descricao': f"Material - {servico.nome}" if servico else 'Material',
                     'servico': servico.nome if servico else None,
                     'fornecedor': p.fornecedor,
-                    'valor': float(p.valor_pago) if p.valor_pago else float(p.valor) if p.valor else 0,
-                    'data_pagamento': p.data_pagamento.isoformat() if p.data_pagamento else None,
+                    'valor': float(p.valor_pago) if p.valor_pago else float(p.valor_total) if p.valor_total else 0,
+                    'data_pagamento': p.data.isoformat() if p.data else None,
                     'telefone': None
                 })
         
