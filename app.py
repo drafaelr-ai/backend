@@ -13035,11 +13035,10 @@ def listar_pagamentos_para_importar(obra_id):
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado"}), 403
         
-        # Buscar pagamentos de material já pagos
+        # Buscar TODOS os pagamentos de material (pagos e pendentes)
         pagamentos = PagamentoServico.query.join(Servico).filter(
             Servico.obra_id == obra_id,
-            PagamentoServico.tipo_pagamento == 'material',
-            PagamentoServico.status == 'Pago'
+            PagamentoServico.tipo_pagamento == 'material'
         ).order_by(PagamentoServico.data.desc()).all()
         
         # IDs já importados
@@ -13059,6 +13058,7 @@ def listar_pagamentos_para_importar(obra_id):
                     'fornecedor': p.fornecedor,
                     'valor': float(p.valor_pago) if p.valor_pago else float(p.valor_total) if p.valor_total else 0,
                     'data_pagamento': p.data.isoformat() if p.data else None,
+                    'status': p.status,
                     'telefone': None
                 })
         
