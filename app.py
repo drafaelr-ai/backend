@@ -2037,7 +2037,7 @@ def get_obras():
          .group_by(OrcamentoEngEtapa.obra_id) \
          .subquery()
 
-        # 7. Query Principal
+        # 6. Query Principal
         obras_query = db.session.query(
             Obra,
             func.coalesce(lancamentos_sum.c.total_geral_lanc, 0).label('lanc_geral'),
@@ -2112,8 +2112,7 @@ def get_obras():
             
             # KPI 1: Orçamento Total
             # = Serviços do Kanban (não vinculados ao orçamento) + Orçamento de Engenharia completo
-            # Lógica: Se tem orçamento de engenharia, usar como fonte primária
-            # Subtrair do Kanban os serviços que vieram do orçamento para não duplicar
+            # Lógica: Subtrair do Kanban os serviços que vieram do orçamento para não duplicar
             total_servicos = float(serv_budget_mo) + float(serv_budget_mat)
             total_servicos_ajustado = max(0, total_servicos - float(servicos_orcamento))
             orcamento_total = total_servicos_ajustado + float(orcamento_eng)
