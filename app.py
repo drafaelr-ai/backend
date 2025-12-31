@@ -10368,6 +10368,71 @@ class CronogramaEtapa(db.Model):
         }
 
 
+# ==================== MODELO AGENDA DE DEMANDAS ====================
+class AgendaDemanda(db.Model):
+    """
+    Agenda de Demandas - Acompanhamento de entregas, visitas, serviços contratados, etc.
+    Pode ser importado de Pagamentos ou Orçamento, ou cadastrado manualmente.
+    """
+    __tablename__ = 'agenda_demanda'
+
+    id = db.Column(db.Integer, primary_key=True)
+    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
+    
+    # Dados básicos
+    descricao = db.Column(db.String(255), nullable=False)
+    tipo = db.Column(db.String(50), nullable=False, default='material')  # material, servico, visita, outro
+    fornecedor = db.Column(db.String(255), nullable=True)
+    telefone = db.Column(db.String(50), nullable=True)
+    
+    # Valores
+    valor = db.Column(db.Float, nullable=True)
+    
+    # Datas
+    data_prevista = db.Column(db.Date, nullable=False)
+    data_conclusao = db.Column(db.Date, nullable=True)
+    
+    # Status: aguardando, concluido, atrasado, cancelado
+    status = db.Column(db.String(50), nullable=False, default='aguardando')
+    
+    # Origem: manual, pagamento, orcamento
+    origem = db.Column(db.String(50), nullable=False, default='manual')
+    
+    # IDs de referência (para importações)
+    pagamento_servico_id = db.Column(db.Integer, db.ForeignKey('pagamento_servico.id'), nullable=True)
+    orcamento_item_id = db.Column(db.Integer, db.ForeignKey('orcamento_eng_item.id'), nullable=True)
+    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
+    
+    # Observações
+    observacoes = db.Column(db.Text, nullable=True)
+    
+    created_at = db.Column(db.DateTime, default=func.now())
+    updated_at = db.Column(db.DateTime, default=func.now(), onupdate=func.now())
+
+    # Relacionamentos
+    obra = db.relationship('Obra', backref=db.backref('agenda_demandas', lazy='dynamic'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'obra_id': self.obra_id,
+            'descricao': self.descricao,
+            'tipo': self.tipo,
+            'fornecedor': self.fornecedor,
+            'telefone': self.telefone,
+            'valor': float(self.valor) if self.valor else None,
+            'data_prevista': self.data_prevista.isoformat() if self.data_prevista else None,
+            'data_conclusao': self.data_conclusao.isoformat() if self.data_conclusao else None,
+            'status': self.status,
+            'origem': self.origem,
+            'pagamento_servico_id': self.pagamento_servico_id,
+            'orcamento_item_id': self.orcamento_item_id,
+            'servico_id': self.servico_id,
+            'observacoes': self.observacoes,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
 
 @app.route('/obras/<int:obra_id>/servicos', methods=['GET'])
 @jwt_required()
@@ -12673,6 +12738,328 @@ def editar_pagamento_futuro_servico(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         print(f"[ERRO] editar_pagamento_futuro_servico: {str(e)}\n{error_details}")
+        return jsonify({"erro": str(e)}), 500
+
+
+# ==================== ENDPOINTS AGENDA DE DEMANDAS ====================
+
+@app.route('/obras/<int:obra_id>/agenda', methods=['GET'])
+@jwt_required()
+def get_agenda_demandas(obra_id):
+    """Lista todas as demandas da agenda de uma obra"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Atualizar status de atrasados automaticamente
+        hoje = date.today()
+        demandas_atrasadas = AgendaDemanda.query.filter(
+            AgendaDemanda.obra_id == obra_id,
+            AgendaDemanda.status == 'aguardando',
+            AgendaDemanda.data_prevista < hoje
+        ).all()
+        
+        for demanda in demandas_atrasadas:
+            demanda.status = 'atrasado'
+        
+        if demandas_atrasadas:
+            db.session.commit()
+        
+        # Buscar todas as demandas
+        demandas = AgendaDemanda.query.filter_by(obra_id=obra_id).order_by(
+            AgendaDemanda.data_prevista.asc()
+        ).all()
+        
+        return jsonify([d.to_dict() for d in demandas]), 200
+        
+    except Exception as e:
+        print(f"[ERRO] get_agenda_demandas: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def criar_agenda_demanda(obra_id):
+    """Cria uma nova demanda na agenda (manual ou importada)"""
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        data = request.json
+        
+        # Validação
+        if not data.get('descricao'):
+            return jsonify({"erro": "Descrição é obrigatória"}), 400
+        if not data.get('data_prevista'):
+            return jsonify({"erro": "Data é obrigatória"}), 400
+        
+        # Criar demanda
+        demanda = AgendaDemanda(
+            obra_id=obra_id,
+            descricao=data.get('descricao'),
+            tipo=data.get('tipo', 'material'),
+            fornecedor=data.get('fornecedor'),
+            telefone=data.get('telefone'),
+            valor=float(data.get('valor')) if data.get('valor') else None,
+            data_prevista=datetime.strptime(data.get('data_prevista'), '%Y-%m-%d').date(),
+            status='aguardando',
+            origem=data.get('origem', 'manual'),
+            pagamento_servico_id=data.get('pagamento_servico_id'),
+            orcamento_item_id=data.get('orcamento_item_id'),
+            servico_id=data.get('servico_id'),
+            observacoes=data.get('observacoes')
+        )
+        
+        db.session.add(demanda)
+        db.session.commit()
+        
+        print(f"[LOG] Demanda criada: {demanda.descricao} (origem: {demanda.origem})")
+        
+        return jsonify(demanda.to_dict()), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] criar_agenda_demanda: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/<int:demanda_id>', methods=['PUT', 'OPTIONS'])
+@jwt_required()
+def atualizar_agenda_demanda(obra_id, demanda_id):
+    """Atualiza uma demanda da agenda"""
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        demanda = AgendaDemanda.query.filter_by(id=demanda_id, obra_id=obra_id).first()
+        if not demanda:
+            return jsonify({"erro": "Demanda não encontrada"}), 404
+        
+        data = request.json
+        
+        # Atualizar campos
+        if 'descricao' in data:
+            demanda.descricao = data['descricao']
+        if 'tipo' in data:
+            demanda.tipo = data['tipo']
+        if 'fornecedor' in data:
+            demanda.fornecedor = data['fornecedor']
+        if 'telefone' in data:
+            demanda.telefone = data['telefone']
+        if 'valor' in data:
+            demanda.valor = float(data['valor']) if data['valor'] else None
+        if 'data_prevista' in data:
+            demanda.data_prevista = datetime.strptime(data['data_prevista'], '%Y-%m-%d').date()
+        if 'observacoes' in data:
+            demanda.observacoes = data['observacoes']
+        
+        db.session.commit()
+        
+        return jsonify(demanda.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] atualizar_agenda_demanda: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/<int:demanda_id>/concluir', methods=['PUT', 'OPTIONS'])
+@jwt_required()
+def concluir_agenda_demanda(obra_id, demanda_id):
+    """Marca uma demanda como concluída"""
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        demanda = AgendaDemanda.query.filter_by(id=demanda_id, obra_id=obra_id).first()
+        if not demanda:
+            return jsonify({"erro": "Demanda não encontrada"}), 404
+        
+        data = request.json or {}
+        
+        demanda.status = 'concluido'
+        demanda.data_conclusao = datetime.strptime(data.get('data_conclusao'), '%Y-%m-%d').date() if data.get('data_conclusao') else date.today()
+        
+        if data.get('observacoes'):
+            obs_atual = demanda.observacoes or ''
+            demanda.observacoes = f"{obs_atual}\n[Conclusão] {data.get('observacoes')}".strip()
+        
+        db.session.commit()
+        
+        print(f"[LOG] Demanda concluída: {demanda.descricao}")
+        
+        return jsonify(demanda.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] concluir_agenda_demanda: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/<int:demanda_id>/reabrir', methods=['PUT', 'OPTIONS'])
+@jwt_required()
+def reabrir_agenda_demanda(obra_id, demanda_id):
+    """Reabre uma demanda concluída"""
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        demanda = AgendaDemanda.query.filter_by(id=demanda_id, obra_id=obra_id).first()
+        if not demanda:
+            return jsonify({"erro": "Demanda não encontrada"}), 404
+        
+        # Verificar se está atrasada
+        hoje = date.today()
+        if demanda.data_prevista < hoje:
+            demanda.status = 'atrasado'
+        else:
+            demanda.status = 'aguardando'
+        
+        demanda.data_conclusao = None
+        
+        db.session.commit()
+        
+        return jsonify(demanda.to_dict()), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] reabrir_agenda_demanda: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/<int:demanda_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def excluir_agenda_demanda(obra_id, demanda_id):
+    """Exclui uma demanda da agenda"""
+    if request.method == 'OPTIONS':
+        return jsonify({"message": "OK"}), 200
+    
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        demanda = AgendaDemanda.query.filter_by(id=demanda_id, obra_id=obra_id).first()
+        if not demanda:
+            return jsonify({"erro": "Demanda não encontrada"}), 404
+        
+        descricao = demanda.descricao
+        db.session.delete(demanda)
+        db.session.commit()
+        
+        print(f"[LOG] Demanda excluída: {descricao}")
+        
+        return jsonify({"mensagem": "Demanda excluída com sucesso"}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] excluir_agenda_demanda: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/importar/pagamentos', methods=['GET'])
+@jwt_required()
+def listar_pagamentos_para_importar(obra_id):
+    """Lista pagamentos de material que podem ser importados para a agenda"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Buscar pagamentos de material já pagos
+        pagamentos = PagamentoServico.query.join(Servico).filter(
+            Servico.obra_id == obra_id,
+            PagamentoServico.tipo == 'material',
+            PagamentoServico.status == 'Pago'
+        ).order_by(PagamentoServico.data_pagamento.desc()).all()
+        
+        # IDs já importados
+        ids_importados = set(
+            d.pagamento_servico_id for d in AgendaDemanda.query.filter_by(obra_id=obra_id).all()
+            if d.pagamento_servico_id
+        )
+        
+        resultado = []
+        for p in pagamentos:
+            if p.id not in ids_importados:
+                servico = Servico.query.get(p.servico_id)
+                resultado.append({
+                    'id': p.id,
+                    'descricao': p.descricao or 'Material',
+                    'servico': servico.nome if servico else None,
+                    'fornecedor': p.fornecedor,
+                    'valor': float(p.valor_pago) if p.valor_pago else float(p.valor) if p.valor else 0,
+                    'data_pagamento': p.data_pagamento.isoformat() if p.data_pagamento else None,
+                    'telefone': None
+                })
+        
+        return jsonify(resultado), 200
+        
+    except Exception as e:
+        print(f"[ERRO] listar_pagamentos_para_importar: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/importar/orcamento', methods=['GET'])
+@jwt_required()
+def listar_orcamento_para_importar(obra_id):
+    """Lista itens do orçamento de engenharia que podem ser importados para a agenda"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Buscar itens do orçamento de engenharia
+        itens = db.session.query(OrcamentoEngItem, OrcamentoEngEtapa).join(
+            OrcamentoEngEtapa, OrcamentoEngItem.etapa_id == OrcamentoEngEtapa.id
+        ).filter(
+            OrcamentoEngEtapa.obra_id == obra_id
+        ).all()
+        
+        # IDs já importados
+        ids_importados = set(
+            d.orcamento_item_id for d in AgendaDemanda.query.filter_by(obra_id=obra_id).all()
+            if d.orcamento_item_id
+        )
+        
+        resultado = []
+        for item, etapa in itens:
+            if item.id not in ids_importados:
+                # Calcular valor total
+                if item.tipo_composicao == 'separado':
+                    valor_total = item.quantidade * ((item.preco_mao_obra or 0) + (item.preco_material or 0))
+                else:
+                    valor_total = item.quantidade * (item.preco_unitario or 0)
+                
+                resultado.append({
+                    'id': item.id,
+                    'descricao': item.descricao,
+                    'etapa': etapa.nome,
+                    'quantidade': f"{item.quantidade} {item.unidade}",
+                    'valor': float(valor_total),
+                })
+        
+        return jsonify(resultado), 200
+        
+    except Exception as e:
+        print(f"[ERRO] listar_orcamento_para_importar: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
