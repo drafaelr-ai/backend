@@ -2117,6 +2117,15 @@ def get_obras():
             total_servicos_ajustado = max(0, total_servicos - float(servicos_orcamento))
             orcamento_total = total_servicos_ajustado + float(orcamento_eng)
             
+            # DEBUG: Log para verificar valores
+            print(f"=== DEBUG OBRA {obra.nome} ===")
+            print(f"    Serviços (MO+Mat): R$ {total_servicos:.2f}")
+            print(f"    Orçamento Eng: R$ {float(orcamento_eng):.2f}")
+            print(f"    Serviços do Orçamento: R$ {float(servicos_orcamento):.2f}")
+            print(f"    Serviços Ajustados: R$ {total_servicos_ajustado:.2f}")
+            print(f"    TOTAL FINAL: R$ {orcamento_total:.2f}")
+            print(f"==============================")
+            
             # KPI 2: Total Pago (Valores Efetivados)
             # Inclui: lançamentos + pagamentos de serviço + parcelas pagas COM serviço
             # NOTA: Parcelas pagas SEM serviço já estão em lanc_pago (Lancamento criado ao pagar)
