@@ -13029,36 +13029,89 @@ def excluir_agenda_demanda(obra_id, demanda_id):
 @app.route('/obras/<int:obra_id>/agenda/importar/pagamentos', methods=['GET'])
 @jwt_required()
 def listar_pagamentos_para_importar(obra_id):
-    """Lista pagamentos de material que podem ser importados para a agenda"""
+    """Lista TODOS os pagamentos que podem ser importados para a agenda"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado"}), 403
         
-        # Buscar TODOS os pagamentos de material (pagos e pendentes)
-        pagamentos = PagamentoServico.query.join(Servico).filter(
-            Servico.obra_id == obra_id,
-            PagamentoServico.tipo_pagamento == 'material'
-        ).order_by(PagamentoServico.data.desc()).all()
-        
-        # IDs já importados
-        ids_importados = set(
-            d.pagamento_servico_id for d in AgendaDemanda.query.filter_by(obra_id=obra_id).all()
-            if d.pagamento_servico_id
-        )
+        # IDs já importados da agenda
+        demandas_existentes = AgendaDemanda.query.filter_by(obra_id=obra_id).all()
+        ids_pag_servico = set(d.pagamento_servico_id for d in demandas_existentes if d.pagamento_servico_id)
         
         resultado = []
-        for p in pagamentos:
-            if p.id not in ids_importados:
+        
+        # 1. PAGAMENTOS DE SERVIÇO (PagamentoServico) - Material e Mão de Obra
+        pagamentos_servico = PagamentoServico.query.join(Servico).filter(
+            Servico.obra_id == obra_id
+        ).order_by(PagamentoServico.data.desc()).all()
+        
+        for p in pagamentos_servico:
+            if p.id not in ids_pag_servico:
                 servico = Servico.query.get(p.servico_id)
+                tipo_display = "Material" if p.tipo_pagamento == 'material' else "Mão de Obra"
                 resultado.append({
                     'id': p.id,
-                    'descricao': f"Material - {servico.nome}" if servico else 'Material',
+                    'fonte': 'pagamento_servico',
+                    'descricao': f"{tipo_display} - {servico.nome}" if servico else tipo_display,
                     'servico': servico.nome if servico else None,
                     'fornecedor': p.fornecedor,
                     'valor': float(p.valor_pago) if p.valor_pago else float(p.valor_total) if p.valor_total else 0,
                     'data_pagamento': p.data.isoformat() if p.data else None,
                     'status': p.status,
+                    'tipo': p.tipo_pagamento,
+                    'telefone': None
+                })
+        
+        # 2. PAGAMENTOS FUTUROS (PagamentoFuturo)
+        pagamentos_futuros = PagamentoFuturo.query.filter_by(obra_id=obra_id).order_by(
+            PagamentoFuturo.data_vencimento.asc()
+        ).all()
+        
+        for pf in pagamentos_futuros:
+            # Verificar se já foi importado (usando descrição como chave)
+            ja_importado = any(
+                d.descricao == pf.descricao and d.origem == 'pagamento' 
+                for d in demandas_existentes
+            )
+            if not ja_importado:
+                servico = Servico.query.get(pf.servico_id) if pf.servico_id else None
+                resultado.append({
+                    'id': f"futuro_{pf.id}",
+                    'fonte': 'pagamento_futuro',
+                    'descricao': pf.descricao,
+                    'servico': servico.nome if servico else None,
+                    'fornecedor': pf.fornecedor,
+                    'valor': float(pf.valor) if pf.valor else 0,
+                    'data_pagamento': pf.data_vencimento.isoformat() if pf.data_vencimento else None,
+                    'status': pf.status,
+                    'tipo': pf.tipo or 'Despesa',
+                    'telefone': None
+                })
+        
+        # 3. PAGAMENTOS PARCELADOS (PagamentoParcelado)
+        pagamentos_parcelados = PagamentoParcelado.query.filter_by(obra_id=obra_id).order_by(
+            PagamentoParcelado.data_primeira_parcela.asc()
+        ).all()
+        
+        for pp in pagamentos_parcelados:
+            # Verificar se já foi importado
+            ja_importado = any(
+                d.descricao == pp.descricao and d.origem == 'pagamento' 
+                for d in demandas_existentes
+            )
+            if not ja_importado:
+                servico = Servico.query.get(pp.servico_id) if pp.servico_id else None
+                resultado.append({
+                    'id': f"parcelado_{pp.id}",
+                    'fonte': 'pagamento_parcelado',
+                    'descricao': f"{pp.descricao} ({pp.parcelas_pagas}/{pp.numero_parcelas} parcelas)",
+                    'servico': servico.nome if servico else None,
+                    'fornecedor': pp.fornecedor,
+                    'valor': float(pp.valor_total) if pp.valor_total else 0,
+                    'data_pagamento': pp.data_primeira_parcela.isoformat() if pp.data_primeira_parcela else None,
+                    'status': pp.status,
+                    'tipo': pp.segmento or 'Material',
                     'telefone': None
                 })
         
