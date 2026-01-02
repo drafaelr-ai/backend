@@ -785,7 +785,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
                         codigo = re.sub(r'[\s\.]', '', codigo_raw)
                         if len(codigo) >= 47:
                             boleto['codigo_barras'] = codigo[:47] if len(codigo) >= 47 else codigo
-                            break
+                            break 
                 
                 # =====================================================
                 # 2. VALOR
