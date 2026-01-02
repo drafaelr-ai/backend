@@ -395,6 +395,15 @@ def run_auto_migration():
             print("✅ Tabela agenda_demanda criada!")
         else:
             print("   ℹ️ Tabela agenda_demanda já existe")
+            # Verificar e adicionar coluna horário se não existir
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns 
+                WHERE table_name = 'agenda_demanda' AND column_name = 'horario'
+            """)
+            if not cur.fetchone():
+                print("   🔄 Adicionando coluna horário à tabela agenda_demanda...")
+                cur.execute("ALTER TABLE agenda_demanda ADD COLUMN horario VARCHAR(10)")
+                print("   ✅ Coluna horário adicionada!")
             
         conn.commit()
         cur.close()
@@ -10423,8 +10432,9 @@ class CronogramaEtapa(db.Model):
 # ==================== MODELO AGENDA DE DEMANDAS ====================
 class AgendaDemanda(db.Model):
     """
-    Agenda de Demandas - Acompanhamento de entregas, visitas, serviços contratados, etc.
-    Pode ser importado de Pagamentos ou Orçamento, ou cadastrado manualmente.
+    Agenda de Eventos - Acompanhamento de entregas, visitas, inícios de serviço, etc.
+    Pode ser importado de Pagamentos, Orçamento, Cronograma ou cadastrado manualmente.
+    Eventos passados somem automaticamente (comportamento de agenda).
     """
     __tablename__ = 'agenda_demanda'
 
@@ -10442,12 +10452,13 @@ class AgendaDemanda(db.Model):
     
     # Datas
     data_prevista = db.Column(db.Date, nullable=False)
+    horario = db.Column(db.String(10), nullable=True)  # HH:MM formato
     data_conclusao = db.Column(db.Date, nullable=True)
     
     # Status: aguardando, concluido, atrasado, cancelado
     status = db.Column(db.String(50), nullable=False, default='aguardando')
     
-    # Origem: manual, pagamento, orcamento
+    # Origem: manual, pagamento, orcamento, cronograma
     origem = db.Column(db.String(50), nullable=False, default='manual')
     
     # IDs de referência (para importações)
@@ -10474,6 +10485,7 @@ class AgendaDemanda(db.Model):
             'telefone': self.telefone,
             'valor': float(self.valor) if self.valor else None,
             'data_prevista': self.data_prevista.isoformat() if self.data_prevista else None,
+            'horario': self.horario,
             'data_conclusao': self.data_conclusao.isoformat() if self.data_conclusao else None,
             'status': self.status,
             'origem': self.origem,
@@ -12859,6 +12871,7 @@ def criar_agenda_demanda(obra_id):
             telefone=data.get('telefone'),
             valor=float(data.get('valor')) if data.get('valor') else None,
             data_prevista=datetime.strptime(data.get('data_prevista'), '%Y-%m-%d').date(),
+            horario=data.get('horario'),
             status='aguardando',
             origem=data.get('origem', 'manual'),
             pagamento_servico_id=data.get('pagamento_servico_id'),
@@ -12911,6 +12924,8 @@ def atualizar_agenda_demanda(obra_id, demanda_id):
             demanda.valor = float(data['valor']) if data['valor'] else None
         if 'data_prevista' in data:
             demanda.data_prevista = datetime.strptime(data['data_prevista'], '%Y-%m-%d').date()
+        if 'horario' in data:
+            demanda.horario = data['horario']
         if 'observacoes' in data:
             demanda.observacoes = data['observacoes']
         
@@ -13165,6 +13180,53 @@ def listar_orcamento_para_importar(obra_id):
         
     except Exception as e:
         print(f"[ERRO] listar_orcamento_para_importar: {str(e)}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/importar/servicos', methods=['GET'])
+@jwt_required()
+def listar_servicos_para_importar(obra_id):
+    """Lista serviços do cronograma com data de início para importar como eventos"""
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        # Buscar serviços do cronograma com data de início
+        servicos = CronogramaObra.query.filter(
+            CronogramaObra.obra_id == obra_id,
+            CronogramaObra.data_inicio.isnot(None)
+        ).order_by(CronogramaObra.data_inicio.asc()).all()
+        
+        # IDs já importados
+        demandas_existentes = AgendaDemanda.query.filter_by(obra_id=obra_id, origem='cronograma').all()
+        servicos_importados = set(d.servico_id for d in demandas_existentes if d.servico_id)
+        # Também verificar por descrição para evitar duplicatas
+        descricoes_importadas = set(d.descricao for d in demandas_existentes)
+        
+        resultado = []
+        for s in servicos:
+            # Verificar se já foi importado
+            if s.id in servicos_importados:
+                continue
+            if f"Início: {s.servico_nome}" in descricoes_importadas:
+                continue
+                
+            resultado.append({
+                'id': s.id,
+                'nome': s.servico_nome,
+                'etapa': s.etapa,
+                'data_inicio': s.data_inicio.isoformat() if s.data_inicio else None,
+                'data_termino': s.data_termino.isoformat() if s.data_termino else None,
+                'responsavel': s.responsavel,
+                'status': 'Em Andamento' if s.percentual_conclusao and s.percentual_conclusao > 0 else 'A Iniciar',
+                'percentual': float(s.percentual_conclusao) if s.percentual_conclusao else 0
+            })
+        
+        return jsonify(resultado), 200
+        
+    except Exception as e:
+        print(f"[ERRO] listar_servicos_para_importar: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
