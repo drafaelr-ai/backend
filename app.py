@@ -785,7 +785,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
                         codigo = re.sub(r'[\s\.]', '', codigo_raw)
                         if len(codigo) >= 47:
                             boleto['codigo_barras'] = codigo[:47] if len(codigo) >= 47 else codigo
-                            break 
+                            break
                 
                 # =====================================================
                 # 2. VALOR
@@ -13198,6 +13198,8 @@ def listar_servicos_para_importar(obra_id):
             CronogramaObra.data_inicio.isnot(None)
         ).order_by(CronogramaObra.data_inicio.asc()).all()
         
+        print(f"[LOG] Encontrados {len(servicos)} serviços no cronograma para obra {obra_id}")
+        
         # IDs já importados
         demandas_existentes = AgendaDemanda.query.filter_by(obra_id=obra_id, origem='cronograma').all()
         servicos_importados = set(d.servico_id for d in demandas_existentes if d.servico_id)
@@ -13211,22 +13213,35 @@ def listar_servicos_para_importar(obra_id):
                 continue
             if f"Início: {s.servico_nome}" in descricoes_importadas:
                 continue
+            
+            # Determinar status baseado no percentual
+            if s.percentual_conclusao and s.percentual_conclusao >= 100:
+                status = 'Concluído'
+            elif s.percentual_conclusao and s.percentual_conclusao > 0:
+                status = 'Em Andamento'
+            elif s.data_inicio_real:
+                status = 'Iniciado'
+            else:
+                status = 'A Iniciar'
                 
             resultado.append({
                 'id': s.id,
                 'nome': s.servico_nome,
-                'etapa': s.etapa,
+                'etapa': None,  # CronogramaObra não tem etapa
                 'data_inicio': s.data_inicio.isoformat() if s.data_inicio else None,
-                'data_termino': s.data_termino.isoformat() if s.data_termino else None,
-                'responsavel': s.responsavel,
-                'status': 'Em Andamento' if s.percentual_conclusao and s.percentual_conclusao > 0 else 'A Iniciar',
+                'data_termino': s.data_fim_prevista.isoformat() if s.data_fim_prevista else None,
+                'responsavel': None,  # CronogramaObra não tem responsável
+                'status': status,
                 'percentual': float(s.percentual_conclusao) if s.percentual_conclusao else 0
             })
         
+        print(f"[LOG] {len(resultado)} serviços disponíveis para importar (após filtrar já importados)")
         return jsonify(resultado), 200
         
     except Exception as e:
         print(f"[ERRO] listar_servicos_para_importar: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
 
