@@ -13186,24 +13186,26 @@ def listar_orcamento_para_importar(obra_id):
 @app.route('/obras/<int:obra_id>/agenda/importar/servicos', methods=['GET'])
 @jwt_required()
 def listar_servicos_para_importar(obra_id):
-    """Lista serviços do cronograma com data de início para importar como eventos"""
+    """Lista serviços do cronograma com data de início FUTURA para importar como eventos"""
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado"}), 403
         
-        # Buscar serviços do cronograma com data de início
+        hoje = date.today()
+        
+        # Buscar serviços do cronograma com data de início FUTURA
         servicos = CronogramaObra.query.filter(
             CronogramaObra.obra_id == obra_id,
-            CronogramaObra.data_inicio.isnot(None)
+            CronogramaObra.data_inicio.isnot(None),
+            CronogramaObra.data_inicio > hoje  # Só futuros
         ).order_by(CronogramaObra.data_inicio.asc()).all()
         
-        print(f"[LOG] Encontrados {len(servicos)} serviços no cronograma para obra {obra_id}")
+        print(f"[LOG] Encontrados {len(servicos)} serviços FUTUROS no cronograma para obra {obra_id}")
         
         # IDs já importados
         demandas_existentes = AgendaDemanda.query.filter_by(obra_id=obra_id, origem='cronograma').all()
         servicos_importados = set(d.servico_id for d in demandas_existentes if d.servico_id)
-        # Também verificar por descrição para evitar duplicatas
         descricoes_importadas = set(d.descricao for d in demandas_existentes)
         
         resultado = []
@@ -13213,33 +13215,92 @@ def listar_servicos_para_importar(obra_id):
                 continue
             if f"Início: {s.servico_nome}" in descricoes_importadas:
                 continue
-            
-            # Determinar status baseado no percentual
-            if s.percentual_conclusao and s.percentual_conclusao >= 100:
-                status = 'Concluído'
-            elif s.percentual_conclusao and s.percentual_conclusao > 0:
-                status = 'Em Andamento'
-            elif s.data_inicio_real:
-                status = 'Iniciado'
-            else:
-                status = 'A Iniciar'
                 
             resultado.append({
                 'id': s.id,
                 'nome': s.servico_nome,
-                'etapa': None,  # CronogramaObra não tem etapa
+                'etapa': None,
                 'data_inicio': s.data_inicio.isoformat() if s.data_inicio else None,
                 'data_termino': s.data_fim_prevista.isoformat() if s.data_fim_prevista else None,
-                'responsavel': None,  # CronogramaObra não tem responsável
-                'status': status,
-                'percentual': float(s.percentual_conclusao) if s.percentual_conclusao else 0
+                'responsavel': None,
+                'status': 'A Iniciar',
+                'percentual': 0
             })
         
-        print(f"[LOG] {len(resultado)} serviços disponíveis para importar (após filtrar já importados)")
+        print(f"[LOG] {len(resultado)} serviços futuros disponíveis para importar")
         return jsonify(resultado), 200
         
     except Exception as e:
         print(f"[ERRO] listar_servicos_para_importar: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/agenda/sincronizar-cronograma', methods=['POST'])
+@jwt_required()
+def sincronizar_cronograma_agenda(obra_id):
+    """
+    Sincroniza automaticamente os serviços do cronograma com a agenda.
+    Importa serviços com data de início futura que ainda não foram importados.
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado"}), 403
+        
+        hoje = date.today()
+        
+        # Buscar serviços do cronograma com data de início FUTURA
+        servicos = CronogramaObra.query.filter(
+            CronogramaObra.obra_id == obra_id,
+            CronogramaObra.data_inicio.isnot(None),
+            CronogramaObra.data_inicio > hoje
+        ).all()
+        
+        # IDs já importados
+        demandas_existentes = AgendaDemanda.query.filter_by(obra_id=obra_id, origem='cronograma').all()
+        servicos_importados = set(d.servico_id for d in demandas_existentes if d.servico_id)
+        descricoes_importadas = set(d.descricao for d in demandas_existentes)
+        
+        importados = 0
+        for s in servicos:
+            # Verificar se já foi importado
+            if s.id in servicos_importados:
+                continue
+            if f"Início: {s.servico_nome}" in descricoes_importadas:
+                continue
+            
+            # Criar demanda automaticamente
+            demanda = AgendaDemanda(
+                obra_id=obra_id,
+                descricao=f"Início: {s.servico_nome}",
+                tipo='servico',
+                fornecedor=None,
+                telefone=None,
+                valor=None,
+                data_prevista=s.data_inicio,
+                horario=None,
+                status='aguardando',
+                origem='cronograma',
+                servico_id=s.id,
+                observacoes=f"Término previsto: {s.data_fim_prevista.strftime('%d/%m/%Y') if s.data_fim_prevista else '-'}"
+            )
+            db.session.add(demanda)
+            importados += 1
+        
+        db.session.commit()
+        print(f"[LOG] Sincronização automática: {importados} serviços importados para agenda da obra {obra_id}")
+        
+        return jsonify({
+            "sucesso": True,
+            "importados": importados,
+            "mensagem": f"{importados} serviços sincronizados com a agenda"
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] sincronizar_cronograma_agenda: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
