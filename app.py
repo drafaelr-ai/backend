@@ -1857,7 +1857,8 @@ def get_current_user():
     return user
 def user_has_access_to_obra(user, obra_id):
     if not user: return False
-    if user.role == 'administrador': return True
+    if user.role == 'master': return True  # Master tem acesso a todas as obras
+    if user.role == 'administrador': return True  # Admin também tem acesso a todas
     obra_ids_permitidas = [obra.id for obra in user.obras_permitidas]
     return obra_id in obra_ids_permitidas
 def check_permission(roles):
@@ -3364,7 +3365,7 @@ def limpar_pagamentos_parcelas_duplicados(obra_id):
             return jsonify({"erro": "Apenas administradores podem executar esta ação"}), 403
         
         obra = Obra.query.get_or_404(obra_id)
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão para esta obra"}), 403
         
         # Buscar todos os pagamentos parcelados COM serviço desta obra
@@ -15092,9 +15093,9 @@ def obter_orcamento_eng(obra_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        # Verificar permissão
-        if user.role != 'master' and obra not in user.obras:
-            return jsonify({"erro": "Sem permissão"}), 403
+        # Verificar permissão - qualquer usuário com acesso à obra pode visualizar
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
         
         # Buscar etapas com itens
         etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).order_by(OrcamentoEngEtapa.ordem, OrcamentoEngEtapa.codigo).all()
@@ -15190,7 +15191,7 @@ def criar_etapa_orcamento(obra_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         dados = request.json
@@ -15237,7 +15238,7 @@ def editar_etapa_orcamento(obra_id, etapa_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
@@ -15259,6 +15260,38 @@ def editar_etapa_orcamento(obra_id, etapa_id):
         return jsonify({"erro": str(e)}), 500
 
 
+@app.route('/obras/<int:obra_id>/orcamento-eng/reordenar-etapas', methods=['POST'])
+@jwt_required()
+def reordenar_etapas_orcamento(obra_id):
+    """
+    Reordena as etapas do orçamento
+    Recebe: { etapas: [{ id: 1, ordem: 0 }, { id: 2, ordem: 1 }, ...] }
+    """
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        dados = request.json
+        etapas_ordem = dados.get('etapas', [])
+        
+        for item in etapas_ordem:
+            etapa = OrcamentoEngEtapa.query.get(item['id'])
+            if etapa and etapa.obra_id == obra_id:
+                etapa.ordem = item['ordem']
+                # Atualizar código se fornecido
+                if 'codigo' in item:
+                    etapa.codigo = item['codigo']
+        
+        db.session.commit()
+        
+        return jsonify({"sucesso": True, "mensagem": "Etapas reordenadas com sucesso"})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"erro": str(e)}), 500
+
+
 @app.route('/obras/<int:obra_id>/orcamento-eng/etapas/<int:etapa_id>', methods=['DELETE'])
 @jwt_required()
 def deletar_etapa_orcamento(obra_id, etapa_id):
@@ -15269,7 +15302,7 @@ def deletar_etapa_orcamento(obra_id, etapa_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
@@ -15302,7 +15335,7 @@ def criar_item_orcamento(obra_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         dados = request.json
@@ -15435,7 +15468,7 @@ def editar_item_orcamento(obra_id, item_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         item = OrcamentoEngItem.query.get_or_404(item_id)
@@ -15502,7 +15535,7 @@ def deletar_item_orcamento(obra_id, item_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         item = OrcamentoEngItem.query.get_or_404(item_id)
@@ -15549,7 +15582,7 @@ def sincronizar_servicos_com_orcamento(obra_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         # Buscar todos os itens do orçamento
@@ -15629,7 +15662,7 @@ def apagar_orcamento_completo(obra_id):
         if user.role not in ['master', 'administrador']:
             return jsonify({"erro": "Apenas administradores podem apagar o orçamento completo"}), 403
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         # Buscar todas as etapas
@@ -15687,7 +15720,7 @@ def sincronizar_pagamentos_orcamento(obra_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         # Buscar todos os itens do orçamento desta obra
@@ -15966,7 +15999,7 @@ def gerar_orcamento_por_planta(obra_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         dados = request.json
@@ -16498,7 +16531,7 @@ def importar_orcamento_gerado(obra_id):
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
         
-        if user.role != 'master' and obra not in user.obras:
+        if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         dados = request.json
