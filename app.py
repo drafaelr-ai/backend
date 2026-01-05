@@ -4827,6 +4827,18 @@ def delete_user(user_id):
                 db.session.rollback()
                 print(f"   ⚠️ {tabela}.{coluna}: {str(e)[:50]}")
         
+        # Deletar notificações do usuário (tanto enviadas quanto recebidas)
+        try:
+            result = db.session.execute(
+                db.text("DELETE FROM notificacao WHERE usuario_destino_id = :uid"),
+                {"uid": user_id}
+            )
+            db.session.commit()
+            print(f"   ✅ notificacao (destino) deletado ({result.rowcount} registros)")
+        except Exception as e:
+            db.session.rollback()
+            print(f"   ⚠️ notificacao (destino): {str(e)[:50]}")
+        
         # Remover associações de user_obra
         try:
             result = db.session.execute(
