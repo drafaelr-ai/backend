@@ -4992,6 +4992,30 @@ def limpar_notificacoes_lidas():
         print(f"--- [ERRO] DELETE /notificacoes/limpar-lidas: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
+
+@app.route('/notificacoes/limpar-todas', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def limpar_todas_notificacoes():
+    """Remove TODAS as notificações do usuário (lidas e não lidas)"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    
+    try:
+        current_user_id = int(get_jwt_identity())
+        
+        deleted = Notificacao.query.filter_by(
+            usuario_destino_id=current_user_id
+        ).delete()
+        
+        db.session.commit()
+        
+        return jsonify({"sucesso": f"{deleted} notificações removidas"}), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"--- [ERRO] DELETE /notificacoes/limpar-todas: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
 @app.route('/notificacoes/<int:notificacao_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_notificacao(notificacao_id):
