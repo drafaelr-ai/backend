@@ -12133,6 +12133,220 @@ def setup_migrate_cronograma_orcamento():
 
 
 # ==============================================================================
+# MIGRAÇÃO: Serviços (Kanban) → Itens do Orçamento de Engenharia
+# ==============================================================================
+
+@app.route('/setup/migrate-servicos-para-orcamento', methods=['GET'])
+def setup_migrate_servicos_para_orcamento():
+    """
+    ROTA DE MIGRAÇÃO - Converte Serviços do Kanban em Itens do Orçamento de Engenharia
+    
+    Para cada Serviço:
+    1. Cria uma Etapa no orçamento com o nome do serviço
+    2. Cria um Item dentro dessa etapa com os valores do serviço
+    3. Vincula o item ao serviço original (para rastreabilidade)
+    
+    Acesse: https://backend-production-78c9.up.railway.app/setup/migrate-servicos-para-orcamento
+    """
+    try:
+        resultados = []
+        servicos_migrados = 0
+        servicos_ignorados = 0
+        
+        # Buscar todas as obras
+        obras = Obra.query.all()
+        
+        for obra in obras:
+            # Buscar serviços desta obra
+            servicos = Servico.query.filter_by(obra_id=obra.id).all()
+            
+            if not servicos:
+                continue
+            
+            # Buscar maior código de etapa existente
+            ultima_etapa = OrcamentoEngEtapa.query.filter_by(obra_id=obra.id).order_by(OrcamentoEngEtapa.ordem.desc()).first()
+            proxima_ordem = (ultima_etapa.ordem + 1) if ultima_etapa else 1
+            proximo_codigo = proxima_ordem
+            
+            for servico in servicos:
+                # Verificar se já existe um item vinculado a este serviço
+                item_existente = OrcamentoEngItem.query.filter_by(servico_id=servico.id).first()
+                if item_existente:
+                    servicos_ignorados += 1
+                    continue
+                
+                # Verificar se já existe uma etapa com o mesmo nome
+                etapa_existente = OrcamentoEngEtapa.query.filter_by(
+                    obra_id=obra.id,
+                    nome=servico.nome
+                ).first()
+                
+                if etapa_existente:
+                    # Usar etapa existente
+                    etapa = etapa_existente
+                else:
+                    # Criar nova etapa
+                    codigo_etapa = f"{proximo_codigo:02d}"
+                    etapa = OrcamentoEngEtapa(
+                        obra_id=obra.id,
+                        codigo=codigo_etapa,
+                        nome=servico.nome,
+                        ordem=proxima_ordem
+                    )
+                    db.session.add(etapa)
+                    db.session.flush()  # Para obter o ID
+                    
+                    proxima_ordem += 1
+                    proximo_codigo += 1
+                
+                # Criar item dentro da etapa
+                # Buscar último item da etapa para definir código
+                ultimo_item = OrcamentoEngItem.query.filter_by(etapa_id=etapa.id).order_by(OrcamentoEngItem.ordem.desc()).first()
+                item_ordem = (ultimo_item.ordem + 1) if ultimo_item else 1
+                codigo_item = f"{etapa.codigo}.{item_ordem:02d}"
+                
+                # Calcular valores
+                valor_mo = servico.valor_global_mao_de_obra or 0
+                valor_mat = servico.valor_global_material or 0
+                
+                novo_item = OrcamentoEngItem(
+                    etapa_id=etapa.id,
+                    codigo=codigo_item,
+                    descricao=servico.nome,
+                    unidade='vb',  # Verba (serviço global)
+                    quantidade=1,
+                    tipo_composicao='separado',
+                    preco_mao_obra=valor_mo,
+                    preco_material=valor_mat,
+                    servico_id=servico.id,  # Manter vínculo para rastreabilidade
+                    ordem=item_ordem
+                )
+                db.session.add(novo_item)
+                servicos_migrados += 1
+            
+            resultados.append(f"Obra '{obra.nome}': {len(servicos)} serviços processados")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'mensagem': 'Migração de serviços concluída',
+            'servicos_migrados': servicos_migrados,
+            'servicos_ignorados': servicos_ignorados,
+            'detalhes': resultados
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/setup/migrate-servicos-para-orcamento/<int:obra_id>', methods=['GET'])
+def setup_migrate_servicos_para_orcamento_obra(obra_id):
+    """
+    ROTA DE MIGRAÇÃO - Converte Serviços do Kanban em Itens do Orçamento para UMA obra específica
+    
+    Acesse: https://backend-production-78c9.up.railway.app/setup/migrate-servicos-para-orcamento/123
+    """
+    try:
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({'erro': 'Obra não encontrada'}), 404
+        
+        servicos_migrados = 0
+        servicos_ignorados = 0
+        detalhes = []
+        
+        # Buscar serviços desta obra
+        servicos = Servico.query.filter_by(obra_id=obra.id).all()
+        
+        if not servicos:
+            return jsonify({
+                'mensagem': 'Nenhum serviço encontrado nesta obra',
+                'servicos_migrados': 0
+            })
+        
+        # Buscar maior código de etapa existente
+        ultima_etapa = OrcamentoEngEtapa.query.filter_by(obra_id=obra.id).order_by(OrcamentoEngEtapa.ordem.desc()).first()
+        proxima_ordem = (ultima_etapa.ordem + 1) if ultima_etapa else 1
+        proximo_codigo = proxima_ordem
+        
+        for servico in servicos:
+            # Verificar se já existe um item vinculado a este serviço
+            item_existente = OrcamentoEngItem.query.filter_by(servico_id=servico.id).first()
+            if item_existente:
+                servicos_ignorados += 1
+                detalhes.append(f"⏭️ '{servico.nome}' - já existe item vinculado")
+                continue
+            
+            # Verificar se já existe uma etapa com o mesmo nome
+            etapa_existente = OrcamentoEngEtapa.query.filter_by(
+                obra_id=obra.id,
+                nome=servico.nome
+            ).first()
+            
+            if etapa_existente:
+                etapa = etapa_existente
+                detalhes.append(f"📁 '{servico.nome}' - usando etapa existente")
+            else:
+                # Criar nova etapa
+                codigo_etapa = f"{proximo_codigo:02d}"
+                etapa = OrcamentoEngEtapa(
+                    obra_id=obra.id,
+                    codigo=codigo_etapa,
+                    nome=servico.nome,
+                    ordem=proxima_ordem
+                )
+                db.session.add(etapa)
+                db.session.flush()
+                
+                proxima_ordem += 1
+                proximo_codigo += 1
+                detalhes.append(f"📁 '{servico.nome}' - nova etapa criada ({codigo_etapa})")
+            
+            # Criar item dentro da etapa
+            ultimo_item = OrcamentoEngItem.query.filter_by(etapa_id=etapa.id).order_by(OrcamentoEngItem.ordem.desc()).first()
+            item_ordem = (ultimo_item.ordem + 1) if ultimo_item else 1
+            codigo_item = f"{etapa.codigo}.{item_ordem:02d}"
+            
+            valor_mo = servico.valor_global_mao_de_obra or 0
+            valor_mat = servico.valor_global_material or 0
+            
+            novo_item = OrcamentoEngItem(
+                etapa_id=etapa.id,
+                codigo=codigo_item,
+                descricao=servico.nome,
+                unidade='vb',
+                quantidade=1,
+                tipo_composicao='separado',
+                preco_mao_obra=valor_mo,
+                preco_material=valor_mat,
+                servico_id=servico.id,
+                ordem=item_ordem
+            )
+            db.session.add(novo_item)
+            servicos_migrados += 1
+            detalhes.append(f"✅ '{servico.nome}' - item criado ({codigo_item}) MO: R${valor_mo:,.2f} | MAT: R${valor_mat:,.2f}")
+        
+        db.session.commit()
+        
+        return jsonify({
+            'mensagem': f'Migração da obra "{obra.nome}" concluída',
+            'obra': obra.nome,
+            'servicos_migrados': servicos_migrados,
+            'servicos_ignorados': servicos_ignorados,
+            'detalhes': detalhes
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
+        return jsonify({'erro': str(e)}), 500
+
+
+# ==============================================================================
 # SINCRONIZAÇÃO: Cronograma → Orçamento (atualizar % executado)
 # ==============================================================================
 
