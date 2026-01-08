@@ -10226,6 +10226,10 @@ class CronogramaObra(db.Model):
     servico_nome = db.Column(db.String(200), nullable=False)
     ordem = db.Column(db.Integer, nullable=False, default=1)
     
+    # ===== VÍNCULO COM ORÇAMENTO =====
+    orcamento_etapa_id = db.Column(db.Integer, db.ForeignKey('orcamento_eng_etapa.id'), nullable=True)
+    orcamento_etapa = db.relationship('OrcamentoEngEtapa', backref='cronograma_servicos', lazy=True)
+    
     # ===== PLANEJAMENTO (o que você DEFINE) =====
     data_inicio = db.Column(db.Date, nullable=False)  # Data de início PREVISTA
     data_fim_prevista = db.Column(db.Date, nullable=False)  # Data de término PREVISTA
@@ -10323,6 +10327,10 @@ class CronogramaObra(db.Model):
             'obra_id': self.obra_id,
             'servico_nome': self.servico_nome,
             'ordem': self.ordem,
+            # VÍNCULO COM ORÇAMENTO
+            'orcamento_etapa_id': self.orcamento_etapa_id,
+            'orcamento_etapa_nome': self.orcamento_etapa.nome if self.orcamento_etapa else None,
+            'orcamento_etapa_codigo': self.orcamento_etapa.codigo if self.orcamento_etapa else None,
             # PLANEJAMENTO
             'data_inicio': self.data_inicio.isoformat() if self.data_inicio else None,
             'data_fim_prevista': self.data_fim_prevista.isoformat() if self.data_fim_prevista else None,
@@ -11998,6 +12006,7 @@ def importar_orcamento_para_cronograma(obra_id):
                 obra_id=obra_id,
                 servico_nome=etapa.nome,
                 ordem=max_ordem,
+                orcamento_etapa_id=etapa.id,  # VÍNCULO COM ORÇAMENTO
                 data_inicio=data_atual,
                 data_fim_prevista=data_fim,
                 tipo_medicao='etapas',  # Por padrão, usar medição por etapas
@@ -12049,6 +12058,202 @@ def importar_orcamento_para_cronograma(obra_id):
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
+
+
+# ==============================================================================
+# MIGRAÇÃO: Vínculo Cronograma ↔ Orçamento
+# ==============================================================================
+
+@app.route('/setup/migrate-cronograma-orcamento', methods=['GET'])
+def setup_migrate_cronograma_orcamento():
+    """
+    ROTA DE MIGRAÇÃO - Adiciona coluna orcamento_etapa_id ao cronograma_obra
+    Acesse: https://backend-production-78c9.up.railway.app/setup/migrate-cronograma-orcamento
+    """
+    try:
+        resultados = []
+        
+        # 1. Adicionar coluna orcamento_etapa_id
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE cronograma_obra 
+                ADD COLUMN IF NOT EXISTS orcamento_etapa_id INTEGER REFERENCES orcamento_eng_etapa(id) ON DELETE SET NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ Coluna orcamento_etapa_id adicionada")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ orcamento_etapa_id: {str(e)}")
+        
+        # 2. Criar índice
+        try:
+            db.session.execute(db.text("""
+                CREATE INDEX IF NOT EXISTS idx_cronograma_orcamento_etapa 
+                ON cronograma_obra(orcamento_etapa_id);
+            """))
+            db.session.commit()
+            resultados.append("✅ Índice criado")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ Índice: {str(e)}")
+        
+        # 3. Tentar vincular cronogramas existentes pelo nome
+        try:
+            cronogramas = CronogramaObra.query.filter(CronogramaObra.orcamento_etapa_id.is_(None)).all()
+            vinculados = 0
+            
+            for cron in cronogramas:
+                # Buscar etapa do orçamento com mesmo nome na mesma obra
+                etapa = OrcamentoEngEtapa.query.filter_by(
+                    obra_id=cron.obra_id,
+                    nome=cron.servico_nome
+                ).first()
+                
+                if etapa:
+                    cron.orcamento_etapa_id = etapa.id
+                    vinculados += 1
+            
+            db.session.commit()
+            resultados.append(f"✅ {vinculados} cronogramas vinculados automaticamente")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ Vinculação automática: {str(e)}")
+        
+        return jsonify({
+            'mensagem': 'Migração executada',
+            'resultados': resultados
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
+
+# ==============================================================================
+# SINCRONIZAÇÃO: Cronograma → Orçamento (atualizar % executado)
+# ==============================================================================
+
+@app.route('/cronograma/<int:cronograma_id>/sincronizar-orcamento', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
+def sincronizar_cronograma_orcamento(cronograma_id):
+    """
+    Sincroniza o percentual do cronograma para o orçamento vinculado.
+    Quando o usuário atualiza o % no cronograma, reflete no orçamento.
+    """
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        user = get_current_user()
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not cronograma:
+            return jsonify({'erro': 'Cronograma não encontrado'}), 404
+        
+        if not user_has_access_to_obra(user, cronograma.obra_id):
+            return jsonify({'erro': 'Sem permissão'}), 403
+        
+        if not cronograma.orcamento_etapa_id:
+            return jsonify({'erro': 'Este cronograma não está vinculado a uma etapa do orçamento'}), 400
+        
+        # Buscar etapa do orçamento
+        etapa_orcamento = OrcamentoEngEtapa.query.get(cronograma.orcamento_etapa_id)
+        if not etapa_orcamento:
+            return jsonify({'erro': 'Etapa do orçamento não encontrada'}), 404
+        
+        # Calcular percentual atual do cronograma
+        percentual = cronograma.percentual_conclusao
+        if cronograma.tipo_medicao == 'etapas':
+            percentual = cronograma.calcular_percentual_por_etapas()
+        elif cronograma.tipo_medicao == 'area' and cronograma.area_total:
+            percentual = (cronograma.area_executada or 0) / cronograma.area_total * 100
+        
+        # Atualizar valores pagos nos itens do orçamento proporcionalmente
+        itens = OrcamentoEngItem.query.filter_by(etapa_id=etapa_orcamento.id).all()
+        
+        for item in itens:
+            totais = item.calcular_totais()
+            # O valor "pago" no orçamento será proporcional ao % executado
+            item.valor_pago_mo = totais['total_mao_obra'] * (percentual / 100)
+            item.valor_pago_mat = totais['total_material'] * (percentual / 100)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'mensagem': f'Sincronizado! {percentual:.1f}% aplicado ao orçamento',
+            'percentual': percentual,
+            'etapa_nome': etapa_orcamento.nome,
+            'itens_atualizados': len(itens)
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] sincronizar_cronograma_orcamento: {e}")
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/cronograma/<int:cronograma_id>/vincular-orcamento', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
+def vincular_cronograma_orcamento(cronograma_id):
+    """
+    Vincula manualmente um cronograma a uma etapa do orçamento.
+    Body: { "orcamento_etapa_id": 123 }
+    """
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        user = get_current_user()
+        
+        cronograma = CronogramaObra.query.get(cronograma_id)
+        if not cronograma:
+            return jsonify({'erro': 'Cronograma não encontrado'}), 404
+        
+        if not user_has_access_to_obra(user, cronograma.obra_id):
+            return jsonify({'erro': 'Sem permissão'}), 403
+        
+        data = request.json
+        orcamento_etapa_id = data.get('orcamento_etapa_id')
+        
+        if orcamento_etapa_id:
+            # Verificar se a etapa existe e pertence à mesma obra
+            etapa = OrcamentoEngEtapa.query.get(orcamento_etapa_id)
+            if not etapa or etapa.obra_id != cronograma.obra_id:
+                return jsonify({'erro': 'Etapa do orçamento inválida'}), 400
+            
+            cronograma.orcamento_etapa_id = orcamento_etapa_id
+            db.session.commit()
+            
+            return jsonify({
+                'mensagem': f'Vinculado à etapa "{etapa.nome}"',
+                'orcamento_etapa_id': etapa.id,
+                'orcamento_etapa_nome': etapa.nome
+            })
+        else:
+            # Desvincular
+            cronograma.orcamento_etapa_id = None
+            db.session.commit()
+            
+            return jsonify({
+                'mensagem': 'Vínculo removido',
+                'orcamento_etapa_id': None
+            })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] vincular_cronograma_orcamento: {e}")
+        return jsonify({'erro': str(e)}), 500
 
 
 # ==============================================================================
