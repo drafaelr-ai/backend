@@ -8067,8 +8067,6 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         if boletos_obra:
             secao_numero += 1
             section_title = Paragraph(f"<b>{secao_numero}. Boletos</b>", styles['Heading2'])
-            elements.append(section_title)
-            elements.append(Spacer(1, 0.3*cm))
             
             # Separar boletos por status
             boletos_pendentes = [b for b in boletos_obra if b.status == 'Pendente' and b.data_vencimento >= hoje]
@@ -8135,7 +8133,13 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         style_boletos.append(('TEXTCOLOR', (4, i), (4, i), colors.HexColor('#d32f2f')))
                 
                 table_boletos.setStyle(TableStyle(style_boletos))
-                elements.append(table_boletos)
+                
+                # Usar KeepTogether para manter título e tabela na mesma página (se couber)
+                elements.append(KeepTogether([section_title, Spacer(1, 0.3*cm), table_boletos]))
+                elements.append(Spacer(1, 0.3*cm))
+            else:
+                # Se não tem tabela, só adiciona o título
+                elements.append(section_title)
                 elements.append(Spacer(1, 0.3*cm))
             
             # Resumo de boletos pagos
@@ -8150,9 +8154,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         
         # Seção: Resumo Financeiro
         secao_numero += 1
-        section_title = Paragraph(f"<b>{secao_numero}. Resumo Financeiro</b>", styles['Heading2'])
-        elements.append(section_title)
-        elements.append(Spacer(1, 0.3*cm))
+        section_title_resumo = Paragraph(f"<b>{secao_numero}. Resumo Financeiro</b>", styles['Heading2'])
         
         # Calcular totais
         total_futuros = sum(pag.valor for pag in pagamentos_previstos)
@@ -8226,7 +8228,9 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         ]
         
         table_resumo.setStyle(TableStyle(style_list))
-        elements.append(table_resumo)
+        
+        # Usar KeepTogether para manter título e tabela juntos
+        elements.append(KeepTogether([section_title_resumo, Spacer(1, 0.3*cm), table_resumo]))
         
         # Construir o PDF
         doc.build(elements)
