@@ -21,7 +21,7 @@ import csv
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet
 from sqlalchemy.orm import joinedload 
 from datetime import datetime, date, timedelta
@@ -7887,7 +7887,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 ])
             
             # Ajustar larguras das colunas (agora são 6 colunas)
-            table = Table(data_resumo, colWidths=[5*cm, 3*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2*cm])
+            table = Table(data_resumo, colWidths=[5*cm, 3*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2*cm], repeatRows=1)
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff6f00')),  # Laranja escuro
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -7931,7 +7931,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 ])
             
             # Ajustar larguras sem coluna Tipo e Status
-            table = Table(data_futuros, colWidths=[7.5*cm, 4*cm, 2.5*cm, 3*cm])
+            table = Table(data_futuros, colWidths=[7.5*cm, 4*cm, 2.5*cm, 3*cm], repeatRows=1)
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -8040,7 +8040,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         ])
                     
                     # Ajustar larguras: Parcela, Valor, Vencimento, Status, Tipo, PIX/Código, Pago em
-                    table_parcelas = Table(data_parcelas, colWidths=[1.5*cm, 2*cm, 2.2*cm, 1.8*cm, 1.8*cm, 3*cm, 2.2*cm])
+                    table_parcelas = Table(data_parcelas, colWidths=[1.5*cm, 2*cm, 2.2*cm, 1.8*cm, 1.8*cm, 3*cm, 2.2*cm], repeatRows=1)
                     
                     style_list = [
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5cb85c')),
@@ -8116,7 +8116,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     ])
                     row_colors_boletos.append(cor)
                 
-                table_boletos = Table(data_boletos, colWidths=[4*cm, 3*cm, 2.2*cm, 2.2*cm, 1.5*cm, 3*cm])
+                table_boletos = Table(data_boletos, colWidths=[4*cm, 3*cm, 2.2*cm, 2.2*cm, 1.5*cm, 3*cm], repeatRows=1)
                 
                 style_boletos = [
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#607d8b')),
@@ -8202,7 +8202,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             ['TOTAL GERAL (A Pagar)', formatar_real(total_geral)]
         ]
         
-        table_resumo = Table(resumo_data, colWidths=[12*cm, 5*cm])
+        table_resumo = Table(resumo_data, colWidths=[12*cm, 5*cm], repeatRows=1)
         
         style_list = [
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff9800')),
