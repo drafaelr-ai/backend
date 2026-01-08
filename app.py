@@ -11847,6 +11847,197 @@ def reordenar_etapas_cronograma(cronograma_id):
 
 
 # ==============================================================================
+# IMPORTAR ETAPAS DO ORÇAMENTO PARA O CRONOGRAMA
+# ==============================================================================
+
+@app.route('/obras/<int:obra_id>/cronograma/importar-orcamento', methods=['GET'])
+@jwt_required()
+def listar_etapas_orcamento_para_cronograma(obra_id):
+    """
+    Lista as etapas do orçamento de engenharia disponíveis para importar no cronograma.
+    Retorna apenas etapas que ainda não foram importadas.
+    """
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
+        
+        # Buscar etapas do orçamento de engenharia
+        etapas_orcamento = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).order_by(OrcamentoEngEtapa.ordem, OrcamentoEngEtapa.codigo).all()
+        
+        # Buscar serviços já existentes no cronograma
+        cronograma_existente = CronogramaObra.query.filter_by(obra_id=obra_id).all()
+        nomes_cronograma = [c.servico_nome.lower().strip() for c in cronograma_existente]
+        
+        # Filtrar etapas não importadas
+        etapas_disponiveis = []
+        for etapa in etapas_orcamento:
+            # Calcular totais da etapa
+            total_mo = 0
+            total_mat = 0
+            total_pago = 0
+            
+            for item in etapa.itens:
+                totais = item.calcular_totais()
+                total_mo += totais['total_mao_obra']
+                total_mat += totais['total_material']
+                total_pago += (item.valor_pago_mo or 0) + (item.valor_pago_mat or 0)
+            
+            etapa_total = total_mo + total_mat
+            
+            # Verificar se já existe no cronograma
+            ja_importado = etapa.nome.lower().strip() in nomes_cronograma
+            
+            etapas_disponiveis.append({
+                'id': etapa.id,
+                'codigo': etapa.codigo,
+                'nome': etapa.nome,
+                'total_mao_obra': total_mo,
+                'total_material': total_mat,
+                'total': etapa_total,
+                'total_pago': total_pago,
+                'percentual_pago': round((total_pago / etapa_total * 100) if etapa_total > 0 else 0, 1),
+                'qtd_itens': len(etapa.itens),
+                'ja_importado': ja_importado
+            })
+        
+        return jsonify({
+            'etapas': etapas_disponiveis,
+            'total_disponiveis': len([e for e in etapas_disponiveis if not e['ja_importado']]),
+            'total_importadas': len([e for e in etapas_disponiveis if e['ja_importado']])
+        })
+        
+    except Exception as e:
+        print(f"[ERRO] listar_etapas_orcamento_para_cronograma: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/cronograma/importar-orcamento', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
+def importar_orcamento_para_cronograma(obra_id):
+    """
+    Importa etapas selecionadas do orçamento de engenharia para o cronograma.
+    
+    Espera no body:
+    {
+        "etapa_ids": [1, 2, 3],  // IDs das etapas do orçamento
+        "data_inicio": "2026-01-15",  // Data de início para a primeira etapa
+        "duracao_padrao": 30  // Duração padrão em dias para cada serviço
+    }
+    """
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+    
+    try:
+        verify_jwt_in_request()
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
+        
+        data = request.json
+        etapa_ids = data.get('etapa_ids', [])
+        data_inicio_str = data.get('data_inicio')
+        duracao_padrao = data.get('duracao_padrao', 30)
+        
+        if not etapa_ids:
+            return jsonify({"erro": "Nenhuma etapa selecionada"}), 400
+        
+        # Converter data de início
+        if data_inicio_str:
+            data_inicio = datetime.strptime(data_inicio_str, '%Y-%m-%d').date()
+        else:
+            data_inicio = date.today()
+        
+        # Buscar ordem atual máxima do cronograma
+        max_ordem = db.session.query(db.func.max(CronogramaObra.ordem)).filter_by(obra_id=obra_id).scalar() or 0
+        
+        # Buscar nomes já existentes no cronograma
+        cronograma_existente = CronogramaObra.query.filter_by(obra_id=obra_id).all()
+        nomes_cronograma = [c.servico_nome.lower().strip() for c in cronograma_existente]
+        
+        servicos_criados = []
+        data_atual = data_inicio
+        
+        for etapa_id in etapa_ids:
+            etapa = OrcamentoEngEtapa.query.get(etapa_id)
+            if not etapa or etapa.obra_id != obra_id:
+                continue
+            
+            # Pular se já existe no cronograma
+            if etapa.nome.lower().strip() in nomes_cronograma:
+                continue
+            
+            max_ordem += 1
+            
+            # Calcular data fim
+            data_fim = data_atual + timedelta(days=duracao_padrao - 1)
+            
+            # Criar serviço no cronograma
+            novo_servico = CronogramaObra(
+                obra_id=obra_id,
+                servico_nome=etapa.nome,
+                ordem=max_ordem,
+                data_inicio=data_atual,
+                data_fim_prevista=data_fim,
+                tipo_medicao='etapas',  # Por padrão, usar medição por etapas
+                percentual_conclusao=0,
+                observacoes=f"Importado do Orçamento de Engenharia - {etapa.codigo}"
+            )
+            
+            db.session.add(novo_servico)
+            db.session.flush()  # Para obter o ID
+            
+            # Criar etapa pai no cronograma correspondente
+            etapa_cronograma = CronogramaEtapa(
+                cronograma_id=novo_servico.id,
+                nome=etapa.nome,
+                ordem=1,
+                duracao_dias=duracao_padrao,
+                data_inicio=data_atual,
+                data_fim=data_fim,
+                percentual_conclusao=0,
+                observacoes=f"Código: {etapa.codigo}"
+            )
+            db.session.add(etapa_cronograma)
+            
+            servicos_criados.append({
+                'id': novo_servico.id,
+                'nome': etapa.nome,
+                'codigo_origem': etapa.codigo,
+                'data_inicio': data_atual.isoformat(),
+                'data_fim': data_fim.isoformat()
+            })
+            
+            # Avançar data para o próximo serviço
+            data_atual = data_fim + timedelta(days=1)
+            
+            # Adicionar aos nomes existentes para evitar duplicação dentro do mesmo lote
+            nomes_cronograma.append(etapa.nome.lower().strip())
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': f'{len(servicos_criados)} serviço(s) importado(s) com sucesso',
+            'servicos_criados': servicos_criados,
+            'total_importados': len(servicos_criados)
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] importar_orcamento_para_cronograma: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+# ==============================================================================
 # MIGRATION: Estrutura Hierárquica de Etapas (Etapa Pai / Subetapas)
 # ==============================================================================
 
