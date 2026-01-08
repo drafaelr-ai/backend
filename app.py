@@ -7948,13 +7948,27 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             elements.append(Spacer(1, 0.5*cm))
         
         # Seção: Pagamentos Parcelados
-        if pagamentos_parcelados:
+        # FILTRAR: Mostrar apenas pagamentos parcelados com parcelas pendentes (não totalmente pagos)
+        pagamentos_parcelados_pendentes = []
+        for pag_parcelado in pagamentos_parcelados:
+            # Verificar se há pelo menos uma parcela não paga
+            parcelas = ParcelaIndividual.query.filter_by(
+                pagamento_parcelado_id=pag_parcelado.id
+            ).all()
+            
+            # Verificar se existe alguma parcela com status diferente de 'Pago'
+            tem_parcela_pendente = any(p.status != 'Pago' for p in parcelas)
+            
+            if tem_parcela_pendente:
+                pagamentos_parcelados_pendentes.append(pag_parcelado)
+        
+        if pagamentos_parcelados_pendentes:
             secao_numero += 1
             section_title = Paragraph(f"<b>{secao_numero}. Pagamentos Parcelados</b>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
-            for pag_parcelado in pagamentos_parcelados:
+            for pag_parcelado in pagamentos_parcelados_pendentes:
                 # Buscar parcelas deste pagamento para calcular o total
                 parcelas = ParcelaIndividual.query.filter_by(
                     pagamento_parcelado_id=pag_parcelado.id
