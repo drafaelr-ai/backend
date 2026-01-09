@@ -10295,6 +10295,31 @@ class CronogramaObra(db.Model):
         except Exception as e:
             print(f"[AVISO] Erro ao atualizar datas por etapas: {str(e)}")
 
+    def _get_orcamento_etapa_id(self):
+        """Retorna orcamento_etapa_id de forma segura (coluna pode não existir)"""
+        try:
+            return self.orcamento_etapa_id
+        except:
+            return None
+    
+    def _get_orcamento_etapa_nome(self):
+        """Retorna nome da etapa do orçamento de forma segura"""
+        try:
+            if self.orcamento_etapa_id and self.orcamento_etapa:
+                return self.orcamento_etapa.nome
+        except:
+            pass
+        return None
+    
+    def _get_orcamento_etapa_codigo(self):
+        """Retorna código da etapa do orçamento de forma segura"""
+        try:
+            if self.orcamento_etapa_id and self.orcamento_etapa:
+                return self.orcamento_etapa.codigo
+        except:
+            pass
+        return None
+
     def to_dict(self):
         # Se tipo_medicao for 'etapas', calcular percentual automaticamente
         percentual = self.percentual_conclusao
@@ -10331,10 +10356,10 @@ class CronogramaObra(db.Model):
             'obra_id': self.obra_id,
             'servico_nome': self.servico_nome,
             'ordem': self.ordem,
-            # VÍNCULO COM ORÇAMENTO
-            'orcamento_etapa_id': self.orcamento_etapa_id,
-            'orcamento_etapa_nome': self.orcamento_etapa.nome if self.orcamento_etapa else None,
-            'orcamento_etapa_codigo': self.orcamento_etapa.codigo if self.orcamento_etapa else None,
+            # VÍNCULO COM ORÇAMENTO (com tratamento para coluna não existir)
+            'orcamento_etapa_id': self._get_orcamento_etapa_id(),
+            'orcamento_etapa_nome': self._get_orcamento_etapa_nome(),
+            'orcamento_etapa_codigo': self._get_orcamento_etapa_codigo(),
             # PLANEJAMENTO
             'data_inicio': self.data_inicio.isoformat() if self.data_inicio else None,
             'data_fim_prevista': self.data_fim_prevista.isoformat() if self.data_fim_prevista else None,
