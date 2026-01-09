@@ -17672,8 +17672,8 @@ def importar_orcamento_gerado(obra_id):
 # ==============================================================================
 # ROTA DE TESTES - VALIDAÇÃO COMPLETA DE PAGAMENTOS E ORÇAMENTO
 # ==============================================================================
-@app.route('/api/testes/validar-sistema/<int:obra_id>', methods=['GET'])
-@jwt_required()
+@app.route('/api/testes/validar-sistema/<int:obra_id>', methods=['GET', 'OPTIONS'])
+@jwt_required(optional=True)
 def validar_sistema_completo(obra_id):
     """
     ROTA DE TESTES COMPLETA
@@ -17683,6 +17683,9 @@ def validar_sistema_completo(obra_id):
     - Contabilização de valores (Executado vs Previsto)
     - Integridade dos dados
     """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         resultados = {
             "obra_id": obra_id,
@@ -18009,8 +18012,8 @@ def validar_sistema_completo(obra_id):
         }), 500
 
 
-@app.route('/api/testes/simular-pagamento/<int:obra_id>', methods=['POST'])
-@jwt_required()
+@app.route('/api/testes/simular-pagamento/<int:obra_id>', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def simular_pagamento_teste(obra_id):
     """
     ROTA DE TESTE - Simula criação de pagamento vinculado a item do orçamento
@@ -18023,6 +18026,9 @@ def simular_pagamento_teste(obra_id):
         "descricao": "Teste de pagamento"
     }
     """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         data = request.get_json()
         
@@ -18132,13 +18138,16 @@ def simular_pagamento_teste(obra_id):
         }), 500
 
 
-@app.route('/api/testes/popular-orcamento/<int:obra_id>', methods=['POST'])
-@jwt_required()
+@app.route('/api/testes/popular-orcamento/<int:obra_id>', methods=['POST', 'OPTIONS'])
+@jwt_required(optional=True)
 def popular_orcamento_teste(obra_id):
     """
     ROTA DE TESTE - Popula o orçamento de engenharia com dados de exemplo
     Cria etapas e itens para facilitar os testes
     """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         # Verificar se obra existe
         obra = Obra.query.get(obra_id)
@@ -18311,13 +18320,16 @@ def popular_orcamento_teste(obra_id):
         }), 500
 
 
-@app.route('/api/testes/limpar-orcamento/<int:obra_id>', methods=['DELETE'])
-@jwt_required()
+@app.route('/api/testes/limpar-orcamento/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required(optional=True)
 def limpar_orcamento_teste(obra_id):
     """
     ROTA DE TESTE - Remove todo o orçamento de engenharia da obra
     CUIDADO: Isso remove TODOS os itens e etapas!
     """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         # Buscar etapas da obra
         etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).all()
@@ -18351,12 +18363,15 @@ def limpar_orcamento_teste(obra_id):
         }), 500
 
 
-@app.route('/api/testes/limpar-testes/<int:obra_id>', methods=['DELETE'])
-@jwt_required()
+@app.route('/api/testes/limpar-testes/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
+@jwt_required(optional=True)
 def limpar_dados_teste(obra_id):
     """
     ROTA DE TESTE - Remove todos os registros de teste (marcados com [TESTE])
     """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         resultados = {
             "obra_id": obra_id,
