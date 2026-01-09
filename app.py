@@ -711,6 +711,21 @@ class Boleto(db.Model):
             except:
                 pass
         
+        # Buscar orcamento_item_id de forma segura (coluna pode não existir)
+        orcamento_item_id = None
+        orcamento_item_nome = None
+        try:
+            result = db.session.execute(db.text(
+                f"SELECT orcamento_item_id FROM boleto WHERE id = {self.id}"
+            )).fetchone()
+            if result and result[0]:
+                orcamento_item_id = result[0]
+                item = OrcamentoEngItem.query.get(orcamento_item_id)
+                if item:
+                    orcamento_item_nome = f"{item.codigo} - {item.descricao}"
+        except:
+            pass
+        
         return {
             "id": self.id,
             "obra_id": self.obra_id,
@@ -725,6 +740,8 @@ class Boleto(db.Model):
             "data_pagamento": self.data_pagamento.isoformat() if self.data_pagamento else None,
             "vinculado_servico_id": self.vinculado_servico_id,
             "servico_nome": servico_nome,
+            "orcamento_item_id": orcamento_item_id,
+            "orcamento_item_nome": orcamento_item_nome,
             "arquivo_nome": self.arquivo_nome,
             "tem_pdf": bool(self.arquivo_pdf),
             "dias_para_vencer": dias_para_vencer,
@@ -1068,6 +1085,21 @@ class Lancamento(db.Model):
         except:
             pass
         
+        # Buscar orcamento_item_id de forma segura (coluna pode não existir)
+        orcamento_item_id = None
+        orcamento_item_nome = None
+        try:
+            result = db.session.execute(db.text(
+                f"SELECT orcamento_item_id FROM lancamento WHERE id = {self.id}"
+            )).fetchone()
+            if result and result[0]:
+                orcamento_item_id = result[0]
+                item = OrcamentoEngItem.query.get(orcamento_item_id)
+                if item:
+                    orcamento_item_nome = f"{item.codigo} - {item.descricao}"
+        except:
+            pass
+        
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,
             "descricao": self.descricao, 
@@ -1080,6 +1112,8 @@ class Lancamento(db.Model):
             "fornecedor": self.fornecedor, 
             "servico_id": self.servico_id, 
             "servico_nome": self.servico.nome if self.servico else None,
+            "orcamento_item_id": orcamento_item_id,
+            "orcamento_item_nome": orcamento_item_nome,
             "segmento": segmento_value,
             "lancamento_id": self.id 
         }
@@ -1241,6 +1275,21 @@ class PagamentoFuturo(db.Model):
     tipo = db.Column(db.String(50), nullable=True)  # 'Mão de Obra', 'Material', ou 'Despesa'
     
     def to_dict(self):
+        # Buscar orcamento_item_id de forma segura (coluna pode não existir)
+        orcamento_item_id = None
+        orcamento_item_nome = None
+        try:
+            result = db.session.execute(db.text(
+                f"SELECT orcamento_item_id FROM pagamento_futuro WHERE id = {self.id}"
+            )).fetchone()
+            if result and result[0]:
+                orcamento_item_id = result[0]
+                item = OrcamentoEngItem.query.get(orcamento_item_id)
+                if item:
+                    orcamento_item_nome = f"{item.codigo} - {item.descricao}"
+        except:
+            pass
+        
         return {
             "id": self.id,
             "obra_id": self.obra_id,
@@ -1252,7 +1301,9 @@ class PagamentoFuturo(db.Model):
             "pix": self.pix,
             "observacoes": self.observacoes,
             "servico_id": self.servico_id,
-            "tipo": self.tipo
+            "tipo": self.tipo,
+            "orcamento_item_id": orcamento_item_id,
+            "orcamento_item_nome": orcamento_item_nome
         }
 
 class PagamentoParcelado(db.Model):
@@ -1344,6 +1395,21 @@ class PagamentoParcelado(db.Model):
                 print(f"[AVISO] Erro ao buscar serviço {self.servico_id}: {e}")
                 servico_nome = None
         
+        # Buscar orcamento_item_id de forma segura (coluna pode não existir)
+        orcamento_item_id = None
+        orcamento_item_nome = None
+        try:
+            result = db.session.execute(db.text(
+                f"SELECT orcamento_item_id FROM pagamento_parcelado_v2 WHERE id = {self.id}"
+            )).fetchone()
+            if result and result[0]:
+                orcamento_item_id = result[0]
+                item = OrcamentoEngItem.query.get(orcamento_item_id)
+                if item:
+                    orcamento_item_nome = f"{item.codigo} - {item.descricao}"
+        except:
+            pass
+        
         # Tratar segmento de forma defensiva
         try:
             segmento_value = self.segmento if hasattr(self, 'segmento') and self.segmento else 'Material'
@@ -1388,7 +1454,9 @@ class PagamentoParcelado(db.Model):
             "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero is not None else None,
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
             "servico_id": self.servico_id,
-            "servico_nome": servico_nome
+            "servico_nome": servico_nome,
+            "orcamento_item_id": orcamento_item_id,
+            "orcamento_item_nome": orcamento_item_nome
         }
     
 # ----------------------------------------------------
@@ -12380,6 +12448,143 @@ def setup_migrate_servicos_para_orcamento_obra(obra_id):
 
 
 # ==============================================================================
+# MIGRAÇÃO: Adicionar orcamento_item_id aos pagamentos
+# ==============================================================================
+
+@app.route('/setup/migrate-pagamentos-orcamento', methods=['GET'])
+def setup_migrate_pagamentos_orcamento():
+    """
+    ROTA DE MIGRAÇÃO - Adiciona coluna orcamento_item_id às tabelas de pagamento
+    
+    Tabelas afetadas:
+    - pagamento_futuro
+    - pagamento_parcelado_v2
+    - boleto
+    - lancamento
+    
+    Acesse: https://backend-production-78c9.up.railway.app/setup/migrate-pagamentos-orcamento
+    """
+    try:
+        resultados = []
+        
+        # 1. pagamento_futuro
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE pagamento_futuro 
+                ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER REFERENCES orcamento_eng_item(id) ON DELETE SET NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ pagamento_futuro.orcamento_item_id adicionada")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ pagamento_futuro: {str(e)}")
+        
+        # 2. pagamento_parcelado_v2
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE pagamento_parcelado_v2 
+                ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER REFERENCES orcamento_eng_item(id) ON DELETE SET NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ pagamento_parcelado_v2.orcamento_item_id adicionada")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ pagamento_parcelado_v2: {str(e)}")
+        
+        # 3. boleto
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE boleto 
+                ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER REFERENCES orcamento_eng_item(id) ON DELETE SET NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ boleto.orcamento_item_id adicionada")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ boleto: {str(e)}")
+        
+        # 4. lancamento
+        try:
+            db.session.execute(db.text("""
+                ALTER TABLE lancamento 
+                ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER REFERENCES orcamento_eng_item(id) ON DELETE SET NULL;
+            """))
+            db.session.commit()
+            resultados.append("✅ lancamento.orcamento_item_id adicionada")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ lancamento: {str(e)}")
+        
+        # 5. Criar índices
+        try:
+            db.session.execute(db.text("""
+                CREATE INDEX IF NOT EXISTS idx_pagamento_futuro_orc_item ON pagamento_futuro(orcamento_item_id);
+                CREATE INDEX IF NOT EXISTS idx_pagamento_parcelado_orc_item ON pagamento_parcelado_v2(orcamento_item_id);
+                CREATE INDEX IF NOT EXISTS idx_boleto_orc_item ON boleto(orcamento_item_id);
+                CREATE INDEX IF NOT EXISTS idx_lancamento_orc_item ON lancamento(orcamento_item_id);
+            """))
+            db.session.commit()
+            resultados.append("✅ Índices criados")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ Índices: {str(e)}")
+        
+        # 6. Tentar migrar vínculos existentes (servico_id -> orcamento_item_id)
+        # Busca itens do orçamento que têm servico_id e tenta vincular pagamentos
+        migrados = 0
+        try:
+            # Buscar todos os itens do orçamento que têm servico_id
+            itens_vinculados = db.session.execute(db.text("""
+                SELECT id, servico_id FROM orcamento_eng_item WHERE servico_id IS NOT NULL
+            """)).fetchall()
+            
+            for item_id, servico_id in itens_vinculados:
+                # Atualizar pagamento_futuro
+                db.session.execute(db.text(f"""
+                    UPDATE pagamento_futuro 
+                    SET orcamento_item_id = {item_id} 
+                    WHERE servico_id = {servico_id} AND orcamento_item_id IS NULL
+                """))
+                
+                # Atualizar pagamento_parcelado_v2
+                db.session.execute(db.text(f"""
+                    UPDATE pagamento_parcelado_v2 
+                    SET orcamento_item_id = {item_id} 
+                    WHERE servico_id = {servico_id} AND orcamento_item_id IS NULL
+                """))
+                
+                # Atualizar boleto
+                db.session.execute(db.text(f"""
+                    UPDATE boleto 
+                    SET orcamento_item_id = {item_id} 
+                    WHERE vinculado_servico_id = {servico_id} AND orcamento_item_id IS NULL
+                """))
+                
+                # Atualizar lancamento
+                db.session.execute(db.text(f"""
+                    UPDATE lancamento 
+                    SET orcamento_item_id = {item_id} 
+                    WHERE servico_id = {servico_id} AND orcamento_item_id IS NULL
+                """))
+                
+                migrados += 1
+            
+            db.session.commit()
+            resultados.append(f"✅ {migrados} vínculos migrados (servico_id → orcamento_item_id)")
+        except Exception as e:
+            db.session.rollback()
+            resultados.append(f"⚠️ Migração de vínculos: {str(e)}")
+        
+        return jsonify({
+            'mensagem': 'Migração de pagamentos concluída',
+            'resultados': resultados
+        })
+        
+    except Exception as e:
+        return jsonify({'erro': str(e)}), 500
+
+
+# ==============================================================================
 # SINCRONIZAÇÃO: Cronograma → Orçamento (atualizar % executado)
 # ==============================================================================
 
@@ -15779,6 +15984,52 @@ def autocomplete_servicos():
         print(f"[AUTOCOMPLETE] Erro: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/obras/<int:obra_id>/orcamento-eng/itens-lista', methods=['GET'])
+@jwt_required()
+def listar_itens_orcamento_simplificado(obra_id):
+    """
+    Retorna lista simplificada de itens do orçamento para uso em dropdowns.
+    Formato: [{ id, codigo, descricao, etapa_nome, total }]
+    """
+    try:
+        user = get_current_user()
+        obra = Obra.query.get_or_404(obra_id)
+        
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão"}), 403
+        
+        # Buscar todos os itens com suas etapas
+        itens = db.session.query(
+            OrcamentoEngItem.id,
+            OrcamentoEngItem.codigo,
+            OrcamentoEngItem.descricao,
+            OrcamentoEngEtapa.nome.label('etapa_nome'),
+            OrcamentoEngEtapa.codigo.label('etapa_codigo')
+        ).join(
+            OrcamentoEngEtapa, OrcamentoEngItem.etapa_id == OrcamentoEngEtapa.id
+        ).filter(
+            OrcamentoEngEtapa.obra_id == obra_id
+        ).order_by(
+            OrcamentoEngEtapa.ordem, OrcamentoEngItem.ordem
+        ).all()
+        
+        resultado = []
+        for item in itens:
+            resultado.append({
+                'id': item.id,
+                'codigo': item.codigo,
+                'descricao': item.descricao,
+                'etapa_nome': item.etapa_nome,
+                'etapa_codigo': item.etapa_codigo,
+                'nome_completo': f"{item.codigo} - {item.descricao}"
+            })
+        
+        return jsonify(resultado)
+        
+    except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
 
