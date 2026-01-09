@@ -18132,6 +18132,225 @@ def simular_pagamento_teste(obra_id):
         }), 500
 
 
+@app.route('/api/testes/popular-orcamento/<int:obra_id>', methods=['POST'])
+@jwt_required()
+def popular_orcamento_teste(obra_id):
+    """
+    ROTA DE TESTE - Popula o orçamento de engenharia com dados de exemplo
+    Cria etapas e itens para facilitar os testes
+    """
+    try:
+        # Verificar se obra existe
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+        
+        resultados = {
+            "obra_id": obra_id,
+            "obra_nome": obra.nome,
+            "etapas_criadas": [],
+            "itens_criados": []
+        }
+        
+        # Dados de exemplo para orçamento de construção
+        dados_orcamento = [
+            {
+                "etapa": "1. SERVIÇOS PRELIMINARES",
+                "itens": [
+                    {"descricao": "Limpeza do terreno", "unidade": "m²", "quantidade": 500, "valor_unitario": 8.50},
+                    {"descricao": "Instalação do canteiro de obras", "unidade": "vb", "quantidade": 1, "valor_unitario": 5000},
+                    {"descricao": "Tapume e cercamento", "unidade": "m", "quantidade": 120, "valor_unitario": 85},
+                ]
+            },
+            {
+                "etapa": "2. FUNDAÇÃO",
+                "itens": [
+                    {"descricao": "Escavação para fundação", "unidade": "m³", "quantidade": 45, "valor_unitario": 65},
+                    {"descricao": "Concreto armado para sapatas", "unidade": "m³", "quantidade": 28, "valor_unitario": 850},
+                    {"descricao": "Ferragem para fundação", "unidade": "kg", "quantidade": 1200, "valor_unitario": 12},
+                    {"descricao": "Impermeabilização da fundação", "unidade": "m²", "quantidade": 180, "valor_unitario": 45},
+                ]
+            },
+            {
+                "etapa": "3. ESTRUTURA",
+                "itens": [
+                    {"descricao": "Pilares de concreto armado", "unidade": "m³", "quantidade": 15, "valor_unitario": 1200},
+                    {"descricao": "Vigas de concreto armado", "unidade": "m³", "quantidade": 22, "valor_unitario": 1100},
+                    {"descricao": "Laje pré-moldada", "unidade": "m²", "quantidade": 280, "valor_unitario": 95},
+                    {"descricao": "Escada de concreto", "unidade": "vb", "quantidade": 1, "valor_unitario": 8500},
+                ]
+            },
+            {
+                "etapa": "4. ALVENARIA",
+                "itens": [
+                    {"descricao": "Alvenaria de vedação (tijolo cerâmico)", "unidade": "m²", "quantidade": 450, "valor_unitario": 75},
+                    {"descricao": "Vergas e contravergas", "unidade": "m", "quantidade": 85, "valor_unitario": 45},
+                    {"descricao": "Encunhamento", "unidade": "m", "quantidade": 120, "valor_unitario": 18},
+                ]
+            },
+            {
+                "etapa": "5. INSTALAÇÕES ELÉTRICAS",
+                "itens": [
+                    {"descricao": "Quadro de distribuição", "unidade": "un", "quantidade": 2, "valor_unitario": 1800},
+                    {"descricao": "Fiação elétrica", "unidade": "m", "quantidade": 800, "valor_unitario": 12},
+                    {"descricao": "Tomadas e interruptores", "unidade": "un", "quantidade": 65, "valor_unitario": 45},
+                    {"descricao": "Luminárias", "unidade": "un", "quantidade": 32, "valor_unitario": 180},
+                ]
+            },
+            {
+                "etapa": "6. INSTALAÇÕES HIDRÁULICAS",
+                "itens": [
+                    {"descricao": "Tubulação água fria (PVC)", "unidade": "m", "quantidade": 150, "valor_unitario": 28},
+                    {"descricao": "Tubulação esgoto (PVC)", "unidade": "m", "quantidade": 80, "valor_unitario": 35},
+                    {"descricao": "Caixa d'água 1000L", "unidade": "un", "quantidade": 2, "valor_unitario": 850},
+                    {"descricao": "Louças sanitárias", "unidade": "un", "quantidade": 4, "valor_unitario": 650},
+                    {"descricao": "Metais (torneiras e registros)", "unidade": "vb", "quantidade": 1, "valor_unitario": 3500},
+                ]
+            },
+            {
+                "etapa": "7. REVESTIMENTOS",
+                "itens": [
+                    {"descricao": "Chapisco", "unidade": "m²", "quantidade": 900, "valor_unitario": 12},
+                    {"descricao": "Reboco interno", "unidade": "m²", "quantidade": 750, "valor_unitario": 38},
+                    {"descricao": "Reboco externo", "unidade": "m²", "quantidade": 320, "valor_unitario": 45},
+                    {"descricao": "Contrapiso", "unidade": "m²", "quantidade": 280, "valor_unitario": 42},
+                    {"descricao": "Cerâmica piso", "unidade": "m²", "quantidade": 260, "valor_unitario": 95},
+                    {"descricao": "Cerâmica parede (áreas molhadas)", "unidade": "m²", "quantidade": 85, "valor_unitario": 85},
+                ]
+            },
+            {
+                "etapa": "8. ESQUADRIAS",
+                "itens": [
+                    {"descricao": "Portas de madeira internas", "unidade": "un", "quantidade": 8, "valor_unitario": 750},
+                    {"descricao": "Porta de entrada (madeira maciça)", "unidade": "un", "quantidade": 1, "valor_unitario": 2800},
+                    {"descricao": "Janelas de alumínio", "unidade": "m²", "quantidade": 18, "valor_unitario": 650},
+                    {"descricao": "Box de vidro temperado", "unidade": "un", "quantidade": 2, "valor_unitario": 1200},
+                ]
+            },
+            {
+                "etapa": "9. PINTURA",
+                "itens": [
+                    {"descricao": "Massa corrida (interno)", "unidade": "m²", "quantidade": 650, "valor_unitario": 18},
+                    {"descricao": "Pintura interna (2 demãos)", "unidade": "m²", "quantidade": 750, "valor_unitario": 22},
+                    {"descricao": "Pintura externa (textura)", "unidade": "m²", "quantidade": 320, "valor_unitario": 35},
+                ]
+            },
+            {
+                "etapa": "10. COBERTURA",
+                "itens": [
+                    {"descricao": "Estrutura de madeira para telhado", "unidade": "m²", "quantidade": 180, "valor_unitario": 120},
+                    {"descricao": "Telhas cerâmicas", "unidade": "m²", "quantidade": 200, "valor_unitario": 85},
+                    {"descricao": "Calhas e rufos", "unidade": "m", "quantidade": 45, "valor_unitario": 95},
+                    {"descricao": "Forro de gesso", "unidade": "m²", "quantidade": 260, "valor_unitario": 65},
+                ]
+            }
+        ]
+        
+        ordem_etapa = 1
+        for grupo in dados_orcamento:
+            # Criar etapa
+            etapa = OrcamentoEngEtapa(
+                obra_id=obra_id,
+                nome=grupo["etapa"],
+                ordem=ordem_etapa
+            )
+            db.session.add(etapa)
+            db.session.flush()
+            
+            resultados["etapas_criadas"].append({
+                "id": etapa.id,
+                "nome": etapa.nome
+            })
+            
+            # Criar itens da etapa
+            for item_data in grupo["itens"]:
+                valor_total = item_data["quantidade"] * item_data["valor_unitario"]
+                
+                item = OrcamentoEngItem(
+                    etapa_id=etapa.id,
+                    descricao=item_data["descricao"],
+                    unidade=item_data["unidade"],
+                    quantidade=item_data["quantidade"],
+                    valor_unitario=item_data["valor_unitario"],
+                    valor_total=valor_total,
+                    bdi=0
+                )
+                db.session.add(item)
+                db.session.flush()
+                
+                resultados["itens_criados"].append({
+                    "id": item.id,
+                    "descricao": item.descricao,
+                    "valor_total": valor_total
+                })
+            
+            ordem_etapa += 1
+        
+        db.session.commit()
+        
+        # Calcular totais
+        total_orcamento = sum(i["valor_total"] for i in resultados["itens_criados"])
+        
+        resultados["resumo"] = {
+            "total_etapas": len(resultados["etapas_criadas"]),
+            "total_itens": len(resultados["itens_criados"]),
+            "valor_total_orcamento": total_orcamento,
+            "valor_formatado": f"R$ {total_orcamento:,.2f}"
+        }
+        
+        resultados["mensagem"] = f"✅ Orçamento populado com sucesso! {len(resultados['etapas_criadas'])} etapas e {len(resultados['itens_criados'])} itens criados."
+        
+        return jsonify(resultados), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        return jsonify({
+            "erro": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/testes/limpar-orcamento/<int:obra_id>', methods=['DELETE'])
+@jwt_required()
+def limpar_orcamento_teste(obra_id):
+    """
+    ROTA DE TESTE - Remove todo o orçamento de engenharia da obra
+    CUIDADO: Isso remove TODOS os itens e etapas!
+    """
+    try:
+        # Buscar etapas da obra
+        etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).all()
+        etapa_ids = [e.id for e in etapas]
+        
+        # Remover itens
+        itens_removidos = 0
+        if etapa_ids:
+            itens_removidos = OrcamentoEngItem.query.filter(
+                OrcamentoEngItem.etapa_id.in_(etapa_ids)
+            ).delete(synchronize_session=False)
+        
+        # Remover etapas
+        etapas_removidas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).delete()
+        
+        db.session.commit()
+        
+        return jsonify({
+            "obra_id": obra_id,
+            "etapas_removidas": etapas_removidas,
+            "itens_removidos": itens_removidos,
+            "mensagem": f"✅ Orçamento limpo! {etapas_removidas} etapas e {itens_removidos} itens removidos."
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        return jsonify({
+            "erro": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 @app.route('/api/testes/limpar-testes/<int:obra_id>', methods=['DELETE'])
 @jwt_required()
 def limpar_dados_teste(obra_id):
