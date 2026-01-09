@@ -10230,9 +10230,9 @@ class CronogramaObra(db.Model):
     servico_nome = db.Column(db.String(200), nullable=False)
     ordem = db.Column(db.Integer, nullable=False, default=1)
     
-    # ===== VÍNCULO COM ORÇAMENTO =====
-    orcamento_etapa_id = db.Column(db.Integer, db.ForeignKey('orcamento_eng_etapa.id'), nullable=True)
-    orcamento_etapa = db.relationship('OrcamentoEngEtapa', backref='cronograma_servicos', lazy=True)
+    # ===== VÍNCULO COM ORÇAMENTO (coluna adicionada via migração) =====
+    # NOTA: Esta coluna é criada pela rota /setup/migrate-cronograma-orcamento
+    # Se a coluna não existir, o modelo ainda funciona
     
     # ===== PLANEJAMENTO (o que você DEFINE) =====
     data_inicio = db.Column(db.Date, nullable=False)  # Data de início PREVISTA
@@ -10295,31 +10295,6 @@ class CronogramaObra(db.Model):
         except Exception as e:
             print(f"[AVISO] Erro ao atualizar datas por etapas: {str(e)}")
 
-    def _get_orcamento_etapa_id(self):
-        """Retorna orcamento_etapa_id de forma segura (coluna pode não existir)"""
-        try:
-            return self.orcamento_etapa_id
-        except:
-            return None
-    
-    def _get_orcamento_etapa_nome(self):
-        """Retorna nome da etapa do orçamento de forma segura"""
-        try:
-            if self.orcamento_etapa_id and self.orcamento_etapa:
-                return self.orcamento_etapa.nome
-        except:
-            pass
-        return None
-    
-    def _get_orcamento_etapa_codigo(self):
-        """Retorna código da etapa do orçamento de forma segura"""
-        try:
-            if self.orcamento_etapa_id and self.orcamento_etapa:
-                return self.orcamento_etapa.codigo
-        except:
-            pass
-        return None
-
     def to_dict(self):
         # Se tipo_medicao for 'etapas', calcular percentual automaticamente
         percentual = self.percentual_conclusao
@@ -10351,15 +10326,33 @@ class CronogramaObra(db.Model):
                 print(f"[AVISO] Não foi possível carregar etapas: {str(e)}")
                 etapas_list = []
         
+        # Tentar obter orcamento_etapa_id de forma segura (coluna pode não existir)
+        orcamento_etapa_id = None
+        orcamento_etapa_nome = None
+        orcamento_etapa_codigo = None
+        try:
+            # Usar SQL direto para verificar se a coluna existe
+            result = db.session.execute(db.text(
+                f"SELECT orcamento_etapa_id FROM cronograma_obra WHERE id = {self.id}"
+            )).fetchone()
+            if result and result[0]:
+                orcamento_etapa_id = result[0]
+                etapa = OrcamentoEngEtapa.query.get(orcamento_etapa_id)
+                if etapa:
+                    orcamento_etapa_nome = etapa.nome
+                    orcamento_etapa_codigo = etapa.codigo
+        except:
+            pass  # Coluna não existe ainda, ignorar
+        
         return {
             'id': self.id,
             'obra_id': self.obra_id,
             'servico_nome': self.servico_nome,
             'ordem': self.ordem,
-            # VÍNCULO COM ORÇAMENTO (com tratamento para coluna não existir)
-            'orcamento_etapa_id': self._get_orcamento_etapa_id(),
-            'orcamento_etapa_nome': self._get_orcamento_etapa_nome(),
-            'orcamento_etapa_codigo': self._get_orcamento_etapa_codigo(),
+            # VÍNCULO COM ORÇAMENTO (coluna pode não existir)
+            'orcamento_etapa_id': orcamento_etapa_id,
+            'orcamento_etapa_nome': orcamento_etapa_nome,
+            'orcamento_etapa_codigo': orcamento_etapa_codigo,
             # PLANEJAMENTO
             'data_inicio': self.data_inicio.isoformat() if self.data_inicio else None,
             'data_fim_prevista': self.data_fim_prevista.isoformat() if self.data_fim_prevista else None,
@@ -12035,7 +12028,6 @@ def importar_orcamento_para_cronograma(obra_id):
                 obra_id=obra_id,
                 servico_nome=etapa.nome,
                 ordem=max_ordem,
-                orcamento_etapa_id=etapa.id,  # VÍNCULO COM ORÇAMENTO
                 data_inicio=data_atual,
                 data_fim_prevista=data_fim,
                 tipo_medicao='etapas',  # Por padrão, usar medição por etapas
@@ -12045,6 +12037,14 @@ def importar_orcamento_para_cronograma(obra_id):
             
             db.session.add(novo_servico)
             db.session.flush()  # Para obter o ID
+            
+            # Tentar vincular ao orçamento (coluna pode não existir)
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE cronograma_obra SET orcamento_etapa_id = {etapa.id} WHERE id = {novo_servico.id}"
+                ))
+            except:
+                pass  # Coluna não existe, ignorar
             
             # Criar etapa pai no cronograma correspondente
             etapa_cronograma = CronogramaEtapa(
@@ -12126,20 +12126,28 @@ def setup_migrate_cronograma_orcamento():
             db.session.rollback()
             resultados.append(f"⚠️ Índice: {str(e)}")
         
-        # 3. Tentar vincular cronogramas existentes pelo nome
+        # 3. Tentar vincular cronogramas existentes pelo nome (usando SQL direto)
         try:
-            cronogramas = CronogramaObra.query.filter(CronogramaObra.orcamento_etapa_id.is_(None)).all()
+            # Buscar cronogramas sem vínculo
+            cronogramas_sem_vinculo = db.session.execute(db.text("""
+                SELECT c.id, c.obra_id, c.servico_nome 
+                FROM cronograma_obra c 
+                WHERE c.orcamento_etapa_id IS NULL
+            """)).fetchall()
+            
             vinculados = 0
             
-            for cron in cronogramas:
+            for cron_id, obra_id, servico_nome in cronogramas_sem_vinculo:
                 # Buscar etapa do orçamento com mesmo nome na mesma obra
                 etapa = OrcamentoEngEtapa.query.filter_by(
-                    obra_id=cron.obra_id,
-                    nome=cron.servico_nome
+                    obra_id=obra_id,
+                    nome=servico_nome
                 ).first()
                 
                 if etapa:
-                    cron.orcamento_etapa_id = etapa.id
+                    db.session.execute(db.text(
+                        f"UPDATE cronograma_obra SET orcamento_etapa_id = {etapa.id} WHERE id = {cron_id}"
+                    ))
                     vinculados += 1
             
             db.session.commit()
@@ -12401,11 +12409,20 @@ def sincronizar_cronograma_orcamento(cronograma_id):
         if not user_has_access_to_obra(user, cronograma.obra_id):
             return jsonify({'erro': 'Sem permissão'}), 403
         
-        if not cronograma.orcamento_etapa_id:
+        # Buscar orcamento_etapa_id via SQL direto (coluna pode não existir no modelo)
+        try:
+            result = db.session.execute(db.text(
+                f"SELECT orcamento_etapa_id FROM cronograma_obra WHERE id = {cronograma_id}"
+            )).fetchone()
+            orcamento_etapa_id = result[0] if result else None
+        except:
+            orcamento_etapa_id = None
+        
+        if not orcamento_etapa_id:
             return jsonify({'erro': 'Este cronograma não está vinculado a uma etapa do orçamento'}), 400
         
         # Buscar etapa do orçamento
-        etapa_orcamento = OrcamentoEngEtapa.query.get(cronograma.orcamento_etapa_id)
+        etapa_orcamento = OrcamentoEngEtapa.query.get(orcamento_etapa_id)
         if not etapa_orcamento:
             return jsonify({'erro': 'Etapa do orçamento não encontrada'}), 404
         
@@ -12475,7 +12492,10 @@ def vincular_cronograma_orcamento(cronograma_id):
             if not etapa or etapa.obra_id != cronograma.obra_id:
                 return jsonify({'erro': 'Etapa do orçamento inválida'}), 400
             
-            cronograma.orcamento_etapa_id = orcamento_etapa_id
+            # Usar SQL direto para atualizar (coluna pode não existir no modelo)
+            db.session.execute(db.text(
+                f"UPDATE cronograma_obra SET orcamento_etapa_id = {orcamento_etapa_id} WHERE id = {cronograma_id}"
+            ))
             db.session.commit()
             
             return jsonify({
@@ -12484,8 +12504,10 @@ def vincular_cronograma_orcamento(cronograma_id):
                 'orcamento_etapa_nome': etapa.nome
             })
         else:
-            # Desvincular
-            cronograma.orcamento_etapa_id = None
+            # Desvincular usando SQL direto
+            db.session.execute(db.text(
+                f"UPDATE cronograma_obra SET orcamento_etapa_id = NULL WHERE id = {cronograma_id}"
+            ))
             db.session.commit()
             
             return jsonify({
