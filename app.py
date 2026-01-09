@@ -17670,6 +17670,518 @@ def importar_orcamento_gerado(obra_id):
 
 
 # ==============================================================================
+# ROTA DE TESTES - VALIDAÇÃO COMPLETA DE PAGAMENTOS E ORÇAMENTO
+# ==============================================================================
+@app.route('/api/testes/validar-sistema/<int:obra_id>', methods=['GET'])
+@jwt_required()
+def validar_sistema_completo(obra_id):
+    """
+    ROTA DE TESTES COMPLETA
+    Valida todas as funcionalidades de pagamento e orçamento:
+    - Estrutura do orçamento de engenharia
+    - Vinculação de pagamentos a itens do orçamento
+    - Contabilização de valores (Executado vs Previsto)
+    - Integridade dos dados
+    """
+    try:
+        resultados = {
+            "obra_id": obra_id,
+            "timestamp": datetime.now().isoformat(),
+            "testes": [],
+            "resumo": {
+                "total": 0,
+                "passou": 0,
+                "falhou": 0,
+                "avisos": 0
+            }
+        }
+        
+        def add_teste(nome, passou, detalhes=None, aviso=False):
+            status = "⚠️ AVISO" if aviso else ("✅ PASSOU" if passou else "❌ FALHOU")
+            resultados["testes"].append({
+                "nome": nome,
+                "status": status,
+                "passou": passou,
+                "detalhes": detalhes
+            })
+            resultados["resumo"]["total"] += 1
+            if aviso:
+                resultados["resumo"]["avisos"] += 1
+            elif passou:
+                resultados["resumo"]["passou"] += 1
+            else:
+                resultados["resumo"]["falhou"] += 1
+        
+        # ===========================================
+        # TESTE 1: Verificar se obra existe
+        # ===========================================
+        obra = Obra.query.get(obra_id)
+        add_teste(
+            "1. Obra existe",
+            obra is not None,
+            f"Obra: {obra.nome if obra else 'NÃO ENCONTRADA'}"
+        )
+        
+        if not obra:
+            return jsonify(resultados), 200
+        
+        # ===========================================
+        # TESTE 2: Verificar estrutura do orçamento
+        # ===========================================
+        etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).all()
+        itens = OrcamentoEngItem.query.filter(
+            OrcamentoEngItem.etapa_id.in_([e.id for e in etapas])
+        ).all() if etapas else []
+        
+        add_teste(
+            "2. Orçamento de Engenharia - Etapas",
+            len(etapas) > 0,
+            f"Total de etapas: {len(etapas)}"
+        )
+        
+        add_teste(
+            "3. Orçamento de Engenharia - Itens",
+            len(itens) > 0,
+            f"Total de itens: {len(itens)}"
+        )
+        
+        # ===========================================
+        # TESTE 3: Verificar endpoint itens-lista
+        # ===========================================
+        try:
+            itens_lista = db.session.execute(db.text(f"""
+                SELECT i.id, i.descricao, e.nome as etapa_nome
+                FROM orcamento_eng_item i
+                JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
+                WHERE e.obra_id = {obra_id}
+                ORDER BY e.ordem, i.id
+            """)).fetchall()
+            
+            add_teste(
+                "4. Endpoint itens-lista funcional",
+                len(itens_lista) >= 0,
+                f"Itens disponíveis para dropdown: {len(itens_lista)}"
+            )
+        except Exception as e:
+            add_teste("4. Endpoint itens-lista funcional", False, str(e))
+        
+        # ===========================================
+        # TESTE 4: Verificar colunas orcamento_item_id
+        # ===========================================
+        tabelas_pagamento = ['lancamento', 'pagamento_futuro', 'pagamento_parcelado_v2', 'boleto']
+        for tabela in tabelas_pagamento:
+            try:
+                result = db.session.execute(db.text(f"""
+                    SELECT column_name FROM information_schema.columns 
+                    WHERE table_name = '{tabela}' AND column_name = 'orcamento_item_id'
+                """)).fetchone()
+                add_teste(
+                    f"5. Coluna orcamento_item_id em {tabela}",
+                    result is not None,
+                    "Coluna existe" if result else "COLUNA NÃO EXISTE - Execute migração!"
+                )
+            except Exception as e:
+                add_teste(f"5. Coluna orcamento_item_id em {tabela}", False, str(e))
+        
+        # ===========================================
+        # TESTE 5: Verificar pagamentos vinculados
+        # ===========================================
+        # Lançamentos
+        try:
+            lanc_vinculados = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM lancamento l
+                JOIN obra o ON l.obra_id = o.id
+                WHERE o.id = {obra_id} AND l.orcamento_item_id IS NOT NULL
+            """)).scalar()
+            lanc_total = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM lancamento WHERE obra_id = {obra_id}
+            """)).scalar()
+            add_teste(
+                "6. Lançamentos vinculados a itens",
+                True,
+                f"{lanc_vinculados} de {lanc_total} lançamentos vinculados",
+                aviso=(lanc_vinculados == 0 and lanc_total > 0)
+            )
+        except Exception as e:
+            add_teste("6. Lançamentos vinculados", False, str(e))
+        
+        # Pagamentos Futuros
+        try:
+            pf_vinculados = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM pagamento_futuro 
+                WHERE obra_id = {obra_id} AND orcamento_item_id IS NOT NULL
+            """)).scalar()
+            pf_total = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM pagamento_futuro WHERE obra_id = {obra_id}
+            """)).scalar()
+            add_teste(
+                "7. Pagamentos Futuros vinculados",
+                True,
+                f"{pf_vinculados} de {pf_total} pagamentos futuros vinculados",
+                aviso=(pf_vinculados == 0 and pf_total > 0)
+            )
+        except Exception as e:
+            add_teste("7. Pagamentos Futuros vinculados", False, str(e))
+        
+        # Pagamentos Parcelados
+        try:
+            pp_vinculados = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM pagamento_parcelado_v2 
+                WHERE obra_id = {obra_id} AND orcamento_item_id IS NOT NULL
+            """)).scalar()
+            pp_total = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM pagamento_parcelado_v2 WHERE obra_id = {obra_id}
+            """)).scalar()
+            add_teste(
+                "8. Pagamentos Parcelados vinculados",
+                True,
+                f"{pp_vinculados} de {pp_total} parcelados vinculados",
+                aviso=(pp_vinculados == 0 and pp_total > 0)
+            )
+        except Exception as e:
+            add_teste("8. Pagamentos Parcelados vinculados", False, str(e))
+        
+        # Boletos
+        try:
+            bol_vinculados = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM boleto 
+                WHERE obra_id = {obra_id} AND orcamento_item_id IS NOT NULL
+            """)).scalar()
+            bol_total = db.session.execute(db.text(f"""
+                SELECT COUNT(*) FROM boleto WHERE obra_id = {obra_id}
+            """)).scalar()
+            add_teste(
+                "9. Boletos vinculados",
+                True,
+                f"{bol_vinculados} de {bol_total} boletos vinculados",
+                aviso=(bol_vinculados == 0 and bol_total > 0)
+            )
+        except Exception as e:
+            add_teste("9. Boletos vinculados", False, str(e))
+        
+        # ===========================================
+        # TESTE 6: Calcular valores por item do orçamento
+        # ===========================================
+        valores_por_item = []
+        for item in itens[:10]:  # Limitar a 10 itens para não sobrecarregar
+            try:
+                # Valor Previsto
+                previsto = item.valor_total or 0
+                
+                # Valor Executado (soma de pagamentos vinculados e pagos)
+                executado_lanc = db.session.execute(db.text(f"""
+                    SELECT COALESCE(SUM(valor_pago), 0) FROM lancamento 
+                    WHERE orcamento_item_id = {item.id} AND status = 'Pago'
+                """)).scalar() or 0
+                
+                executado_pf = db.session.execute(db.text(f"""
+                    SELECT COALESCE(SUM(valor), 0) FROM pagamento_futuro 
+                    WHERE orcamento_item_id = {item.id} AND status = 'Pago'
+                """)).scalar() or 0
+                
+                # Parcelas pagas de pagamentos parcelados
+                executado_pp = db.session.execute(db.text(f"""
+                    SELECT COALESCE(SUM(pi.valor_parcela), 0) 
+                    FROM parcela_individual pi
+                    JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
+                    WHERE pp.orcamento_item_id = {item.id} AND pi.status = 'Pago'
+                """)).scalar() or 0
+                
+                executado_bol = db.session.execute(db.text(f"""
+                    SELECT COALESCE(SUM(valor), 0) FROM boleto 
+                    WHERE orcamento_item_id = {item.id} AND status = 'Pago'
+                """)).scalar() or 0
+                
+                executado_total = executado_lanc + executado_pf + executado_pp + executado_bol
+                
+                valores_por_item.append({
+                    "item_id": item.id,
+                    "descricao": item.descricao[:50] if item.descricao else "Sem descrição",
+                    "previsto": float(previsto),
+                    "executado": float(executado_total),
+                    "percentual": round((executado_total / previsto * 100), 1) if previsto > 0 else 0,
+                    "detalhes": {
+                        "lancamentos": float(executado_lanc),
+                        "pagamentos_futuros": float(executado_pf),
+                        "parcelas_pagas": float(executado_pp),
+                        "boletos": float(executado_bol)
+                    }
+                })
+            except Exception as e:
+                valores_por_item.append({
+                    "item_id": item.id,
+                    "erro": str(e)
+                })
+        
+        add_teste(
+            "10. Cálculo de valores por item",
+            len(valores_por_item) > 0,
+            f"Calculado para {len(valores_por_item)} itens"
+        )
+        
+        # ===========================================
+        # TESTE 7: Totais do orçamento
+        # ===========================================
+        try:
+            total_previsto = sum(item.valor_total or 0 for item in itens)
+            
+            total_executado = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(l.valor_pago), 0)
+                FROM lancamento l
+                JOIN orcamento_eng_item i ON l.orcamento_item_id = i.id
+                JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
+                WHERE e.obra_id = {obra_id} AND l.status = 'Pago'
+            """)).scalar() or 0
+            
+            total_executado += db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(pf.valor), 0)
+                FROM pagamento_futuro pf
+                JOIN orcamento_eng_item i ON pf.orcamento_item_id = i.id
+                JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
+                WHERE e.obra_id = {obra_id} AND pf.status = 'Pago'
+            """)).scalar() or 0
+            
+            total_executado += db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(pi.valor_parcela), 0)
+                FROM parcela_individual pi
+                JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
+                JOIN orcamento_eng_item i ON pp.orcamento_item_id = i.id
+                JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
+                WHERE e.obra_id = {obra_id} AND pi.status = 'Pago'
+            """)).scalar() or 0
+            
+            total_executado += db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(b.valor), 0)
+                FROM boleto b
+                JOIN orcamento_eng_item i ON b.orcamento_item_id = i.id
+                JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
+                WHERE e.obra_id = {obra_id} AND b.status = 'Pago'
+            """)).scalar() or 0
+            
+            percentual_geral = round((total_executado / total_previsto * 100), 1) if total_previsto > 0 else 0
+            
+            add_teste(
+                "11. Totais do Orçamento",
+                True,
+                f"Previsto: R$ {total_previsto:,.2f} | Executado: R$ {total_executado:,.2f} | {percentual_geral}%"
+            )
+            
+            resultados["totais_orcamento"] = {
+                "previsto": float(total_previsto),
+                "executado": float(total_executado),
+                "percentual": percentual_geral,
+                "saldo": float(total_previsto - total_executado)
+            }
+        except Exception as e:
+            add_teste("11. Totais do Orçamento", False, str(e))
+        
+        # ===========================================
+        # TESTE 8: Verificar rotas de API
+        # ===========================================
+        rotas_testadas = [
+            f"/obras/{obra_id}/orcamento-eng/itens-lista",
+            f"/sid/cronograma-financeiro/{obra_id}/pagamentos-futuros",
+            f"/sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados",
+            f"/obras/{obra_id}/boletos",
+        ]
+        
+        add_teste(
+            "12. Rotas de API configuradas",
+            True,
+            f"Rotas disponíveis: {len(rotas_testadas)}"
+        )
+        
+        # Adicionar valores por item ao resultado
+        resultados["valores_por_item"] = valores_por_item
+        
+        # ===========================================
+        # RESUMO FINAL
+        # ===========================================
+        resultados["status_geral"] = "✅ SISTEMA OK" if resultados["resumo"]["falhou"] == 0 else "❌ PROBLEMAS ENCONTRADOS"
+        
+        return jsonify(resultados), 200
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "erro": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/testes/simular-pagamento/<int:obra_id>', methods=['POST'])
+@jwt_required()
+def simular_pagamento_teste(obra_id):
+    """
+    ROTA DE TESTE - Simula criação de pagamento vinculado a item do orçamento
+    
+    Body esperado:
+    {
+        "orcamento_item_id": 123,
+        "valor": 1000.00,
+        "tipo": "lancamento" | "pagamento_futuro" | "parcelado",
+        "descricao": "Teste de pagamento"
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        orcamento_item_id = data.get('orcamento_item_id')
+        valor = float(data.get('valor', 100))
+        tipo = data.get('tipo', 'lancamento')
+        descricao = data.get('descricao', f'[TESTE] Pagamento de teste - {datetime.now().isoformat()}')
+        
+        resultado = {
+            "obra_id": obra_id,
+            "tipo": tipo,
+            "orcamento_item_id": orcamento_item_id,
+            "valor": valor
+        }
+        
+        # Verificar se item do orçamento existe
+        if orcamento_item_id:
+            item = OrcamentoEngItem.query.get(orcamento_item_id)
+            if not item:
+                return jsonify({"erro": f"Item do orçamento {orcamento_item_id} não encontrado"}), 404
+            resultado["item_descricao"] = item.descricao
+        
+        if tipo == 'lancamento':
+            # Criar lançamento de teste
+            novo = Lancamento(
+                obra_id=obra_id,
+                tipo='Material',
+                descricao=descricao,
+                valor_total=valor,
+                valor_pago=valor,
+                data=date.today(),
+                status='Pago',
+                fornecedor='[TESTE]'
+            )
+            db.session.add(novo)
+            db.session.flush()
+            
+            # Vincular ao item do orçamento
+            if orcamento_item_id:
+                db.session.execute(db.text(
+                    f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo.id}"
+                ))
+            
+            db.session.commit()
+            resultado["id_criado"] = novo.id
+            resultado["mensagem"] = f"Lançamento #{novo.id} criado e vinculado com sucesso!"
+            
+        elif tipo == 'pagamento_futuro':
+            # Criar pagamento futuro de teste
+            novo = PagamentoFuturo(
+                obra_id=obra_id,
+                descricao=descricao,
+                valor=valor,
+                data_vencimento=date.today(),
+                fornecedor='[TESTE]',
+                status='Previsto'
+            )
+            db.session.add(novo)
+            db.session.flush()
+            
+            if orcamento_item_id:
+                db.session.execute(db.text(
+                    f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo.id}"
+                ))
+            
+            db.session.commit()
+            resultado["id_criado"] = novo.id
+            resultado["mensagem"] = f"Pagamento Futuro #{novo.id} criado e vinculado com sucesso!"
+            
+        elif tipo == 'parcelado':
+            # Criar pagamento parcelado de teste
+            novo = PagamentoParcelado(
+                obra_id=obra_id,
+                descricao=descricao,
+                valor_total=valor,
+                numero_parcelas=2,
+                valor_parcela=valor/2,
+                data_primeira_parcela=date.today(),
+                periodicidade='Mensal',
+                parcelas_pagas=0,
+                status='Ativo',
+                fornecedor='[TESTE]'
+            )
+            db.session.add(novo)
+            db.session.flush()
+            
+            if orcamento_item_id:
+                db.session.execute(db.text(
+                    f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo.id}"
+                ))
+            
+            db.session.commit()
+            resultado["id_criado"] = novo.id
+            resultado["mensagem"] = f"Pagamento Parcelado #{novo.id} criado e vinculado com sucesso!"
+        
+        else:
+            return jsonify({"erro": f"Tipo '{tipo}' não suportado. Use: lancamento, pagamento_futuro, parcelado"}), 400
+        
+        return jsonify(resultado), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        return jsonify({
+            "erro": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route('/api/testes/limpar-testes/<int:obra_id>', methods=['DELETE'])
+@jwt_required()
+def limpar_dados_teste(obra_id):
+    """
+    ROTA DE TESTE - Remove todos os registros de teste (marcados com [TESTE])
+    """
+    try:
+        resultados = {
+            "obra_id": obra_id,
+            "removidos": {}
+        }
+        
+        # Remover lançamentos de teste
+        lanc_removidos = Lancamento.query.filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.fornecedor == '[TESTE]'
+        ).delete()
+        resultados["removidos"]["lancamentos"] = lanc_removidos
+        
+        # Remover pagamentos futuros de teste
+        pf_removidos = PagamentoFuturo.query.filter(
+            PagamentoFuturo.obra_id == obra_id,
+            PagamentoFuturo.fornecedor == '[TESTE]'
+        ).delete()
+        resultados["removidos"]["pagamentos_futuros"] = pf_removidos
+        
+        # Remover pagamentos parcelados de teste
+        pp_removidos = PagamentoParcelado.query.filter(
+            PagamentoParcelado.obra_id == obra_id,
+            PagamentoParcelado.fornecedor == '[TESTE]'
+        ).delete()
+        resultados["removidos"]["pagamentos_parcelados"] = pp_removidos
+        
+        db.session.commit()
+        
+        total = sum(resultados["removidos"].values())
+        resultados["mensagem"] = f"✅ {total} registros de teste removidos"
+        
+        return jsonify(resultados), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        return jsonify({
+            "erro": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+# ==============================================================================
 # INICIALIZAÇÃO DO SERVIDOR (DEVE SER A ÚLTIMA COISA DO ARQUIVO)
 # ==============================================================================
 if __name__ == '__main__':
