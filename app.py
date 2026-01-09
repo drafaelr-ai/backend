@@ -15984,12 +15984,16 @@ def deletar_etapa_orcamento(obra_id, etapa_id):
         
         etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
         
-        # Deletar serviços vinculados aos itens
+        # Deletar serviços vinculados aos itens (com tratamento de erro)
         for item in etapa.itens:
-            if item.servico_id:
-                servico = Servico.query.get(item.servico_id)
-                if servico:
-                    db.session.delete(servico)
+            try:
+                if item.servico_id:
+                    servico = Servico.query.get(item.servico_id)
+                    if servico:
+                        db.session.delete(servico)
+            except Exception as e:
+                print(f"[AVISO] Erro ao deletar serviço {item.servico_id}: {e}")
+                # Continuar mesmo se falhar
         
         db.session.delete(etapa)
         db.session.commit()
@@ -15998,6 +16002,8 @@ def deletar_etapa_orcamento(obra_id, etapa_id):
         
     except Exception as e:
         db.session.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16206,7 +16212,7 @@ def editar_item_orcamento(obra_id, item_id):
 @jwt_required()
 def deletar_item_orcamento(obra_id, item_id):
     """
-    Deleta um item do orçamento E o serviço vinculado
+    Deleta um item do orçamento E o serviço vinculado (se houver)
     """
     try:
         user = get_current_user()
@@ -16217,24 +16223,28 @@ def deletar_item_orcamento(obra_id, item_id):
         
         item = OrcamentoEngItem.query.get_or_404(item_id)
         
-        # Deletar serviço vinculado
-        if item.servico_id:
-            servico = Servico.query.get(item.servico_id)
-            if servico:
-                # Verificar se há outros itens usando este serviço
-                outros_itens = OrcamentoEngItem.query.filter(
-                    OrcamentoEngItem.servico_id == item.servico_id,
-                    OrcamentoEngItem.id != item_id
-                ).count()
-                
-                if outros_itens > 0:
-                    # Outros itens usam este serviço, apenas desvincular
-                    totais = item.calcular_totais()
-                    servico.valor_global_mao_de_obra = max(0, servico.valor_global_mao_de_obra - totais['total_mao_obra'])
-                    servico.valor_global_material = max(0, servico.valor_global_material - totais['total_material'])
-                else:
-                    # Nenhum outro item usa, deletar serviço
-                    db.session.delete(servico)
+        # Deletar serviço vinculado (com tratamento de erro)
+        try:
+            if item.servico_id:
+                servico = Servico.query.get(item.servico_id)
+                if servico:
+                    # Verificar se há outros itens usando este serviço
+                    outros_itens = OrcamentoEngItem.query.filter(
+                        OrcamentoEngItem.servico_id == item.servico_id,
+                        OrcamentoEngItem.id != item_id
+                    ).count()
+                    
+                    if outros_itens > 0:
+                        # Outros itens usam este serviço, apenas desvincular
+                        totais = item.calcular_totais()
+                        servico.valor_global_mao_de_obra = max(0, (servico.valor_global_mao_de_obra or 0) - totais['total_mao_obra'])
+                        servico.valor_global_material = max(0, (servico.valor_global_material or 0) - totais['total_material'])
+                    else:
+                        # Nenhum outro item usa, deletar serviço
+                        db.session.delete(servico)
+        except Exception as e:
+            print(f"[AVISO] Erro ao processar serviço vinculado: {e}")
+            # Continuar com a exclusão do item mesmo se falhar a exclusão do serviço
         
         db.session.delete(item)
         db.session.commit()
@@ -16243,6 +16253,8 @@ def deletar_item_orcamento(obra_id, item_id):
         
     except Exception as e:
         db.session.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
 
