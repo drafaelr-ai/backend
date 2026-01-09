@@ -2980,7 +2980,20 @@ def add_lancamento(obra_id):
                 fornecedor=dados.get('fornecedor'), 
                 servico_id=dados.get('servico_id')
             )
+            
+            # NOVO: Atualizar orcamento_item_id via SQL direto (coluna pode não existir no model)
             db.session.add(novo_lancamento)
+            db.session.flush()  # Para obter o ID
+            
+            orcamento_item_id = dados.get('orcamento_item_id')
+            if orcamento_item_id:
+                try:
+                    db.session.execute(db.text(
+                        f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_lancamento.id}"
+                    ))
+                except Exception as e:
+                    print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+            
             db.session.commit()
             
             # --- NOTIFICAÇÃO PARA MASTERS ---
@@ -3053,6 +3066,17 @@ def editar_lancamento(lancamento_id):
         lancamento.prioridade = int(dados.get('prioridade', lancamento.prioridade))
         lancamento.fornecedor = dados.get('fornecedor', lancamento.fornecedor) 
         lancamento.servico_id = dados.get('servico_id')
+        
+        # NOVO: Atualizar orcamento_item_id via SQL direto
+        if 'orcamento_item_id' in dados:
+            orcamento_item_id = dados['orcamento_item_id']
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE lancamento SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {lancamento_id}"
+                ))
+            except Exception as e:
+                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+        
         db.session.commit()
         return jsonify(lancamento.to_dict())
     except Exception as e:
@@ -3089,6 +3113,16 @@ def atualizar_lancamento_parcial(lancamento_id):
             lancamento.fornecedor = dados['fornecedor']
         if 'prioridade' in dados:
             lancamento.prioridade = int(dados['prioridade'])
+        
+        # NOVO: Atualizar orcamento_item_id via SQL direto
+        if 'orcamento_item_id' in dados:
+            orcamento_item_id = dados['orcamento_item_id']
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE lancamento SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {lancamento_id}"
+                ))
+            except Exception as e:
+                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         db.session.commit()
         print(f"--- [LOG] Lançamento {lancamento_id} atualizado parcialmente ---")
@@ -6391,6 +6425,17 @@ def criar_pagamento_futuro(obra_id):
         db.session.add(novo_pagamento)
         db.session.flush()  # Flush para obter o ID antes do commit
         print(f"--- [DEBUG] Flush OK, ID atribuído: {novo_pagamento.id} ---")
+        
+        # NOVO: Atualizar orcamento_item_id via SQL direto
+        orcamento_item_id = data.get('orcamento_item_id')
+        if orcamento_item_id:
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_pagamento.id}"
+                ))
+            except Exception as e:
+                print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+        
         db.session.commit()
         print(f"--- [DEBUG] Commit realizado! ---")
         
@@ -6449,6 +6494,16 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             pagamento.observacoes = data['observacoes']
         if 'status' in data:
             pagamento.status = data['status']
+        
+        # NOVO: Atualizar orcamento_item_id via SQL direto
+        if 'orcamento_item_id' in data:
+            orcamento_item_id = data['orcamento_item_id']
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE pagamento_futuro SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
+                ))
+            except Exception as e:
+                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         print(f"--- [DEBUG] Tentando commit no banco... ---")
         db.session.commit()
@@ -6741,6 +6796,16 @@ def criar_pagamento_parcelado(obra_id):
         db.session.add(novo_pagamento)
         db.session.flush()  # Para obter o ID do pagamento
         
+        # NOVO: Atualizar orcamento_item_id via SQL direto
+        orcamento_item_id = data.get('orcamento_item_id')
+        if orcamento_item_id:
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_pagamento.id}"
+                ))
+            except Exception as e:
+                print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+        
         # 🆕 Criar parcela de ENTRADA (se houver)
         if tem_entrada and valor_entrada > 0:
             data_entrada_parsed = datetime.strptime(data_entrada, '%Y-%m-%d').date() if data_entrada else date.today()
@@ -6890,6 +6955,17 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
                 # Desvincular do serviço
                 pagamento.servico_id = None
                 print(f"--- [LOG] PagamentoParcelado {pagamento_id} desvinculado de serviço ---")
+        
+        # NOVO: Atualizar orcamento_item_id via SQL direto
+        if 'orcamento_item_id' in data:
+            orcamento_item_id = data['orcamento_item_id']
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
+                ))
+                print(f"--- [LOG] PagamentoParcelado {pagamento_id} orcamento_item_id atualizado para {orcamento_item_id} ---")
+            except Exception as e:
+                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         # CORREÇÃO: Atualizar segmento quando alterado
         if 'segmento' in data:
@@ -15159,6 +15235,16 @@ def editar_boleto(obra_id, boleto_id):
             boleto.status = data['status']
         if 'vinculado_servico_id' in data:
             boleto.vinculado_servico_id = data['vinculado_servico_id']
+        
+        # NOVO: Atualizar orcamento_item_id via SQL direto
+        if 'orcamento_item_id' in data:
+            orcamento_item_id = data['orcamento_item_id']
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE boleto SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {boleto_id}"
+                ))
+            except Exception as e:
+                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         db.session.commit()
         
