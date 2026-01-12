@@ -2589,29 +2589,22 @@ def get_obra_detalhes(obra_id):
         # --- HISTÓRICO UNIFICADO ---
         historico_unificado = []
         
-        todos_lancamentos = Lancamento.query.filter_by(obra_id=obra_id).options(
-            db.joinedload(Lancamento.servico)
-        ).all()
+        # OTIMIZAÇÃO: Buscar todos os lançamentos com orcamento_item_id em uma única query
+        lancamentos_com_item = db.session.execute(db.text("""
+            SELECT l.id, l.obra_id, l.tipo, l.descricao, l.valor_total, l.valor_pago, 
+                   l.data, l.data_vencimento, l.status, l.pix, l.prioridade, l.fornecedor, l.servico_id,
+                   l.orcamento_item_id, s.nome as servico_nome,
+                   oei.codigo || ' - ' || oei.descricao as orcamento_item_nome
+            FROM lancamento l
+            LEFT JOIN servico s ON l.servico_id = s.id
+            LEFT JOIN orcamento_eng_item oei ON l.orcamento_item_id = oei.id
+            WHERE l.obra_id = :obra_id
+        """), {"obra_id": obra_id}).fetchall()
         
-        for lanc in todos_lancamentos:
+        for lanc in lancamentos_com_item:
             descricao = lanc.descricao or "Sem descrição"
-            if lanc.servico:
-                descricao = f"{descricao} (Serviço: {lanc.servico.nome})"
-            
-            # Buscar orcamento_item_id de forma segura
-            orcamento_item_id = None
-            orcamento_item_nome = None
-            try:
-                result = db.session.execute(db.text(
-                    f"SELECT orcamento_item_id FROM lancamento WHERE id = {lanc.id}"
-                )).fetchone()
-                if result and result[0]:
-                    orcamento_item_id = result[0]
-                    item = OrcamentoEngItem.query.get(orcamento_item_id)
-                    if item:
-                        orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-            except:
-                pass
+            if lanc.servico_nome:
+                descricao = f"{descricao} (Serviço: {lanc.servico_nome})"
             
             historico_unificado.append({
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
@@ -2622,61 +2615,67 @@ def get_obra_detalhes(obra_id):
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
                 "prioridade": lanc.prioridade,
                 "fornecedor": lanc.fornecedor,
-                "orcamento_item_id": orcamento_item_id,
-                "orcamento_item_nome": orcamento_item_nome
+                "orcamento_item_id": lanc.orcamento_item_id,
+                "orcamento_item_nome": lanc.orcamento_item_nome
             })
         
-        for serv in obra.servicos:
-            for pag in serv.pagamentos:
-                desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
-                historico_unificado.append({
-                    "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data,
-                    "data_vencimento": pag.data_vencimento,
-                    "descricao": f"Pag. {desc_tipo}: {serv.nome}", "tipo": "Serviço", 
-                    "valor_total": float(pag.valor_total or 0.0), 
-                    "valor_pago": float(pag.valor_pago or 0.0), 
-                    "status": pag.status, "pix": serv.pix, "servico_id": serv.id,
-                    "pagamento_id": pag.id,
-                    "prioridade": pag.prioridade,
-                    "fornecedor": pag.fornecedor 
-                })
+        # OTIMIZAÇÃO: Buscar pagamentos de serviços com uma única query
+        pagamentos_servicos = db.session.execute(db.text("""
+            SELECT ps.id, ps.tipo_pagamento, ps.valor_total, ps.valor_pago, ps.data, 
+                   ps.data_vencimento, ps.status, ps.prioridade, ps.fornecedor,
+                   s.id as servico_id, s.nome as servico_nome, s.pix
+            FROM pagamento_servico ps
+            JOIN servico s ON ps.servico_id = s.id
+            WHERE s.obra_id = :obra_id
+        """), {"obra_id": obra_id}).fetchall()
+        
+        for pag in pagamentos_servicos:
+            desc_tipo = "Mão de Obra" if pag.tipo_pagamento == 'mao_de_obra' else "Material"
+            historico_unificado.append({
+                "id": f"serv-pag-{pag.id}", "tipo_registro": "pagamento_servico", "data": pag.data,
+                "data_vencimento": pag.data_vencimento,
+                "descricao": f"Pag. {desc_tipo}: {pag.servico_nome}", "tipo": "Serviço", 
+                "valor_total": float(pag.valor_total or 0.0), 
+                "valor_pago": float(pag.valor_pago or 0.0), 
+                "status": pag.status, "pix": pag.pix, "servico_id": pag.servico_id,
+                "pagamento_id": pag.id,
+                "prioridade": pag.prioridade,
+                "fornecedor": pag.fornecedor 
+            })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
         
-        # --- INCLUIR PARCELAS INDIVIDUAIS PAGAS ---
-        # CORREÇÃO: Apenas parcelas COM serviço, pois parcelas SEM serviço já criaram Lançamento
-        parcelas_pagas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
-            PagamentoParcelado.obra_id == obra_id,
-            ParcelaIndividual.status == 'Pago',
-            PagamentoParcelado.servico_id.isnot(None)  # Apenas COM serviço
-        ).all()
+        # OTIMIZAÇÃO: Buscar parcelas pagas com serviço em uma única query
+        parcelas_pagas_query = db.session.execute(db.text("""
+            SELECT pi.id, pi.numero_parcela, pi.valor_parcela, pi.data_vencimento, pi.data_pagamento,
+                   pp.id as pagamento_parcelado_id, pp.descricao, pp.numero_parcelas, pp.segmento, pp.fornecedor,
+                   pp.servico_id, s.nome as servico_nome
+            FROM parcela_individual pi
+            JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
+            LEFT JOIN servico s ON pp.servico_id = s.id
+            WHERE pp.obra_id = :obra_id AND pi.status = 'Pago' AND pp.servico_id IS NOT NULL
+        """), {"obra_id": obra_id}).fetchall()
         
-        print(f"--- [DEBUG] Parcelas pagas COM serviço encontradas: {len(parcelas_pagas)} ---")
+        print(f"--- [DEBUG] Parcelas pagas COM serviço encontradas: {len(parcelas_pagas_query)} ---")
         
-        for parcela in parcelas_pagas:
-            pag_parcelado = parcela.pagamento_parcelado
-            servico_nome = None
-            if pag_parcelado.servico_id:
-                servico = db.session.get(Servico, pag_parcelado.servico_id)
-                servico_nome = servico.nome if servico else None
-            
+        for parcela in parcelas_pagas_query:
             historico_unificado.append({
                 "id": f"parcela-{parcela.id}",
                 "tipo_registro": "parcela_individual",
                 "data": parcela.data_pagamento or parcela.data_vencimento,
                 "data_vencimento": parcela.data_vencimento,
-                "descricao": f"{pag_parcelado.descricao} ({parcela.numero_parcela}/{pag_parcelado.numero_parcelas})",
-                "tipo": pag_parcelado.segmento or "Material",
+                "descricao": f"{parcela.descricao} ({parcela.numero_parcela}/{parcela.numero_parcelas})",
+                "tipo": parcela.segmento or "Material",
                 "valor_total": float(parcela.valor_parcela or 0.0),
                 "valor_pago": float(parcela.valor_parcela or 0.0),
                 "status": "Pago",
                 "pix": None,
-                "servico_id": pag_parcelado.servico_id,
-                "servico_nome": servico_nome,
-                "pagamento_parcelado_id": pag_parcelado.id,
+                "servico_id": parcela.servico_id,
+                "servico_nome": parcela.servico_nome,
+                "pagamento_parcelado_id": parcela.pagamento_parcelado_id,
                 "parcela_id": parcela.id,
                 "prioridade": 0,
-                "fornecedor": pag_parcelado.fornecedor
+                "fornecedor": parcela.fornecedor
             })
         
         # CORREÇÃO: Incluir parcelas SEM serviço que podem não ter criado Lançamento
@@ -2722,12 +2721,25 @@ def get_obra_detalhes(obra_id):
                 item['data_vencimento'] = item['data_vencimento'].isoformat()
             
         # --- Cálculo dos totais de serviço ---
+        # OTIMIZAÇÃO: Buscar lançamentos por serviço em uma única query
+        lancamentos_por_servico = {}
+        lancamentos_servico_query = db.session.execute(db.text("""
+            SELECT id, servico_id, tipo, descricao, valor_total, valor_pago, data, status, fornecedor
+            FROM lancamento 
+            WHERE obra_id = :obra_id AND servico_id IS NOT NULL
+        """), {"obra_id": obra_id}).fetchall()
+        
+        for l in lancamentos_servico_query:
+            if l.servico_id not in lancamentos_por_servico:
+                lancamentos_por_servico[l.servico_id] = []
+            lancamentos_por_servico[l.servico_id].append(l)
+        
         servicos_com_totais = []
         for s in obra.servicos:
             serv_dict = s.to_dict()
             
             # Lancamentos vinculados ao serviço
-            lancamentos_servico = [l for l in todos_lancamentos if l.servico_id == s.id]
+            lancamentos_servico = lancamentos_por_servico.get(s.id, [])
             
             # COMPROMETIDO (valor_total de todos os lancamentos)
             gastos_vinculados_mo = sum(
@@ -2793,9 +2805,12 @@ def get_obra_detalhes(obra_id):
         ).order_by(Orcamento.id.desc()).all()
         
         
+        # Buscar lançamentos para o retorno (usando a query já feita)
+        lancamentos_retorno = Lancamento.query.filter_by(obra_id=obra_id).all()
+        
         return jsonify({
             "obra": obra.to_dict(),
-            "lancamentos": [l.to_dict() for l in todos_lancamentos],
+            "lancamentos": [l.to_dict() for l in lancamentos_retorno],
             "servicos": servicos_com_totais,
             "historico_unificado": historico_unificado, 
             "sumarios": sumarios_dict,
