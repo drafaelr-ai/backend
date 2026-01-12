@@ -8043,7 +8043,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         # Mostrar seção RESUMO se houver pagamentos urgentes
         if pagamentos_resumo:
             secao_numero += 1
-            section_title = Paragraph(f"<b>{secao_numero}. RESUMO - Atenção Urgente ⚠️</b><br/><font size=9>(Vencidos e próximos 7 dias)</font>", styles['Heading2'])
+            section_title = Paragraph(f"<b>{secao_numero}. RESUMO</b><br/><font size=9>(Vencidos e próximos 7 dias)</font>", styles['Heading2'])
             elements.append(section_title)
             elements.append(Spacer(1, 0.3*cm))
             
