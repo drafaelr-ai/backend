@@ -9247,8 +9247,20 @@ def inserir_pagamento(obra_id):
                     tipo=tipo
                 )
                 db.session.add(novo_futuro)
+                db.session.flush()
+                
+                # NOVO: Vincular ao item do orçamento se fornecido
+                orcamento_item_id = dados.get('orcamento_item_id')
+                if orcamento_item_id:
+                    try:
+                        db.session.execute(db.text(
+                            f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_futuro.id}"
+                        ))
+                    except Exception as e:
+                        print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                
                 db.session.commit()
-                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}")
+                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
                 print(f"{'='*80}\n")
                 return jsonify(novo_futuro.to_dict()), 201
             
@@ -9267,8 +9279,20 @@ def inserir_pagamento(obra_id):
                     tipo=tipo
                 )
                 db.session.add(novo_futuro)
+                db.session.flush()
+                
+                # NOVO: Vincular ao item do orçamento se fornecido
+                orcamento_item_id = dados.get('orcamento_item_id')
+                if orcamento_item_id:
+                    try:
+                        db.session.execute(db.text(
+                            f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_futuro.id}"
+                        ))
+                    except Exception as e:
+                        print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                
                 db.session.commit()
-                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}")
+                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
                 print(f"{'='*80}\n")
                 return jsonify(novo_futuro.to_dict()), 201
             
@@ -9288,8 +9312,20 @@ def inserir_pagamento(obra_id):
                     fornecedor=fornecedor
                 )
                 db.session.add(novo_lancamento)
+                db.session.flush()
+                
+                # NOVO: Vincular ao item do orçamento se fornecido
+                orcamento_item_id = dados.get('orcamento_item_id')
+                if orcamento_item_id:
+                    try:
+                        db.session.execute(db.text(
+                            f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_lancamento.id}"
+                        ))
+                    except Exception as e:
+                        print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                
                 db.session.commit()
-                print(f"   ✅ Lançamento criado: ID={novo_lancamento.id}")
+                print(f"   ✅ Lançamento criado: ID={novo_lancamento.id}, orcamento_item_id={orcamento_item_id}")
                 print(f"{'='*80}\n")
                 return jsonify(novo_lancamento.to_dict()), 201
     
