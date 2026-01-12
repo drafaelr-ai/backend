@@ -16073,16 +16073,13 @@ def autocomplete_servicos():
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/obras/<int:obra_id>/orcamento-eng/itens-lista', methods=['GET', 'OPTIONS'])
-@jwt_required(optional=True)
+@app.route('/obras/<int:obra_id>/orcamento-eng/itens-lista', methods=['GET'])
+@jwt_required()
 def listar_itens_orcamento_simplificado(obra_id):
     """
     Retorna lista simplificada de itens do orçamento para uso em dropdowns.
     Formato: [{ id, codigo, descricao, etapa_nome, total }]
     """
-    if request.method == 'OPTIONS':
-        return '', 200
-    
     try:
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
@@ -16139,6 +16136,46 @@ def obter_orcamento_eng(obra_id):
         # Buscar etapas com itens
         etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).order_by(OrcamentoEngEtapa.ordem, OrcamentoEngEtapa.codigo).all()
         
+        # NOVO: Calcular valores pagos por item baseado nos pagamentos vinculados
+        def calcular_pago_item(item_id):
+            """Calcula o total pago para um item do orçamento somando todos os pagamentos vinculados"""
+            total_pago = 0
+            
+            # 1. Lançamentos pagos vinculados ao item
+            lancamentos_pagos = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(valor_pago), 0) as total
+                FROM lancamento 
+                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(lancamentos_pagos)
+            
+            # 2. Pagamentos Futuros pagos vinculados ao item
+            pf_pagos = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(valor), 0) as total
+                FROM pagamento_futuro 
+                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(pf_pagos)
+            
+            # 3. Parcelas pagas de pagamentos parcelados vinculados ao item
+            parcelas_pagas = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(pi.valor_parcela), 0) as total
+                FROM parcela_individual pi
+                JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
+                WHERE pp.orcamento_item_id = {item_id} AND pi.status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(parcelas_pagas)
+            
+            # 4. Boletos pagos vinculados ao item
+            boletos_pagos = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(valor), 0) as total
+                FROM boleto 
+                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(boletos_pagos)
+            
+            return total_pago
+        
         # Calcular totais
         total_mo = 0
         total_mat = 0
@@ -16151,28 +16188,43 @@ def obter_orcamento_eng(obra_id):
         for etapa in etapas:
             etapa_mo = 0
             etapa_mat = 0
-            etapa_pago_mo = 0
-            etapa_pago_mat = 0
+            etapa_pago = 0
             
             itens_dict = []
             for item in etapa.itens:
                 totais = item.calcular_totais()
                 etapa_mo += totais['total_mao_obra']
                 etapa_mat += totais['total_material']
-                etapa_pago_mo += item.valor_pago_mo or 0
-                etapa_pago_mat += item.valor_pago_mat or 0
+                
+                # NOVO: Calcular valor pago dinamicamente
+                item_pago = calcular_pago_item(item.id)
+                etapa_pago += item_pago
+                
                 total_itens += 1
                 if item.servico_id:
                     itens_vinculados += 1
-                itens_dict.append(item.to_dict())
+                
+                # Montar dict do item com valor pago calculado
+                item_dict = item.to_dict()
+                item_dict['total_pago'] = item_pago
+                item_dict['percentual_executado'] = round((item_pago / totais['total'] * 100) if totais['total'] > 0 else 0, 1)
+                itens_dict.append(item_dict)
             
             total_mo += etapa_mo
             total_mat += etapa_mat
-            total_pago_mo += etapa_pago_mo
-            total_pago_mat += etapa_pago_mat
             
             etapa_total = etapa_mo + etapa_mat
-            etapa_pago = etapa_pago_mo + etapa_pago_mat
+            
+            # Calcular rateio do pago (proporcional ao orçamento)
+            if etapa_total > 0:
+                etapa_pago_mo = etapa_pago * (etapa_mo / etapa_total)
+                etapa_pago_mat = etapa_pago * (etapa_mat / etapa_total)
+            else:
+                etapa_pago_mo = 0
+                etapa_pago_mat = 0
+            
+            total_pago_mo += etapa_pago_mo
+            total_pago_mat += etapa_pago_mat
             
             etapas_dict.append({
                 **etapa.to_dict(include_itens=False),
