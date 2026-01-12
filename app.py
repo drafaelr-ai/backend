@@ -22,7 +22,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, KeepTogether
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from sqlalchemy.orm import joinedload 
 from datetime import datetime, date, timedelta
 # Imports de Autenticação
@@ -8064,17 +8065,21 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             
             data_resumo = [['Descrição', 'Fornecedor', 'PIX', 'Valor', 'Vencimento', 'Status']]
             
-            # Estilo para células com quebra de linha
-            cell_style = styles['Normal']
-            cell_style.fontSize = 8
-            cell_style.leading = 10
+            # Estilo para células com quebra de linha (criar novo estilo, não modificar o global)
+            cell_style_resumo = ParagraphStyle(
+                'CellStyleResumo',
+                parent=styles['Normal'],
+                fontSize=8,
+                leading=10,
+                alignment=TA_LEFT
+            )
             
             for pag in pagamentos_resumo:
                 # Usar Paragraph para permitir quebra de linha em todas as colunas de texto
-                descricao_para = Paragraph(pag['descricao'], cell_style)
-                fornecedor_para = Paragraph(pag['fornecedor'], cell_style)
-                pix_para = Paragraph(pag['pix'] if pag['pix'] != '-' else '-', cell_style)
-                status_para = Paragraph(pag['status'], cell_style)
+                descricao_para = Paragraph(pag['descricao'], cell_style_resumo)
+                fornecedor_para = Paragraph(pag['fornecedor'], cell_style_resumo)
+                pix_para = Paragraph(pag['pix'] if pag['pix'] != '-' else '-', cell_style_resumo)
+                status_para = Paragraph(pag['status'], cell_style_resumo)
                 
                 data_resumo.append([
                     descricao_para,  # Usar Paragraph para quebra automática
@@ -8272,6 +8277,22 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             boletos_vencidos = [b for b in boletos_obra if b.status == 'Vencido' or (b.status == 'Pendente' and b.data_vencimento < hoje)]
             boletos_pagos = [b for b in boletos_obra if b.status == 'Pago']
             
+            # Estilo para células com quebra de linha
+            cell_style = ParagraphStyle(
+                'CellStyle',
+                parent=styles['Normal'],
+                fontSize=8,
+                leading=10,
+                alignment=TA_LEFT
+            )
+            cell_style_center = ParagraphStyle(
+                'CellStyleCenter',
+                parent=styles['Normal'],
+                fontSize=8,
+                leading=10,
+                alignment=TA_CENTER
+            )
+            
             # Tabela de boletos pendentes
             if boletos_pendentes or boletos_vencidos:
                 data_boletos = [['Descrição', 'Beneficiário', 'Vencimento', 'Valor', 'Status', 'Código']]
@@ -8281,12 +8302,12 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 for boleto in boletos_vencidos:
                     codigo_truncado = ('...' + boleto.codigo_barras[-12:]) if boleto.codigo_barras and len(boleto.codigo_barras) > 12 else (boleto.codigo_barras or '-')
                     data_boletos.append([
-                        boleto.descricao[:30] + '...' if len(boleto.descricao) > 30 else boleto.descricao,
-                        (boleto.beneficiario[:20] + '...' if boleto.beneficiario and len(boleto.beneficiario) > 20 else boleto.beneficiario) or '-',
+                        Paragraph(boleto.descricao or '-', cell_style),
+                        Paragraph(boleto.beneficiario or '-', cell_style),
                         boleto.data_vencimento.strftime('%d/%m/%Y'),
                         formatar_real(boleto.valor),
                         'Vencido',
-                        codigo_truncado
+                        Paragraph(codigo_truncado, cell_style)
                     ])
                     row_colors_boletos.append(colors.HexColor('#ffcdd2'))  # Vermelho claro
                 
@@ -8304,16 +8325,16 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         cor = colors.whitesmoke if len(row_colors_boletos) % 2 == 0 else colors.white
                     
                     data_boletos.append([
-                        boleto.descricao[:30] + '...' if len(boleto.descricao) > 30 else boleto.descricao,
-                        (boleto.beneficiario[:20] + '...' if boleto.beneficiario and len(boleto.beneficiario) > 20 else boleto.beneficiario) or '-',
+                        Paragraph(boleto.descricao or '-', cell_style),
+                        Paragraph(boleto.beneficiario or '-', cell_style),
                         boleto.data_vencimento.strftime('%d/%m/%Y'),
                         formatar_real(boleto.valor),
                         f'{dias_para_vencer}d' if dias_para_vencer >= 0 else 'Vencido',
-                        codigo_truncado
+                        Paragraph(codigo_truncado, cell_style)
                     ])
                     row_colors_boletos.append(cor)
                 
-                table_boletos = Table(data_boletos, colWidths=[4*cm, 3*cm, 2.2*cm, 2.2*cm, 1.5*cm, 3*cm], repeatRows=1)
+                table_boletos = Table(data_boletos, colWidths=[4*cm, 3.5*cm, 2*cm, 2*cm, 1.3*cm, 3.2*cm], repeatRows=1)
                 
                 style_boletos = [
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#607d8b')),
