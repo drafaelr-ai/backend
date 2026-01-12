@@ -6640,6 +6640,18 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         # CASO 2: Pagamento SEM vínculo com serviço
         print(f"   📄 Criando lançamento no histórico (sem vínculo de serviço)")
         
+        # Buscar orcamento_item_id do PagamentoFuturo original
+        orcamento_item_id_original = None
+        try:
+            result = db.session.execute(db.text(
+                f"SELECT orcamento_item_id FROM pagamento_futuro WHERE id = {pagamento_id}"
+            )).fetchone()
+            if result and result[0]:
+                orcamento_item_id_original = result[0]
+                print(f"   📦 Item do orçamento vinculado: {orcamento_item_id_original}")
+        except Exception as e:
+            print(f"   ⚠️ Erro ao buscar orcamento_item_id: {e}")
+        
         # Criar Lançamento no Histórico
         novo_lancamento = Lancamento(
             obra_id=pagamento.obra_id,
@@ -6656,6 +6668,17 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
             servico_id=None
         )
         db.session.add(novo_lancamento)
+        db.session.flush()
+        
+        # NOVO: Copiar orcamento_item_id para o novo lançamento
+        if orcamento_item_id_original:
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id_original} WHERE id = {novo_lancamento.id}"
+                ))
+                print(f"   ✅ orcamento_item_id copiado para lançamento")
+            except Exception as e:
+                print(f"   ⚠️ Erro ao copiar orcamento_item_id: {e}")
         
         # DELETE o PagamentoFuturo
         db.session.delete(pagamento)
