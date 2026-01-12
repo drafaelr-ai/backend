@@ -2598,6 +2598,21 @@ def get_obra_detalhes(obra_id):
             if lanc.servico:
                 descricao = f"{descricao} (Serviço: {lanc.servico.nome})"
             
+            # Buscar orcamento_item_id de forma segura
+            orcamento_item_id = None
+            orcamento_item_nome = None
+            try:
+                result = db.session.execute(db.text(
+                    f"SELECT orcamento_item_id FROM lancamento WHERE id = {lanc.id}"
+                )).fetchone()
+                if result and result[0]:
+                    orcamento_item_id = result[0]
+                    item = OrcamentoEngItem.query.get(orcamento_item_id)
+                    if item:
+                        orcamento_item_nome = f"{item.codigo} - {item.descricao}"
+            except:
+                pass
+            
             historico_unificado.append({
                 "id": f"lanc-{lanc.id}", "tipo_registro": "lancamento", "data": lanc.data, 
                 "data_vencimento": lanc.data_vencimento,
@@ -2606,7 +2621,9 @@ def get_obra_detalhes(obra_id):
                 "valor_pago": float(lanc.valor_pago or 0.0), 
                 "status": lanc.status, "pix": lanc.pix, "lancamento_id": lanc.id,
                 "prioridade": lanc.prioridade,
-                "fornecedor": lanc.fornecedor 
+                "fornecedor": lanc.fornecedor,
+                "orcamento_item_id": orcamento_item_id,
+                "orcamento_item_nome": orcamento_item_nome
             })
         
         for serv in obra.servicos:
