@@ -16073,13 +16073,16 @@ def autocomplete_servicos():
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/obras/<int:obra_id>/orcamento-eng/itens-lista', methods=['GET'])
-@jwt_required()
+@app.route('/obras/<int:obra_id>/orcamento-eng/itens-lista', methods=['GET', 'OPTIONS'])
+@jwt_required(optional=True)
 def listar_itens_orcamento_simplificado(obra_id):
     """
     Retorna lista simplificada de itens do orçamento para uso em dropdowns.
     Formato: [{ id, codigo, descricao, etapa_nome, total }]
     """
+    if request.method == 'OPTIONS':
+        return '', 200
+    
     try:
         user = get_current_user()
         obra = Obra.query.get_or_404(obra_id)
