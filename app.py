@@ -8096,10 +8096,13 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff6f00')),  # Laranja escuro
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Alinhamento vertical no topo
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  # MIDDLE para melhor seleção de texto
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('TOPPADDING', (0, 1), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
                 ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#fff3e0')),  # Fundo laranja claro
@@ -8116,16 +8119,20 @@ def gerar_relatorio_cronograma_pdf(obra_id):
             
             data_futuros = [['Descrição', 'Fornecedor', 'Valor', 'Vencimento']]
             
-            # Estilo para células com quebra de linha
-            cell_style = styles['Normal']
-            cell_style.fontSize = 8
-            cell_style.leading = 10
+            # Estilo para células com quebra de linha (criar novo estilo)
+            cell_style_futuros = ParagraphStyle(
+                'CellStyleFuturos',
+                parent=styles['Normal'],
+                fontSize=8,
+                leading=10,
+                alignment=TA_LEFT
+            )
             
             # Adicionar pagamentos futuros (após 7 dias)
             for pag in pagamentos_futuros_normais:
                 # Usar Paragraph para permitir quebra de linha
-                descricao_para = Paragraph(pag['descricao'], cell_style)
-                fornecedor_para = Paragraph(pag['fornecedor'], cell_style)
+                descricao_para = Paragraph(pag['descricao'], cell_style_futuros)
+                fornecedor_para = Paragraph(pag['fornecedor'], cell_style_futuros)
                 
                 data_futuros.append([
                     descricao_para,  # Usar Paragraph para quebra automática
@@ -8140,10 +8147,13 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4a90e2')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),  # Alinhamento vertical no topo
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  # MIDDLE para melhor seleção de texto
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 10),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('TOPPADDING', (0, 1), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 4),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ('FONTSIZE', (0, 1), (-1, -1), 8),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white])
@@ -8250,9 +8260,13 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5cb85c')),
                         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  # MIDDLE para melhor seleção de texto
                         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                         ('FONTSIZE', (0, 0), (-1, 0), 9),
-                        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                        ('TOPPADDING', (0, 1), (-1, -1), 6),
+                        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
                         ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                         ('FONTSIZE', (0, 1), (-1, -1), 8),
                     ]
@@ -8340,10 +8354,14 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#607d8b')),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),  # MIDDLE para melhor seleção de texto
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('FONTSIZE', (0, 0), (-1, 0), 9),
                     ('FONTSIZE', (0, 1), (-1, -1), 8),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                    ('TOPPADDING', (0, 1), (-1, -1), 6),
+                    ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 4),
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
                 ]
                 
