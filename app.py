@@ -1,6 +1,6 @@
 # ============================================================================
 # VERSÃO CORRIGIDA - 18/NOV/2025 - SEM COLUNA SEGMENTO
-# Esta versão REMOVE a definição de coluna segmento dos modelos
+# Esta versãof REMOVE a definição de coluna segmento dos modelos
 # para evitar erro "column segmento does not exist"
 # ============================================================================
 import os
