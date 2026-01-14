@@ -11043,6 +11043,79 @@ def get_cronograma_obra(obra_id):
         return jsonify({'error': 'Erro ao buscar cronograma'}), 500
 
 
+# ==============================================================================
+# SINCRONIZAÇÃO AUTOMÁTICA: ORÇAMENTO → CRONOGRAMA DE OBRAS
+# ==============================================================================
+
+def sincronizar_etapa_orcamento_para_cronograma(etapa_id, obra_id):
+    """
+    Função auxiliar para sincronizar uma etapa do orçamento com o cronograma de obras.
+    Chamada automaticamente quando uma nova etapa é criada no orçamento.
+    """
+    try:
+        etapa = OrcamentoEngEtapa.query.get(etapa_id)
+        if not etapa:
+            print(f"[SYNC] Etapa {etapa_id} não encontrada")
+            return None
+        
+        # Verificar se já existe no cronograma (evitar duplicatas)
+        cronograma_existente = CronogramaObra.query.filter_by(obra_id=obra_id).all()
+        nomes_cronograma = [c.servico_nome.lower().strip() for c in cronograma_existente]
+        
+        if etapa.nome.lower().strip() in nomes_cronograma:
+            print(f"[SYNC] Etapa '{etapa.nome}' já existe no cronograma da obra {obra_id}")
+            return None
+        
+        # Calcular ordem e datas
+        max_ordem = db.session.query(db.func.max(CronogramaObra.ordem)).filter_by(obra_id=obra_id).scalar() or 0
+        data_inicio = date.today()
+        duracao_padrao = 30
+        data_fim = data_inicio + timedelta(days=duracao_padrao - 1)
+        
+        # Criar serviço no cronograma
+        novo_servico = CronogramaObra(
+            obra_id=obra_id,
+            servico_nome=etapa.nome,
+            ordem=max_ordem + 1,
+            data_inicio=data_inicio,
+            data_fim_prevista=data_fim,
+            tipo_medicao='etapas',
+            percentual_conclusao=0,
+            observacoes=f"Importado automaticamente do Orçamento - {etapa.codigo or 'N/A'}"
+        )
+        
+        db.session.add(novo_servico)
+        db.session.flush()
+        
+        # Tentar vincular ao orçamento
+        try:
+            db.session.execute(db.text(
+                f"UPDATE cronograma_obra SET orcamento_etapa_id = {etapa.id} WHERE id = {novo_servico.id}"
+            ))
+        except:
+            pass
+        
+        # Criar etapa pai no cronograma
+        etapa_cronograma = CronogramaEtapa(
+            cronograma_id=novo_servico.id,
+            nome=etapa.nome,
+            ordem=1,
+            duracao_dias=duracao_padrao,
+            data_inicio=data_inicio,
+            data_fim=data_fim,
+            percentual_conclusao=0,
+            observacoes=f"Código: {etapa.codigo or 'N/A'}"
+        )
+        db.session.add(etapa_cronograma)
+        
+        print(f"[SYNC] ✅ Etapa '{etapa.nome}' adicionada ao cronograma da obra {obra_id}")
+        return novo_servico
+        
+    except Exception as e:
+        print(f"[SYNC] ❌ Erro ao sincronizar etapa {etapa_id}: {str(e)}")
+        return None
+
+
 @app.route('/obras/<int:obra_id>/cronograma/exportar-pdf', methods=['GET'])
 @jwt_required()
 def exportar_cronograma_fisico_pdf(obra_id):
@@ -16407,6 +16480,7 @@ def obter_orcamento_eng(obra_id):
 def criar_etapa_orcamento(obra_id):
     """
     Cria uma nova etapa no orçamento de engenharia
+    ATUALIZADO: Sincroniza automaticamente com o cronograma de obras
     """
     try:
         user = get_current_user()
@@ -16440,9 +16514,21 @@ def criar_etapa_orcamento(obra_id):
         )
         
         db.session.add(etapa)
+        db.session.flush()  # Para obter o ID antes do commit
+        
+        # ========================================
+        # SINCRONIZAÇÃO AUTOMÁTICA COM CRONOGRAMA
+        # ========================================
+        cronograma_criado = sincronizar_etapa_orcamento_para_cronograma(etapa.id, obra_id)
+        
         db.session.commit()
         
-        return jsonify(etapa.to_dict()), 201
+        resultado = etapa.to_dict()
+        if cronograma_criado:
+            resultado['cronograma_sincronizado'] = True
+            resultado['cronograma_id'] = cronograma_criado.id
+        
+        return jsonify(resultado), 201
         
     except Exception as e:
         db.session.rollback()
