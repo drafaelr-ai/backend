@@ -6859,12 +6859,23 @@ def criar_pagamento_parcelado(obra_id):
         db.session.flush()  # Para obter o ID do pagamento
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
-        orcamento_item_id = data.get('orcamento_item_id')
+        orcamento_item_id_raw = data.get('orcamento_item_id')
+        print(f"--- [LOG] orcamento_item_id recebido: {orcamento_item_id_raw} (tipo: {type(orcamento_item_id_raw)}) ---")
+        
+        # Converter para int se for string válida
+        orcamento_item_id = None
+        if orcamento_item_id_raw:
+            try:
+                orcamento_item_id = int(orcamento_item_id_raw)
+            except (ValueError, TypeError):
+                print(f"[AVISO] orcamento_item_id inválido: {orcamento_item_id_raw}")
+        
         if orcamento_item_id:
             try:
                 db.session.execute(db.text(
                     f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_pagamento.id}"
                 ))
+                print(f"--- [LOG] orcamento_item_id {orcamento_item_id} salvo no pagamento {novo_pagamento.id} ---")
             except Exception as e:
                 print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
         
