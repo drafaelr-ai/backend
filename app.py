@@ -9181,6 +9181,19 @@ def inserir_pagamento(obra_id):
             db.session.add(novo_parcelado)
             db.session.flush()
             
+            # 🆕 Salvar orcamento_item_id via SQL direto (coluna pode não estar no model)
+            orcamento_item_id = dados.get('orcamento_item_id')
+            print(f"   🔗 orcamento_item_id recebido: {orcamento_item_id}")
+            if orcamento_item_id:
+                try:
+                    orcamento_item_id_int = int(orcamento_item_id)
+                    db.session.execute(db.text(
+                        f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id_int} WHERE id = {novo_parcelado.id}"
+                    ))
+                    print(f"   ✅ orcamento_item_id {orcamento_item_id_int} salvo no PagamentoParcelado {novo_parcelado.id}")
+                except Exception as e:
+                    print(f"   ⚠️ Erro ao salvar orcamento_item_id: {e}")
+            
             print(f"   ✅ PagamentoParcelado criado: ID={novo_parcelado.id}")
             
             # Gerar parcelas individuais
