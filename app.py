@@ -2646,18 +2646,22 @@ def get_obra_detalhes(obra_id):
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
         
-        # OTIMIZAÇÃO: Buscar parcelas pagas com serviço em uma única query
+        # OTIMIZAÇÃO: Buscar parcelas pagas com serviço OU vinculadas ao orçamento em uma única query
         parcelas_pagas_query = db.session.execute(db.text("""
             SELECT pi.id, pi.numero_parcela, pi.valor_parcela, pi.data_vencimento, pi.data_pagamento,
                    pp.id as pagamento_parcelado_id, pp.descricao, pp.numero_parcelas, pp.segmento, pp.fornecedor,
-                   pp.servico_id, s.nome as servico_nome
+                   pp.servico_id, s.nome as servico_nome,
+                   pp.orcamento_item_id,
+                   oei.codigo || ' - ' || oei.descricao as orcamento_item_nome
             FROM parcela_individual pi
             JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
             LEFT JOIN servico s ON pp.servico_id = s.id
-            WHERE pp.obra_id = :obra_id AND pi.status = 'Pago' AND pp.servico_id IS NOT NULL
+            LEFT JOIN orcamento_eng_item oei ON pp.orcamento_item_id = oei.id
+            WHERE pp.obra_id = :obra_id AND pi.status = 'Pago' 
+            AND (pp.servico_id IS NOT NULL OR pp.orcamento_item_id IS NOT NULL)
         """), {"obra_id": obra_id}).fetchall()
         
-        print(f"--- [DEBUG] Parcelas pagas COM serviço encontradas: {len(parcelas_pagas_query)} ---")
+        print(f"--- [DEBUG] Parcelas pagas COM serviço ou orcamento_item encontradas: {len(parcelas_pagas_query)} ---")
         
         for parcela in parcelas_pagas_query:
             historico_unificado.append({
@@ -2673,6 +2677,8 @@ def get_obra_detalhes(obra_id):
                 "pix": None,
                 "servico_id": parcela.servico_id,
                 "servico_nome": parcela.servico_nome,
+                "orcamento_item_id": parcela.orcamento_item_id,
+                "orcamento_item_nome": parcela.orcamento_item_nome,
                 "pagamento_parcelado_id": parcela.pagamento_parcelado_id,
                 "parcela_id": parcela.id,
                 "prioridade": 0,
