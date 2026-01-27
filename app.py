@@ -1872,16 +1872,20 @@ class OrcamentoEngItem(db.Model):
         """Calcula totais do item baseado no tipo de composição"""
         if self.tipo_composicao == 'composto':
             total = (self.preco_unitario or 0) * (self.quantidade or 0)
-            total_mo = total * (self.rateio_mo or 50) / 100
-            total_mat = total * (self.rateio_mat or 50) / 100
+            # Composto: NÃO rateia entre MO e Material, vai para "Serviço"
+            total_mo = 0
+            total_mat = 0
+            total_servico = total
         else:
             total_mo = (self.preco_mao_obra or 0) * (self.quantidade or 0)
             total_mat = (self.preco_material or 0) * (self.quantidade or 0)
+            total_servico = 0
             total = total_mo + total_mat
         
         return {
             'total_mao_obra': total_mo,
             'total_material': total_mat,
+            'total_servico': total_servico,
             'total': total
         }
     
@@ -1909,6 +1913,7 @@ class OrcamentoEngItem(db.Model):
             'valor_pago_mat': self.valor_pago_mat or 0,
             'total_mao_obra': totais['total_mao_obra'],
             'total_material': totais['total_material'],
+            'total_servico': totais['total_servico'],
             'total': totais['total'],
             'total_pago': total_pago,
             'percentual_executado': round(percentual, 1),
@@ -16412,8 +16417,10 @@ def obter_orcamento_eng(obra_id):
         # Calcular totais
         total_mo = 0
         total_mat = 0
+        total_servico = 0  # NOVO: Total de serviços compostos
         total_pago_mo = 0
         total_pago_mat = 0
+        total_pago_servico = 0  # NOVO
         total_itens = 0
         itens_vinculados = 0
         
@@ -16421,6 +16428,7 @@ def obter_orcamento_eng(obra_id):
         for etapa in etapas:
             etapa_mo = 0
             etapa_mat = 0
+            etapa_servico = 0  # NOVO
             etapa_pago = 0
             
             itens_dict = []
@@ -16428,6 +16436,7 @@ def obter_orcamento_eng(obra_id):
                 totais = item.calcular_totais()
                 etapa_mo += totais['total_mao_obra']
                 etapa_mat += totais['total_material']
+                etapa_servico += totais.get('total_servico', 0)  # NOVO
                 
                 # NOVO: Calcular valor pago dinamicamente
                 item_pago = calcular_pago_item(item.id)
@@ -16445,34 +16454,40 @@ def obter_orcamento_eng(obra_id):
             
             total_mo += etapa_mo
             total_mat += etapa_mat
+            total_servico += etapa_servico  # NOVO
             
-            etapa_total = etapa_mo + etapa_mat
+            etapa_total = etapa_mo + etapa_mat + etapa_servico  # MODIFICADO: incluir serviço
             
             # Calcular rateio do pago (proporcional ao orçamento)
             if etapa_total > 0:
-                etapa_pago_mo = etapa_pago * (etapa_mo / etapa_total)
-                etapa_pago_mat = etapa_pago * (etapa_mat / etapa_total)
+                etapa_pago_mo = etapa_pago * (etapa_mo / etapa_total) if etapa_mo > 0 else 0
+                etapa_pago_mat = etapa_pago * (etapa_mat / etapa_total) if etapa_mat > 0 else 0
+                etapa_pago_servico = etapa_pago * (etapa_servico / etapa_total) if etapa_servico > 0 else 0
             else:
                 etapa_pago_mo = 0
                 etapa_pago_mat = 0
+                etapa_pago_servico = 0
             
             total_pago_mo += etapa_pago_mo
             total_pago_mat += etapa_pago_mat
+            total_pago_servico += etapa_pago_servico  # NOVO
             
             etapas_dict.append({
                 **etapa.to_dict(include_itens=False),
                 'itens': itens_dict,
                 'total_mao_obra': etapa_mo,
                 'total_material': etapa_mat,
+                'total_servico': etapa_servico,  # NOVO
                 'total': etapa_total,
                 'total_pago_mo': etapa_pago_mo,
                 'total_pago_mat': etapa_pago_mat,
+                'total_pago_servico': etapa_pago_servico,  # NOVO
                 'total_pago': etapa_pago,
                 'percentual': round((etapa_pago / etapa_total * 100) if etapa_total > 0 else 0, 1)
             })
         
-        subtotal = total_mo + total_mat
-        total_pago = total_pago_mo + total_pago_mat
+        subtotal = total_mo + total_mat + total_servico  # MODIFICADO: incluir serviço
+        total_pago = total_pago_mo + total_pago_mat + total_pago_servico  # MODIFICADO
         bdi = obra.bdi if hasattr(obra, 'bdi') else 0
         valor_bdi = subtotal * (bdi / 100) if bdi else 0
         total_geral = subtotal + valor_bdi
@@ -16484,12 +16499,14 @@ def obter_orcamento_eng(obra_id):
             'resumo': {
                 'total_mao_obra': total_mo,
                 'total_material': total_mat,
+                'total_servico': total_servico,  # NOVO
                 'subtotal': subtotal,
                 'bdi': bdi,
                 'valor_bdi': valor_bdi,
                 'total_geral': total_geral,
                 'total_pago_mo': total_pago_mo,
                 'total_pago_mat': total_pago_mat,
+                'total_pago_servico': total_pago_servico,  # NOVO
                 'total_pago': total_pago,
                 'percentual_executado': round((total_pago / subtotal * 100) if subtotal > 0 else 0, 1),
                 'total_etapas': len(etapas),
