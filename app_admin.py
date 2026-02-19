@@ -271,8 +271,10 @@ def criar_categorias_padrao():
         {'nome': 'Manutenção', 'tipo': 'despesa', 'icone': '🔧', 'cor': '#64748b', 'ordem': 8},
         {'nome': 'Limpeza', 'tipo': 'despesa', 'icone': '🧹', 'cor': '#10b981', 'ordem': 9},
         {'nome': 'Jardinagem', 'tipo': 'despesa', 'icone': '🌳', 'cor': '#22c55e', 'ordem': 10},
-        {'nome': 'Taxa Extra', 'tipo': 'despesa', 'icone': '📋', 'cor': '#a855f7', 'ordem': 11},
-        {'nome': 'Reforma', 'tipo': 'despesa', 'icone': '🏗️', 'cor': '#ec4899', 'ordem': 12},
+        {'nome': 'Empregados', 'tipo': 'despesa', 'icone': '👷', 'cor': '#0ea5e9', 'ordem': 11},
+        {'nome': 'Diarista', 'tipo': 'despesa', 'icone': '🧽', 'cor': '#14b8a6', 'ordem': 12},
+        {'nome': 'Taxa Extra', 'tipo': 'despesa', 'icone': '📋', 'cor': '#a855f7', 'ordem': 13},
+        {'nome': 'Reforma', 'tipo': 'despesa', 'icone': '🏗️', 'cor': '#ec4899', 'ordem': 14},
         {'nome': 'Outras Despesas', 'tipo': 'despesa', 'icone': '📦', 'cor': '#6b7280', 'ordem': 99},
         
         # Receitas
@@ -439,6 +441,177 @@ def register():
         print(f"[ADMIN] Erro no registro: {e}")
         traceback.print_exc()
         return jsonify({'erro': 'Erro interno no servidor'}), 500
+
+
+# ===================================================================================
+# ROTAS - GERENCIAMENTO DE USUÁRIOS (Admin Only)
+# ===================================================================================
+
+@app.route('/usuarios', methods=['GET'])
+@jwt_required()
+def listar_usuarios():
+    """Lista todos os usuários (apenas admin)"""
+    user = get_current_user()
+    if not user or user.role != 'admin':
+        return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
+    
+    usuarios = Usuario.query.filter_by(ativo=True).order_by(Usuario.nome).all()
+    return jsonify([u.to_dict() for u in usuarios])
+
+
+@app.route('/usuarios', methods=['POST'])
+@jwt_required()
+def criar_usuario():
+    """Cria um novo usuário (apenas admin)"""
+    user = get_current_user()
+    if not user or user.role != 'admin':
+        return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
+    
+    try:
+        dados = request.get_json()
+        
+        username = dados.get('username', '').strip()
+        password = dados.get('password', '')
+        nome = dados.get('nome', '').strip()
+        email = dados.get('email', '').strip() or None
+        role = dados.get('role', 'operador')
+        
+        if not username or not password or not nome:
+            return jsonify({'erro': 'Username, senha e nome são obrigatórios'}), 400
+        
+        if len(password) < 6:
+            return jsonify({'erro': 'Senha deve ter pelo menos 6 caracteres'}), 400
+        
+        if role not in ['admin', 'operador']:
+            return jsonify({'erro': 'Role inválido. Use: admin ou operador'}), 400
+        
+        if Usuario.query.filter_by(username=username).first():
+            return jsonify({'erro': 'Username já está em uso'}), 400
+        
+        if email and Usuario.query.filter_by(email=email).first():
+            return jsonify({'erro': 'Email já está em uso'}), 400
+        
+        usuario = Usuario(
+            username=username,
+            nome=nome,
+            email=email,
+            role=role
+        )
+        usuario.set_password(password)
+        
+        db.session.add(usuario)
+        db.session.commit()
+        
+        print(f"--- [ADMIN] Usuário criado por {user.username}: {username} ({role}) ---")
+        
+        return jsonify({
+            'message': 'Usuário criado com sucesso',
+            'user': usuario.to_dict()
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ADMIN] Erro ao criar usuário: {e}")
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/usuarios/<int:usuario_id>', methods=['PUT'])
+@jwt_required()
+def atualizar_usuario(usuario_id):
+    """Atualiza um usuário (apenas admin)"""
+    user = get_current_user()
+    if not user or user.role != 'admin':
+        return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
+    
+    usuario = Usuario.query.get_or_404(usuario_id)
+    
+    try:
+        dados = request.get_json()
+        
+        if dados.get('nome'):
+            usuario.nome = dados['nome'].strip()
+        
+        if dados.get('email'):
+            # Verificar se email já existe em outro usuário
+            existing = Usuario.query.filter(Usuario.email == dados['email'], Usuario.id != usuario_id).first()
+            if existing:
+                return jsonify({'erro': 'Email já está em uso'}), 400
+            usuario.email = dados['email'].strip()
+        
+        if dados.get('role') and dados['role'] in ['admin', 'operador']:
+            usuario.role = dados['role']
+        
+        if dados.get('password') and len(dados['password']) >= 6:
+            usuario.set_password(dados['password'])
+        
+        if 'ativo' in dados:
+            usuario.ativo = dados['ativo']
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Usuário atualizado com sucesso',
+            'user': usuario.to_dict()
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/usuarios/<int:usuario_id>', methods=['DELETE'])
+@jwt_required()
+def deletar_usuario(usuario_id):
+    """Desativa um usuário (apenas admin)"""
+    user = get_current_user()
+    if not user or user.role != 'admin':
+        return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
+    
+    if user.id == usuario_id:
+        return jsonify({'erro': 'Você não pode desativar seu próprio usuário'}), 400
+    
+    usuario = Usuario.query.get_or_404(usuario_id)
+    
+    try:
+        usuario.ativo = False
+        db.session.commit()
+        
+        print(f"--- [ADMIN] Usuário desativado: {usuario.username} ---")
+        
+        return jsonify({'message': 'Usuário desativado com sucesso'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/usuarios/<int:usuario_id>/reset-senha', methods=['POST'])
+@jwt_required()
+def reset_senha_usuario(usuario_id):
+    """Reseta a senha de um usuário (apenas admin)"""
+    user = get_current_user()
+    if not user or user.role != 'admin':
+        return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
+    
+    usuario = Usuario.query.get_or_404(usuario_id)
+    
+    try:
+        dados = request.get_json()
+        nova_senha = dados.get('nova_senha', '')
+        
+        if len(nova_senha) < 6:
+            return jsonify({'erro': 'Nova senha deve ter pelo menos 6 caracteres'}), 400
+        
+        usuario.set_password(nova_senha)
+        db.session.commit()
+        
+        print(f"--- [ADMIN] Senha resetada para usuário: {usuario.username} ---")
+        
+        return jsonify({'message': 'Senha alterada com sucesso'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'erro': str(e)}), 500
 
 
 @app.route('/me', methods=['GET'])
@@ -691,31 +864,167 @@ def criar_lancamento():
         if user.role != 'admin' and imovel.usuario_id != user.id:
             return jsonify({'erro': 'Acesso negado ao imóvel'}), 403
         
-        lancamento = Lancamento(
-            imovel_id=dados.get('imovel_id'),
-            categoria_id=dados.get('categoria_id'),
-            descricao=dados.get('descricao'),
-            valor=float(dados.get('valor', 0)),
-            tipo=dados.get('tipo', 'despesa'),
-            data_lancamento=date.fromisoformat(dados.get('data_lancamento', date.today().isoformat())),
-            data_vencimento=date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None,
-            data_pagamento=date.fromisoformat(dados['data_pagamento']) if dados.get('data_pagamento') else None,
-            status=dados.get('status', 'pendente'),
-            recorrente=dados.get('recorrente', False),
-            recorrencia_meses=int(dados.get('recorrencia_meses', 1)),
-            observacoes=dados.get('observacoes')
-        )
+        # Dados do lançamento
+        data_lanc = date.fromisoformat(dados.get('data_lancamento', date.today().isoformat()))
+        data_venc = date.fromisoformat(dados['data_vencimento']) if dados.get('data_vencimento') else None
+        recorrente = dados.get('recorrente', False)
+        recorrencia_meses = int(dados.get('recorrencia_meses', 1))
+        qtd_parcelas = int(dados.get('qtd_parcelas', 1)) if recorrente else 1
         
-        db.session.add(lancamento)
+        lancamentos_criados = []
+        
+        # Criar lançamento(s)
+        for i in range(qtd_parcelas):
+            # Calcular datas para cada parcela
+            if i > 0:
+                # Adicionar meses para parcelas subsequentes
+                mes_offset = i * recorrencia_meses
+                ano_offset = mes_offset // 12
+                mes_novo = data_lanc.month + (mes_offset % 12)
+                if mes_novo > 12:
+                    mes_novo -= 12
+                    ano_offset += 1
+                try:
+                    data_lanc_parcela = data_lanc.replace(
+                        year=data_lanc.year + ano_offset,
+                        month=mes_novo
+                    )
+                except ValueError:
+                    # Último dia do mês se o dia não existir
+                    import calendar
+                    ultimo_dia = calendar.monthrange(data_lanc.year + ano_offset, mes_novo)[1]
+                    data_lanc_parcela = data_lanc.replace(
+                        year=data_lanc.year + ano_offset,
+                        month=mes_novo,
+                        day=min(data_lanc.day, ultimo_dia)
+                    )
+                
+                # Mesma lógica para data de vencimento
+                if data_venc:
+                    try:
+                        data_venc_parcela = data_venc.replace(
+                            year=data_venc.year + ano_offset,
+                            month=mes_novo
+                        )
+                    except ValueError:
+                        import calendar
+                        ultimo_dia = calendar.monthrange(data_venc.year + ano_offset, mes_novo)[1]
+                        data_venc_parcela = data_venc.replace(
+                            year=data_venc.year + ano_offset,
+                            month=mes_novo,
+                            day=min(data_venc.day, ultimo_dia)
+                        )
+                else:
+                    data_venc_parcela = None
+            else:
+                data_lanc_parcela = data_lanc
+                data_venc_parcela = data_venc
+            
+            # Descrição com número da parcela se recorrente
+            descricao = dados.get('descricao')
+            if recorrente and qtd_parcelas > 1:
+                descricao = f"{descricao} ({i+1}/{qtd_parcelas})"
+            
+            lancamento = Lancamento(
+                imovel_id=dados.get('imovel_id'),
+                categoria_id=dados.get('categoria_id'),
+                descricao=descricao,
+                valor=float(dados.get('valor', 0)),
+                tipo=dados.get('tipo', 'despesa'),
+                data_lancamento=data_lanc_parcela,
+                data_vencimento=data_venc_parcela,
+                data_pagamento=date.fromisoformat(dados['data_pagamento']) if dados.get('data_pagamento') and i == 0 else None,
+                status=dados.get('status', 'pendente') if i == 0 else 'pendente',
+                recorrente=recorrente,
+                recorrencia_meses=recorrencia_meses,
+                observacoes=dados.get('observacoes')
+            )
+            
+            db.session.add(lancamento)
+            lancamentos_criados.append(lancamento)
+        
         db.session.commit()
         
-        print(f"--- [ADMIN] Lançamento criado: {lancamento.descricao} - R$ {lancamento.valor} ({lancamento.tipo}) ---")
+        print(f"--- [ADMIN] {len(lancamentos_criados)} lançamento(s) criado(s): {dados.get('descricao')} ---")
         
-        return jsonify(lancamento.to_dict()), 201
+        if len(lancamentos_criados) == 1:
+            return jsonify(lancamentos_criados[0].to_dict()), 201
+        else:
+            return jsonify({
+                'message': f'{len(lancamentos_criados)} lançamentos criados',
+                'lancamentos': [l.to_dict() for l in lancamentos_criados]
+            }), 201
         
     except Exception as e:
         db.session.rollback()
         print(f"[ADMIN] Erro ao criar lançamento: {e}")
+        traceback.print_exc()
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/alertas-vencimento', methods=['GET'])
+@jwt_required()
+def alertas_vencimento():
+    """Retorna lançamentos próximos do vencimento ou vencidos"""
+    user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
+    
+    try:
+        dias_alerta = request.args.get('dias', type=int, default=7)  # Alertar X dias antes
+        
+        hoje = date.today()
+        data_limite = hoje + timedelta(days=dias_alerta)
+        
+        # Query base de imóveis do usuário
+        if user.role == 'admin':
+            imoveis_ids = [i.id for i in Imovel.query.filter_by(ativo=True).all()]
+        else:
+            imoveis_ids = [i.id for i in Imovel.query.filter_by(usuario_id=user.id, ativo=True).all()]
+        
+        # Buscar lançamentos pendentes com vencimento
+        lancamentos = Lancamento.query.filter(
+            Lancamento.imovel_id.in_(imoveis_ids),
+            Lancamento.status == 'pendente',
+            Lancamento.data_vencimento.isnot(None),
+            Lancamento.data_vencimento <= data_limite
+        ).order_by(Lancamento.data_vencimento.asc()).all()
+        
+        # Separar em vencidos e a vencer
+        vencidos = []
+        a_vencer = []
+        
+        for lanc in lancamentos:
+            lanc_dict = lanc.to_dict()
+            dias_para_vencer = (lanc.data_vencimento - hoje).days
+            lanc_dict['dias_para_vencer'] = dias_para_vencer
+            
+            if dias_para_vencer < 0:
+                lanc_dict['status_alerta'] = 'vencido'
+                lanc_dict['dias_vencido'] = abs(dias_para_vencer)
+                vencidos.append(lanc_dict)
+            else:
+                lanc_dict['status_alerta'] = 'a_vencer'
+                a_vencer.append(lanc_dict)
+        
+        # Totais
+        total_vencido = sum(l['valor'] for l in vencidos)
+        total_a_vencer = sum(l['valor'] for l in a_vencer)
+        
+        return jsonify({
+            'vencidos': vencidos,
+            'a_vencer': a_vencer,
+            'resumo': {
+                'qtd_vencidos': len(vencidos),
+                'qtd_a_vencer': len(a_vencer),
+                'total_vencido': total_vencido,
+                'total_a_vencer': total_a_vencer,
+                'total_geral': total_vencido + total_a_vencer
+            }
+        })
+        
+    except Exception as e:
+        print(f"[ADMIN] Erro ao buscar alertas: {e}")
         traceback.print_exc()
         return jsonify({'erro': str(e)}), 500
 
@@ -782,7 +1091,7 @@ def deletar_lancamento(lancamento_id):
 @app.route('/lancamentos/<int:lancamento_id>/pagar', methods=['POST'])
 @jwt_required()
 def marcar_pago(lancamento_id):
-    """Marca um lançamento como pago"""
+    """Marca um lançamento como pago, opcionalmente com comprovante"""
     user = get_current_user()
     lancamento = Lancamento.query.get_or_404(lancamento_id)
     
@@ -796,9 +1105,76 @@ def marcar_pago(lancamento_id):
         lancamento.status = 'pago'
         lancamento.data_pagamento = date.fromisoformat(dados.get('data_pagamento', date.today().isoformat()))
         
+        # Se veio URL do comprovante, salvar
+        if dados.get('comprovante_url'):
+            lancamento.comprovante_url = dados.get('comprovante_url')
+        
         db.session.commit()
         
         return jsonify(lancamento.to_dict())
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/lancamentos/<int:lancamento_id>/comprovante', methods=['POST'])
+@jwt_required()
+def upload_comprovante(lancamento_id):
+    """Upload de comprovante de pagamento (base64)"""
+    user = get_current_user()
+    lancamento = Lancamento.query.get_or_404(lancamento_id)
+    
+    # Verificar permissão
+    if user.role != 'admin' and lancamento.imovel.usuario_id != user.id:
+        return jsonify({'erro': 'Acesso negado'}), 403
+    
+    try:
+        dados = request.get_json()
+        
+        if not dados.get('comprovante_base64'):
+            return jsonify({'erro': 'Comprovante não enviado'}), 400
+        
+        # Salvar como data URL (base64) - em produção seria melhor usar S3/Cloudinary
+        # Formato: data:image/jpeg;base64,/9j/4AAQ...
+        comprovante_base64 = dados.get('comprovante_base64')
+        
+        # Validar tamanho (máximo ~5MB em base64)
+        if len(comprovante_base64) > 7000000:
+            return jsonify({'erro': 'Arquivo muito grande. Máximo 5MB.'}), 400
+        
+        lancamento.comprovante_url = comprovante_base64
+        db.session.commit()
+        
+        print(f"--- [ADMIN] Comprovante salvo para lançamento {lancamento_id} ---")
+        
+        return jsonify({
+            'message': 'Comprovante salvo com sucesso',
+            'lancamento': lancamento.to_dict()
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ADMIN] Erro ao salvar comprovante: {e}")
+        return jsonify({'erro': str(e)}), 500
+
+
+@app.route('/lancamentos/<int:lancamento_id>/comprovante', methods=['DELETE'])
+@jwt_required()
+def remover_comprovante(lancamento_id):
+    """Remove o comprovante de um lançamento"""
+    user = get_current_user()
+    lancamento = Lancamento.query.get_or_404(lancamento_id)
+    
+    # Verificar permissão
+    if user.role != 'admin' and lancamento.imovel.usuario_id != user.id:
+        return jsonify({'erro': 'Acesso negado'}), 403
+    
+    try:
+        lancamento.comprovante_url = None
+        db.session.commit()
+        
+        return jsonify({'message': 'Comprovante removido com sucesso'})
         
     except Exception as e:
         db.session.rollback()
@@ -887,6 +1263,32 @@ def dashboard():
             Lancamento.imovel_id.in_(imoveis_ids)
         ).order_by(Lancamento.created_at.desc()).limit(10).all()
         
+        # Alertas de vencimento (próximos 7 dias + vencidos)
+        hoje = date.today()
+        data_limite = hoje + timedelta(days=7)
+        
+        lancamentos_alerta = Lancamento.query.filter(
+            Lancamento.imovel_id.in_(imoveis_ids),
+            Lancamento.status == 'pendente',
+            Lancamento.data_vencimento.isnot(None),
+            Lancamento.data_vencimento <= data_limite
+        ).order_by(Lancamento.data_vencimento.asc()).all()
+        
+        alertas_vencidos = []
+        alertas_a_vencer = []
+        
+        for lanc in lancamentos_alerta:
+            lanc_dict = lanc.to_dict()
+            dias = (lanc.data_vencimento - hoje).days
+            lanc_dict['dias_para_vencer'] = dias
+            
+            if dias < 0:
+                lanc_dict['status_alerta'] = 'vencido'
+                alertas_vencidos.append(lanc_dict)
+            else:
+                lanc_dict['status_alerta'] = 'a_vencer'
+                alertas_a_vencer.append(lanc_dict)
+        
         return jsonify({
             'periodo': {'mes': mes, 'ano': ano},
             'resumo': {
@@ -895,6 +1297,12 @@ def dashboard():
                 'receitas_mes': float(receitas_mes),
                 'saldo_mes': float(receitas_mes - despesas_mes),
                 'pendentes': float(pendentes)
+            },
+            'alertas': {
+                'vencidos': alertas_vencidos,
+                'a_vencer': alertas_a_vencer,
+                'total_vencido': sum(l['valor'] for l in alertas_vencidos),
+                'total_a_vencer': sum(l['valor'] for l in alertas_a_vencer)
             },
             'despesas_por_categoria': [
                 {'nome': d.nome, 'icone': d.icone, 'cor': d.cor, 'total': float(d.total)}
