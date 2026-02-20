@@ -6454,6 +6454,72 @@ def criar_pagamento_futuro(obra_id):
         pix_value = data.get('pix')
         print(f"--- [DEBUG] Campo PIX recebido: '{pix_value}' (tipo: {type(pix_value)}) ---")
         
+        # Obter servico_id e tipo do payload
+        servico_id = data.get('servico_id')
+        tipo = data.get('tipo')  # 'Mão de Obra', 'Material', ou 'Despesa'
+        status = data.get('status', 'Previsto')
+        
+        print(f"--- [DEBUG] servico_id: {servico_id}, tipo: {tipo}, status: {status} ---")
+        
+        # ===== CASO 1: Status='Pago' e tem servico_id → Criar PagamentoServico diretamente =====
+        if status == 'Pago' and servico_id:
+            servico = db.session.get(Servico, servico_id)
+            if servico:
+                print(f"--- [DEBUG] Pagamento já PAGO com serviço vinculado, criando PagamentoServico ---")
+                
+                # Determinar tipo_pagamento
+                if tipo == 'Mão de Obra':
+                    tipo_pagamento = 'mao_de_obra'
+                elif tipo == 'Material':
+                    tipo_pagamento = 'material'
+                else:
+                    tipo_pagamento = 'material'  # default
+                
+                # Criar PagamentoServico
+                novo_pag_servico = PagamentoServico(
+                    servico_id=servico_id,
+                    tipo_pagamento=tipo_pagamento,
+                    valor_total=float(data.get('valor', 0)),
+                    valor_pago=float(data.get('valor', 0)),
+                    data=date.today(),
+                    data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
+                    status='Pago',
+                    prioridade=0,
+                    fornecedor=data.get('fornecedor'),
+                    pix=pix_value
+                )
+                db.session.add(novo_pag_servico)
+                db.session.flush()
+                
+                print(f"--- [DEBUG] PagamentoServico criado com ID={novo_pag_servico.id}, tipo_pagamento={tipo_pagamento} ---")
+                
+                # Recalcular percentual do serviço
+                pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+                pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
+                pagamentos_material = [p for p in pagamentos_serv if p.tipo_pagamento == 'material']
+                
+                if servico.valor_global_mao_de_obra > 0:
+                    total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                    servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+                    print(f"--- [DEBUG] Percentual MO atualizado: {servico.percentual_conclusao_mao_obra:.1f}% ---")
+                
+                if servico.valor_global_material > 0:
+                    total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                    servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                    print(f"--- [DEBUG] Percentual Material atualizado: {servico.percentual_conclusao_material:.1f}% ---")
+                
+                db.session.commit()
+                print(f"--- [LOG] ✅ Pagamento PAGO criado como PagamentoServico ID={novo_pag_servico.id} vinculado ao serviço '{servico.nome}' ---")
+                
+                return jsonify({
+                    "mensagem": f"Pagamento criado e vinculado ao serviço '{servico.nome}'",
+                    "pagamento_servico_id": novo_pag_servico.id,
+                    "tipo_pagamento": tipo_pagamento,
+                    "percentual_mo": servico.percentual_conclusao_mao_obra,
+                    "percentual_material": servico.percentual_conclusao_material
+                }), 201
+        
+        # ===== CASO 2: Criar PagamentoFuturo normalmente =====
         novo_pagamento = PagamentoFuturo(
             obra_id=obra_id,
             descricao=data.get('descricao'),
@@ -6462,10 +6528,12 @@ def criar_pagamento_futuro(obra_id):
             fornecedor=data.get('fornecedor'),
             pix=pix_value,
             observacoes=data.get('observacoes'),
-            status='Previsto'
+            status=status,
+            servico_id=servico_id if servico_id else None,
+            tipo=tipo if tipo else None
         )
         
-        print(f"--- [DEBUG] Objeto criado, tentando adicionar ao banco... ---")
+        print(f"--- [DEBUG] Objeto PagamentoFuturo criado, tentando adicionar ao banco... ---")
         db.session.add(novo_pagamento)
         db.session.flush()  # Flush para obter o ID antes do commit
         print(f"--- [DEBUG] Flush OK, ID atribuído: {novo_pagamento.id} ---")
@@ -6487,11 +6555,11 @@ def criar_pagamento_futuro(obra_id):
         verificacao = PagamentoFuturo.query.get(novo_pagamento.id)
         if verificacao:
             print(f"--- [DEBUG] ✅ VERIFICAÇÃO: PagamentoFuturo ID {verificacao.id} encontrado no banco ---")
-            print(f"--- [DEBUG] ✅ Descrição: {verificacao.descricao}, Valor: {verificacao.valor}, Data: {verificacao.data_vencimento} ---")
+            print(f"--- [DEBUG] ✅ Descrição: {verificacao.descricao}, Valor: {verificacao.valor}, Tipo: {verificacao.tipo}, Serviço: {verificacao.servico_id} ---")
         else:
             print(f"--- [DEBUG] ❌ ERRO: PagamentoFuturo NÃO encontrado após commit! ---")
         
-        print(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com PIX: {novo_pagamento.pix} ---")
+        print(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com Tipo: {tipo}, Serviço: {servico_id} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
@@ -6538,6 +6606,14 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             pagamento.observacoes = data['observacoes']
         if 'status' in data:
             pagamento.status = data['status']
+        
+        # CORRIGIDO: Atualizar tipo e servico_id
+        if 'tipo' in data:
+            pagamento.tipo = data['tipo']
+            print(f"--- [DEBUG] Tipo atualizado: {data['tipo']} ---")
+        if 'servico_id' in data:
+            pagamento.servico_id = data['servico_id'] if data['servico_id'] else None
+            print(f"--- [DEBUG] Serviço ID atualizado: {data['servico_id']} ---")
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
         if 'orcamento_item_id' in data:
