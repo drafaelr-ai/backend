@@ -6662,6 +6662,252 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
         print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
+
+# ===================================================================================
+# ROTAS DE CORREÇÃO DE PAGAMENTOS - Para corrigir tipo_pagamento em PagamentoServico
+# ===================================================================================
+
+@app.route('/sid/obras/<int:obra_id>/diagnostico-pagamentos', methods=['GET'])
+@jwt_required()
+def diagnostico_pagamentos(obra_id):
+    """
+    Diagnóstico de pagamentos - Lista todos os PagamentoServico da obra
+    mostrando o tipo_pagamento atual para identificar os que precisam correção
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        # Buscar todos os serviços da obra
+        servicos = Servico.query.filter_by(obra_id=obra_id).all()
+        
+        resultado = []
+        total_pagamentos = 0
+        pagamentos_mao_obra = 0
+        pagamentos_material = 0
+        pagamentos_indefinido = 0
+        
+        for servico in servicos:
+            pagamentos = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+            
+            pagamentos_servico = []
+            for pag in pagamentos:
+                total_pagamentos += 1
+                
+                if pag.tipo_pagamento == 'mao_de_obra':
+                    pagamentos_mao_obra += 1
+                elif pag.tipo_pagamento == 'material':
+                    pagamentos_material += 1
+                else:
+                    pagamentos_indefinido += 1
+                
+                pagamentos_servico.append({
+                    'id': pag.id,
+                    'valor_pago': pag.valor_pago,
+                    'tipo_pagamento': pag.tipo_pagamento,
+                    'data': pag.data.isoformat() if pag.data else None,
+                    'fornecedor': pag.fornecedor,
+                    'status': pag.status
+                })
+            
+            if pagamentos_servico:
+                resultado.append({
+                    'servico_id': servico.id,
+                    'servico_nome': servico.nome,
+                    'servico_codigo': servico.codigo,
+                    'valor_mao_obra_orcado': servico.valor_global_mao_de_obra,
+                    'valor_material_orcado': servico.valor_global_material,
+                    'percentual_mao_obra': servico.percentual_conclusao_mao_obra,
+                    'percentual_material': servico.percentual_conclusao_material,
+                    'pagamentos': pagamentos_servico
+                })
+        
+        return jsonify({
+            'obra_id': obra_id,
+            'resumo': {
+                'total_pagamentos': total_pagamentos,
+                'mao_de_obra': pagamentos_mao_obra,
+                'material': pagamentos_material,
+                'indefinido': pagamentos_indefinido
+            },
+            'servicos': resultado
+        }), 200
+        
+    except Exception as e:
+        print(f"[ERRO] Diagnóstico pagamentos: {e}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/sid/obras/<int:obra_id>/corrigir-pagamento/<int:pagamento_id>', methods=['PUT'])
+@jwt_required()
+def corrigir_tipo_pagamento(obra_id, pagamento_id):
+    """
+    Corrige o tipo_pagamento de um PagamentoServico existente
+    e recalcula os percentuais do serviço
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        data = request.get_json()
+        novo_tipo = data.get('tipo_pagamento')
+        
+        if novo_tipo not in ['mao_de_obra', 'material']:
+            return jsonify({"erro": "tipo_pagamento deve ser 'mao_de_obra' ou 'material'"}), 400
+        
+        # Buscar o pagamento
+        pagamento = db.session.get(PagamentoServico, pagamento_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        
+        # Verificar se o serviço pertence à obra
+        servico = db.session.get(Servico, pagamento.servico_id)
+        if not servico or servico.obra_id != obra_id:
+            return jsonify({"erro": "Pagamento não pertence a esta obra"}), 403
+        
+        tipo_anterior = pagamento.tipo_pagamento
+        
+        # Atualizar o tipo
+        pagamento.tipo_pagamento = novo_tipo
+        
+        # Recalcular percentuais do serviço
+        pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+        pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
+        pagamentos_material = [p for p in pagamentos_serv if p.tipo_pagamento == 'material']
+        
+        if servico.valor_global_mao_de_obra > 0:
+            total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+            servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+        else:
+            servico.percentual_conclusao_mao_obra = 0
+        
+        if servico.valor_global_material > 0:
+            total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+            servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+        else:
+            servico.percentual_conclusao_material = 0
+        
+        db.session.commit()
+        
+        print(f"--- [LOG] ✅ Pagamento {pagamento_id} corrigido: {tipo_anterior} → {novo_tipo} ---")
+        print(f"--- [LOG] Serviço '{servico.nome}': MO={servico.percentual_conclusao_mao_obra:.1f}%, MAT={servico.percentual_conclusao_material:.1f}% ---")
+        
+        return jsonify({
+            "mensagem": f"Tipo de pagamento corrigido de '{tipo_anterior}' para '{novo_tipo}'",
+            "pagamento_id": pagamento_id,
+            "servico": servico.nome,
+            "novo_percentual_mao_obra": servico.percentual_conclusao_mao_obra,
+            "novo_percentual_material": servico.percentual_conclusao_material
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] Corrigir pagamento: {e}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/sid/obras/<int:obra_id>/corrigir-pagamentos-lote', methods=['POST'])
+@jwt_required()
+def corrigir_pagamentos_lote(obra_id):
+    """
+    Corrige múltiplos pagamentos de uma vez
+    Body: { "correcoes": [ { "pagamento_id": 1, "tipo_pagamento": "mao_de_obra" }, ... ] }
+    """
+    try:
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        
+        data = request.get_json()
+        correcoes = data.get('correcoes', [])
+        
+        if not correcoes:
+            return jsonify({"erro": "Nenhuma correção fornecida"}), 400
+        
+        resultados = []
+        servicos_afetados = set()
+        
+        for correcao in correcoes:
+            pagamento_id = correcao.get('pagamento_id')
+            novo_tipo = correcao.get('tipo_pagamento')
+            
+            if novo_tipo not in ['mao_de_obra', 'material']:
+                resultados.append({
+                    "pagamento_id": pagamento_id,
+                    "status": "erro",
+                    "mensagem": "tipo_pagamento inválido"
+                })
+                continue
+            
+            pagamento = db.session.get(PagamentoServico, pagamento_id)
+            if not pagamento:
+                resultados.append({
+                    "pagamento_id": pagamento_id,
+                    "status": "erro",
+                    "mensagem": "Pagamento não encontrado"
+                })
+                continue
+            
+            servico = db.session.get(Servico, pagamento.servico_id)
+            if not servico or servico.obra_id != obra_id:
+                resultados.append({
+                    "pagamento_id": pagamento_id,
+                    "status": "erro",
+                    "mensagem": "Pagamento não pertence a esta obra"
+                })
+                continue
+            
+            tipo_anterior = pagamento.tipo_pagamento
+            pagamento.tipo_pagamento = novo_tipo
+            servicos_afetados.add(servico.id)
+            
+            resultados.append({
+                "pagamento_id": pagamento_id,
+                "status": "ok",
+                "tipo_anterior": tipo_anterior,
+                "novo_tipo": novo_tipo,
+                "servico": servico.nome
+            })
+        
+        # Recalcular percentuais de todos os serviços afetados
+        for servico_id in servicos_afetados:
+            servico = db.session.get(Servico, servico_id)
+            if servico:
+                pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
+                pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
+                pagamentos_material = [p for p in pagamentos_serv if p.tipo_pagamento == 'material']
+                
+                if servico.valor_global_mao_de_obra > 0:
+                    total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
+                    servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
+                else:
+                    servico.percentual_conclusao_mao_obra = 0
+                
+                if servico.valor_global_material > 0:
+                    total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
+                    servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
+                else:
+                    servico.percentual_conclusao_material = 0
+        
+        db.session.commit()
+        
+        corrigidos = len([r for r in resultados if r['status'] == 'ok'])
+        print(f"--- [LOG] ✅ Correção em lote: {corrigidos} pagamentos corrigidos, {len(servicos_afetados)} serviços recalculados ---")
+        
+        return jsonify({
+            "mensagem": f"{corrigidos} pagamentos corrigidos",
+            "servicos_recalculados": len(servicos_afetados),
+            "resultados": resultados
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERRO] Correção em lote: {e}")
+        return jsonify({"erro": str(e)}), 500
+
+
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST'])
 @jwt_required()
 def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
