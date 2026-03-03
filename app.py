@@ -16698,43 +16698,62 @@ def obter_orcamento_eng(obra_id):
         
         # NOVO: Calcular valores pagos por item baseado nos pagamentos vinculados
         def calcular_pago_item(item_id):
-            """Calcula o total pago para um item do orçamento somando todos os pagamentos vinculados"""
-            total_pago = 0
-            
-            # 1. Lançamentos pagos vinculados ao item
-            lancamentos_pagos = db.session.execute(db.text(f"""
-                SELECT COALESCE(SUM(valor_pago), 0) as total
+            """Calcula o total pago para um item do orçamento, separando MO e Material pelo tipo real do pagamento"""
+            pago_mo = 0
+            pago_mat = 0
+
+            # 1. Lançamentos pagos vinculados ao item (tipo: 'Mão de Obra' ou 'Material')
+            lancamentos = db.session.execute(db.text(f"""
+                SELECT tipo, COALESCE(SUM(valor_pago), 0) as total
                 FROM lancamento 
                 WHERE orcamento_item_id = {item_id} AND status = 'Pago'
-            """)).scalar() or 0
-            total_pago += float(lancamentos_pagos)
-            
-            # 2. Pagamentos Futuros pagos vinculados ao item
+                GROUP BY tipo
+            """)).fetchall()
+            for row in lancamentos:
+                tipo, valor = row[0], float(row[1] or 0)
+                if tipo and 'obra' in tipo.lower():
+                    pago_mo += valor
+                else:
+                    pago_mat += valor
+
+            # 2. Pagamentos Futuros pagos vinculados ao item (tipo: 'Mão de Obra' ou 'Material')
             pf_pagos = db.session.execute(db.text(f"""
-                SELECT COALESCE(SUM(valor), 0) as total
+                SELECT tipo, COALESCE(SUM(valor), 0) as total
                 FROM pagamento_futuro 
                 WHERE orcamento_item_id = {item_id} AND status = 'Pago'
-            """)).scalar() or 0
-            total_pago += float(pf_pagos)
-            
-            # 3. Parcelas pagas de pagamentos parcelados vinculados ao item
-            parcelas_pagas = db.session.execute(db.text(f"""
-                SELECT COALESCE(SUM(pi.valor_parcela), 0) as total
+                GROUP BY tipo
+            """)).fetchall()
+            for row in pf_pagos:
+                tipo, valor = row[0], float(row[1] or 0)
+                if tipo and 'obra' in tipo.lower():
+                    pago_mo += valor
+                else:
+                    pago_mat += valor
+
+            # 3. Parcelas pagas de pagamentos parcelados vinculados ao item (segmento: 'Mão de Obra' ou 'Material')
+            parcelas = db.session.execute(db.text(f"""
+                SELECT pp.segmento, COALESCE(SUM(pi.valor_parcela), 0) as total
                 FROM parcela_individual pi
                 JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
                 WHERE pp.orcamento_item_id = {item_id} AND pi.status = 'Pago'
-            """)).scalar() or 0
-            total_pago += float(parcelas_pagas)
-            
-            # 4. Boletos pagos vinculados ao item
+                GROUP BY pp.segmento
+            """)).fetchall()
+            for row in parcelas:
+                segmento, valor = row[0], float(row[1] or 0)
+                if segmento and 'obra' in segmento.lower():
+                    pago_mo += valor
+                else:
+                    pago_mat += valor
+
+            # 4. Boletos pagos vinculados ao item (sem tipo definido → vai para Material)
             boletos_pagos = db.session.execute(db.text(f"""
                 SELECT COALESCE(SUM(valor), 0) as total
                 FROM boleto 
                 WHERE orcamento_item_id = {item_id} AND status = 'Pago'
             """)).scalar() or 0
-            total_pago += float(boletos_pagos)
-            
-            return total_pago
+            pago_mat += float(boletos_pagos)
+
+            return {'mo': pago_mo, 'mat': pago_mat, 'total': pago_mo + pago_mat}
         
         # Calcular totais
         total_mo = 0
@@ -16752,6 +16771,8 @@ def obter_orcamento_eng(obra_id):
             etapa_mat = 0
             etapa_servico = 0  # NOVO
             etapa_pago = 0
+            etapa_pago_mo = 0
+            etapa_pago_mat = 0
             
             itens_dict = []
             for item in etapa.itens:
@@ -16760,9 +16781,14 @@ def obter_orcamento_eng(obra_id):
                 etapa_mat += totais['total_material']
                 etapa_servico += totais.get('total_servico', 0)  # NOVO
                 
-                # NOVO: Calcular valor pago dinamicamente
-                item_pago = calcular_pago_item(item.id)
+                # Calcular valor pago dinamicamente separado por MO e Material
+                item_pago_dict = calcular_pago_item(item.id)
+                item_pago = item_pago_dict['total']
+                item_pago_mo = item_pago_dict['mo']
+                item_pago_mat = item_pago_dict['mat']
                 etapa_pago += item_pago
+                etapa_pago_mo += item_pago_mo
+                etapa_pago_mat += item_pago_mat
                 
                 total_itens += 1
                 if item.servico_id:
@@ -16771,6 +16797,8 @@ def obter_orcamento_eng(obra_id):
                 # Montar dict do item com valor pago calculado
                 item_dict = item.to_dict()
                 item_dict['total_pago'] = item_pago
+                item_dict['valor_pago_mo'] = item_pago_mo
+                item_dict['valor_pago_mat'] = item_pago_mat
                 item_dict['percentual_executado'] = round((item_pago / totais['total'] * 100) if totais['total'] > 0 else 0, 1)
                 itens_dict.append(item_dict)
             
@@ -16780,14 +16808,10 @@ def obter_orcamento_eng(obra_id):
             
             etapa_total = etapa_mo + etapa_mat + etapa_servico  # MODIFICADO: incluir serviço
             
-            # Calcular rateio do pago (proporcional ao orçamento)
-            if etapa_total > 0:
-                etapa_pago_mo = etapa_pago * (etapa_mo / etapa_total) if etapa_mo > 0 else 0
-                etapa_pago_mat = etapa_pago * (etapa_mat / etapa_total) if etapa_mat > 0 else 0
-                etapa_pago_servico = etapa_pago * (etapa_servico / etapa_total) if etapa_servico > 0 else 0
+            # Rateio do pago_servico (sem tipo definido, proporcional ao orçamento)
+            if etapa_total > 0 and etapa_servico > 0:
+                etapa_pago_servico = etapa_pago * (etapa_servico / etapa_total)
             else:
-                etapa_pago_mo = 0
-                etapa_pago_mat = 0
                 etapa_pago_servico = 0
             
             total_pago_mo += etapa_pago_mo
