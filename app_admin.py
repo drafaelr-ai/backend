@@ -682,6 +682,9 @@ def listar_imoveis():
         imovel_dict['total_receitas'] = float(receitas)
         imovel_dict['saldo'] = float(receitas - despesas)
         
+        # Imóvel próprio não gera receita de aluguel — saldo não é relevante
+        imovel_dict['exibe_saldo'] = imovel.status != 'proprio'
+        
         resultado.append(imovel_dict)
     
     return jsonify(resultado)
@@ -1057,7 +1060,21 @@ def atualizar_lancamento(lancamento_id):
         if dados.get('data_pagamento'):
             lancamento.data_pagamento = date.fromisoformat(dados['data_pagamento'])
         
+        # Atualização de comprovante inline (base64 ou URL)
+        if 'comprovante_base64' in dados:
+            comprovante = dados.get('comprovante_base64')
+            if comprovante is None:
+                lancamento.comprovante_url = None  # Remover comprovante
+            elif len(comprovante) > 7000000:
+                return jsonify({'erro': 'Arquivo muito grande. Máximo 5MB.'}), 400
+            else:
+                lancamento.comprovante_url = comprovante
+        elif 'comprovante_url' in dados:
+            lancamento.comprovante_url = dados.get('comprovante_url')
+        
         db.session.commit()
+        
+        print(f"--- [ADMIN] Lançamento {lancamento_id} atualizado ---")
         
         return jsonify(lancamento.to_dict())
         
