@@ -11313,19 +11313,14 @@ def get_servico_financeiro(obra_id):
 
                     valor_total_orc = float((totais[0] or 0) + (totais[1] or 0))
 
-                    # Calcular valor pago via orcamento_item_id
-                    valor_pago_orc = db.session.execute(db.text(f"""
-                        SELECT COALESCE(SUM(l.valor_pago), 0)
-                        FROM lancamento l
-                        JOIN orcamento_eng_item oi ON l.orcamento_item_id = oi.id
-                        WHERE oi.etapa_id = {etapa_id} AND l.status = 'Pago'
+                    # Calcular valor pago: lê diretamente de valor_pago_mo + valor_pago_mat
+                    # (campos persistidos no banco, atualizados a cada pagamento vinculado)
+                    pago_result = db.session.execute(db.text(f"""
+                        SELECT COALESCE(SUM(COALESCE(valor_pago_mo, 0) + COALESCE(valor_pago_mat, 0)), 0)
+                        FROM orcamento_eng_item
+                        WHERE etapa_id = {etapa_id}
                     """)).scalar() or 0
-                    valor_pago_orc += db.session.execute(db.text(f"""
-                        SELECT COALESCE(SUM(pf.valor), 0)
-                        FROM pagamento_futuro pf
-                        JOIN orcamento_eng_item oi ON pf.orcamento_item_id = oi.id
-                        WHERE oi.etapa_id = {etapa_id} AND pf.status = 'Pago'
-                    """)).scalar() or 0
+                    valor_pago_orc = float(pago_result)
 
                     percentual_pago = round((valor_pago_orc / valor_total_orc * 100) if valor_total_orc > 0 else 0, 1)
                     percentual_exec = float(cron_result[1] or 0)
