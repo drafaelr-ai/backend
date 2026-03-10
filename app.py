@@ -2416,6 +2416,16 @@ def get_obra_detalhes(obra_id):
         total_parcelas_com_servico = total_parcelas_previstas - total_parcelas_extra
         
         # Logs de DEBUG para rastreamento
+        print(f"--- [DEBUG KPI] obra_id={obra_id} ---")
+        print(f"--- [DEBUG KPI] total_lancamentos: R$ {total_lancamentos:.2f} ---")
+        print(f"--- [DEBUG KPI] total_budget_mo: R$ {total_budget_mo:.2f} ---")
+        print(f"--- [DEBUG KPI] total_budget_mat: R$ {total_budget_mat:.2f} ---")
+        print(f"--- [DEBUG KPI] total_futuros (PagamentoFuturo): R$ {total_futuros:.2f} ---")
+        print(f"--- [DEBUG KPI] total_parcelas_previstas: R$ {total_parcelas_previstas:.2f} ---")
+        print(f"--- [DEBUG KPI] total_futuros_com_servico: R$ {total_futuros_com_servico:.2f} ---")
+        print(f"--- [DEBUG KPI] total_parcelas_com_servico: R$ {total_parcelas_com_servico:.2f} ---")
+        print(f"--- [DEBUG KPI] total_futuros_extra (sem serviço): R$ {total_futuros_extra:.2f} ---")
+        print(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
         
         # CORREÇÃO: Buscar parcelas PAGAS com serviço vinculado ANTES dos KPIs
         # Parcelas sem serviço NÃO devem ser somadas aqui pois já são contabilizadas via Lancamento criado
@@ -2427,10 +2437,12 @@ def get_obra_detalhes(obra_id):
             PagamentoParcelado.servico_id.isnot(None)  # COM serviço
         ).first()
         total_parcelas_pagas_com_servico = float(parcelas_pagas_com_servico.total_parcelas_pagas or 0.0)
+        print(f"--- [DEBUG KPI] total_parcelas_pagas_com_servico: R$ {total_parcelas_pagas_com_servico:.2f} ---")
         
         # NOTA: Parcelas PAGAS SEM serviço NÃO são mais contadas aqui
         # Elas já são contabilizadas via Lancamento criado em marcar_parcela_paga()
         # Isso evita DUPLICAÇÃO
+        print(f"--- [DEBUG KPI] parcelas_pagas_sem_servico: NÃO SOMADO (já está no Lancamento) ---")
         
         # === ORÇAMENTO DE ENGENHARIA ===
         # CORREÇÃO: Sempre usar os valores do Orçamento de Engenharia como fonte primária
@@ -2461,7 +2473,8 @@ def get_obra_detalhes(obra_id):
             total_orcamento_eng_mo = float(orcamento_eng_total.total_mo or 0.0)
             total_orcamento_eng_mat = float(orcamento_eng_total.total_mat or 0.0)
             total_orcamento_eng = total_orcamento_eng_mo + total_orcamento_eng_mat
-                
+            print(f"--- [DEBUG KPI] ORÇAMENTO ENG TOTAL: MO R$ {total_orcamento_eng_mo:.2f}, MAT R$ {total_orcamento_eng_mat:.2f} = R$ {total_orcamento_eng:.2f} ---")
+            
             # Verificar serviços vinculados ao orçamento de engenharia
             # Para evitar duplicação, subtraímos do total_budget os valores de serviços que vieram do Orçamento
             servicos_do_orcamento = db.session.query(
@@ -2473,13 +2486,16 @@ def get_obra_detalhes(obra_id):
             
             servicos_orcamento_mo = float(servicos_do_orcamento.total_mo or 0.0) if servicos_do_orcamento else 0.0
             servicos_orcamento_mat = float(servicos_do_orcamento.total_mat or 0.0) if servicos_do_orcamento else 0.0
-                
+            print(f"--- [DEBUG KPI] Serviços vinculados ao Orçamento: MO R$ {servicos_orcamento_mo:.2f}, MAT R$ {servicos_orcamento_mat:.2f} ---")
+            
             # Remover dos totais do Kanban os valores que vieram do Orçamento de Engenharia
             # para não duplicar, já que vamos usar os valores do Orçamento como fonte primária
             total_budget_mo_ajustado = max(0, total_budget_mo - servicos_orcamento_mo)
             total_budget_mat_ajustado = max(0, total_budget_mat - servicos_orcamento_mat)
-                
+            print(f"--- [DEBUG KPI] Kanban ajustado (sem orçamento eng): MO R$ {total_budget_mo_ajustado:.2f}, MAT R$ {total_budget_mat_ajustado:.2f} ---")
+            
         except Exception as e:
+            print(f"--- [DEBUG KPI] Erro ao buscar Orçamento de Engenharia: {e} ---")
             import traceback
             traceback.print_exc()
             total_orcamento_eng = 0.0
@@ -2491,11 +2507,13 @@ def get_obra_detalhes(obra_id):
         # KPI 1: ORÇAMENTO TOTAL
         # = Serviços do Kanban (não vinculados ao orçamento) + Orçamento de Engenharia completo
         kpi_orcamento_total = total_budget_mo_ajustado + total_budget_mat_ajustado + total_orcamento_eng
+        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = Kanban({total_budget_mo_ajustado + total_budget_mat_ajustado:.2f}) + OrcEng({total_orcamento_eng:.2f}) = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS
         # Inclui: lançamentos pagos + pagamentos de serviço + parcelas pagas COM serviço
         # NOTA: Parcelas sem serviço já estão em total_pago_lancamentos (Lancamento criado ao pagar)
         kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico
+        print(f"--- [DEBUG KPI] ✅ VALORES PAGOS = R$ {kpi_valores_pagos:.2f} ---")
         
         # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
         # Lançamentos com saldo pendente (valor_total - valor_pago > 0)
@@ -2526,6 +2544,7 @@ def get_obra_detalhes(obra_id):
         # KPI 4: DESPESAS EXTRAS (Pagamentos Fora da Planilha de Custos)
         # Pagamentos futuros e parcelas SEM serviço vinculado
         kpi_despesas_extras = total_futuros_extra + total_parcelas_extra
+        print(f"--- [DEBUG KPI] ✅ DESPESAS EXTRAS (fora da planilha) = R$ {kpi_despesas_extras:.2f} ---")
         
         # --- BOLETOS ---
         boletos_obra = Boleto.query.filter_by(obra_id=obra_id).all()
@@ -2546,6 +2565,7 @@ def get_obra_detalhes(obra_id):
         kpi_liberado_pagamento += total_boletos_com_servico_pendentes  # Boletos pendentes com serviço vão para liberado
         kpi_despesas_extras += total_boletos_sem_servico_pendentes + total_boletos_sem_servico_pagos  # Boletos sem serviço vão para despesas extras
         
+        print(f"--- [DEBUG KPI] 📄 BOLETOS: com_servico={total_boletos_com_servico:.2f} (pend={total_boletos_com_servico_pendentes:.2f}, pago={total_boletos_com_servico_pagos:.2f}), sem_servico_pend={total_boletos_sem_servico_pendentes:.2f}, sem_servico_pago={total_boletos_sem_servico_pagos:.2f} ---")
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
@@ -2646,6 +2666,7 @@ def get_obra_detalhes(obra_id):
             AND (pp.servico_id IS NOT NULL OR pp.orcamento_item_id IS NOT NULL)
         """), {"obra_id": obra_id}).fetchall()
         
+        print(f"--- [DEBUG] Parcelas pagas COM serviço ou orcamento_item encontradas: {len(parcelas_pagas_query)} ---")
         
         for parcela in parcelas_pagas_query:
             historico_unificado.append({
@@ -2674,6 +2695,7 @@ def get_obra_detalhes(obra_id):
         # NOTA: Parcelas pagas SEM serviço NÃO são adicionadas aqui
         # Elas já aparecem via Lancamento criado em marcar_parcela_paga()
         # Isso evita DUPLICAÇÃO no histórico
+        print(f"--- [DEBUG] Parcelas pagas SEM serviço: não adicionadas (já têm Lancamento) ---")
         
         # --- INCLUIR BOLETOS PAGOS NO HISTÓRICO ---
         for boleto in boletos_obra:
@@ -5752,11 +5774,17 @@ def relatorio_resumo_completo(obra_id):
         elements.append(Spacer(1, 0.3*cm))
         
         if orcamentos:
+            # <-- MUDANÇA: Log de debug para verificar status
+            print(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
+            for orc in orcamentos:
+                print(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
+            
             orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
             orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
             orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
             
-                
+            print(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
+            
             if orcamentos_pendentes:
                 elements.append(Paragraph("<b>5.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
                 data_orc_pend = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
@@ -6235,11 +6263,17 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
         elements.append(Spacer(1, 0.3*cm))
         
         if orcamentos:
+            # <-- MUDANÇA: Log de debug para verificar status
+            print(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
+            for orc in orcamentos:
+                print(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
+            
             orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
             orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
             orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
             
-                
+            print(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
+            
             if orcamentos_pendentes:
                 elements.append(Paragraph("<b>5.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
                 data_orc_pend = [['Descrição', 'Fornecedor', 'Valor', 'Tipo']]
@@ -6408,26 +6442,31 @@ def criar_pagamento_futuro(obra_id):
     
     # POST requer JWT
     try:
+        print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         data = request.get_json()
+        print(f"--- [DEBUG] Dados recebidos: {data} ---")
         
         pix_value = data.get('pix')
+        print(f"--- [DEBUG] Campo PIX recebido: '{pix_value}' (tipo: {type(pix_value)}) ---")
         
         # Obter servico_id e tipo do payload
         servico_id = data.get('servico_id')
         tipo = data.get('tipo')  # 'Mão de Obra', 'Material', ou 'Despesa'
         status = data.get('status', 'Previsto')
         
+        print(f"--- [DEBUG] servico_id: {servico_id}, tipo: {tipo}, status: {status} ---")
         
         # ===== CASO 1: Status='Pago' e tem servico_id → Criar PagamentoServico diretamente =====
         if status == 'Pago' and servico_id:
             servico = db.session.get(Servico, servico_id)
             if servico:
-                        
+                print(f"--- [DEBUG] Pagamento já PAGO com serviço vinculado, criando PagamentoServico ---")
+                
                 # Determinar tipo_pagamento
                 if tipo == 'Mão de Obra':
                     tipo_pagamento = 'mao_de_obra'
@@ -6452,7 +6491,8 @@ def criar_pagamento_futuro(obra_id):
                 db.session.add(novo_pag_servico)
                 db.session.flush()
                 
-                        
+                print(f"--- [DEBUG] PagamentoServico criado com ID={novo_pag_servico.id}, tipo_pagamento={tipo_pagamento} ---")
+                
                 # Recalcular percentual do serviço
                 pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
                 pagamentos_mao_de_obra = [p for p in pagamentos_serv if p.tipo_pagamento == 'mao_de_obra']
@@ -6461,11 +6501,13 @@ def criar_pagamento_futuro(obra_id):
                 if servico.valor_global_mao_de_obra > 0:
                     total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
                     servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
-                            
+                    print(f"--- [DEBUG] Percentual MO atualizado: {servico.percentual_conclusao_mao_obra:.1f}% ---")
+                
                 if servico.valor_global_material > 0:
                     total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
                     servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
-                            
+                    print(f"--- [DEBUG] Percentual Material atualizado: {servico.percentual_conclusao_material:.1f}% ---")
+                
                 db.session.commit()
                 print(f"--- [LOG] ✅ Pagamento PAGO criado como PagamentoServico ID={novo_pag_servico.id} vinculado ao serviço '{servico.nome}' ---")
                 
@@ -6491,8 +6533,10 @@ def criar_pagamento_futuro(obra_id):
             tipo=tipo if tipo else None
         )
         
+        print(f"--- [DEBUG] Objeto PagamentoFuturo criado, tentando adicionar ao banco... ---")
         db.session.add(novo_pagamento)
         db.session.flush()  # Flush para obter o ID antes do commit
+        print(f"--- [DEBUG] Flush OK, ID atribuído: {novo_pagamento.id} ---")
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
         orcamento_item_id = data.get('orcamento_item_id')
@@ -6505,9 +6549,16 @@ def criar_pagamento_futuro(obra_id):
                 print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
         
         db.session.commit()
+        print(f"--- [DEBUG] Commit realizado! ---")
         
         # Verificar se foi salvo
         verificacao = PagamentoFuturo.query.get(novo_pagamento.id)
+        if verificacao:
+            print(f"--- [DEBUG] ✅ VERIFICAÇÃO: PagamentoFuturo ID {verificacao.id} encontrado no banco ---")
+            print(f"--- [DEBUG] ✅ Descrição: {verificacao.descricao}, Valor: {verificacao.valor}, Tipo: {verificacao.tipo}, Serviço: {verificacao.servico_id} ---")
+        else:
+            print(f"--- [DEBUG] ❌ ERRO: PagamentoFuturo NÃO encontrado após commit! ---")
+        
         print(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com Tipo: {tipo}, Serviço: {servico_id} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
@@ -6527,6 +6578,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
     
     # PUT requer JWT
     try:
+        print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -6537,6 +6589,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         data = request.get_json()
+        print(f"--- [DEBUG] Dados recebidos: {data} ---")
         
         if 'descricao' in data:
             pagamento.descricao = data['descricao']
@@ -6547,7 +6600,8 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if 'fornecedor' in data:
             pagamento.fornecedor = data['fornecedor']
         if 'pix' in data:
-                pagamento.pix = data['pix']
+            print(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
+            pagamento.pix = data['pix']
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
         if 'status' in data:
@@ -6556,9 +6610,11 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         # CORRIGIDO: Atualizar tipo e servico_id
         if 'tipo' in data:
             pagamento.tipo = data['tipo']
-            if 'servico_id' in data:
-                pagamento.servico_id = data['servico_id'] if data['servico_id'] else None
-            
+            print(f"--- [DEBUG] Tipo atualizado: {data['tipo']} ---")
+        if 'servico_id' in data:
+            pagamento.servico_id = data['servico_id'] if data['servico_id'] else None
+            print(f"--- [DEBUG] Serviço ID atualizado: {data['servico_id']} ---")
+        
         # NOVO: Atualizar orcamento_item_id via SQL direto
         if 'orcamento_item_id' in data:
             orcamento_item_id = data['orcamento_item_id']
@@ -6569,6 +6625,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             except Exception as e:
                 print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
+        print(f"--- [DEBUG] Tentando commit no banco... ---")
         db.session.commit()
         
         print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso na obra {obra_id} ---")
@@ -7986,6 +8043,7 @@ def obter_alertas_vencimento(obra_id):
     - Futuros (mais de 7 dias)
     """
     try:
+        print(f"--- [DEBUG] Iniciando obter_alertas_vencimento para obra {obra_id} ---")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -7995,6 +8053,7 @@ def obter_alertas_vencimento(obra_id):
         amanha = hoje + timedelta(days=1)
         em_7_dias = hoje + timedelta(days=7)
         
+        print(f"--- [DEBUG] Hoje: {hoje}, Amanhã: {amanha}, Em 7 dias: {em_7_dias} ---")
         
         alertas = {
             "vencidos": {"quantidade": 0, "valor_total": 0, "itens": []},
@@ -8011,9 +8070,11 @@ def obter_alertas_vencimento(obra_id):
             PagamentoFuturo.status == 'Previsto'
         ).all()
         
+        print(f"--- [DEBUG] Encontrados {len(pagamentos_futuros)} PagamentoFuturo com status 'Previsto' ---")
         
         for pag in pagamentos_futuros:
-                
+            print(f"--- [DEBUG] PagamentoFuturo ID {pag.id}: {pag.descricao}, Valor: {pag.valor}, Vencimento: {pag.data_vencimento} ---")
+            
             item = {
                 "tipo": "Pagamento Futuro",
                 "descricao": pag.descricao,
@@ -8024,22 +8085,27 @@ def obter_alertas_vencimento(obra_id):
             }
             
             if pag.data_vencimento < hoje:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCIDO ---")
                 alertas["vencidos"]["quantidade"] += 1
                 alertas["vencidos"]["valor_total"] += pag.valor
                 alertas["vencidos"]["itens"].append(item)
             elif pag.data_vencimento == hoje:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE HOJE ---")
                 alertas["vence_hoje"]["quantidade"] += 1
                 alertas["vence_hoje"]["valor_total"] += pag.valor
                 alertas["vence_hoje"]["itens"].append(item)
             elif pag.data_vencimento == amanha:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE AMANHÃ ---")
                 alertas["vence_amanha"]["quantidade"] += 1
                 alertas["vence_amanha"]["valor_total"] += pag.valor
                 alertas["vence_amanha"]["itens"].append(item)
             elif pag.data_vencimento <= em_7_dias:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE EM 7 DIAS ---")
                 alertas["vence_7_dias"]["quantidade"] += 1
                 alertas["vence_7_dias"]["valor_total"] += pag.valor
                 alertas["vence_7_dias"]["itens"].append(item)
             else:
+                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → FUTURO (>7 dias) ---")
                 alertas["futuros"]["quantidade"] += 1
                 alertas["futuros"]["valor_total"] += pag.valor
                 alertas["futuros"]["itens"].append(item)
@@ -8131,6 +8197,7 @@ def obter_alertas_vencimento(obra_id):
             if 'valor_total' in categoria:
                 categoria['valor_total'] = round(categoria['valor_total'], 2)
         
+        print(f"--- [DEBUG] RESULTADO FINAL DOS ALERTAS ---")
         print(f"  Vencidos: {alertas['vencidos']['quantidade']} itens, Total: R$ {alertas['vencidos']['valor_total']}")
         print(f"  Vence Hoje: {alertas['vence_hoje']['quantidade']} itens, Total: R$ {alertas['vence_hoje']['valor_total']}")
         print(f"  Vence Amanhã: {alertas['vence_amanha']['quantidade']} itens, Total: R$ {alertas['vence_amanha']['valor_total']}")
@@ -11214,8 +11281,69 @@ def get_servico_financeiro(obra_id):
         ).first()
         
         if not servico:
-            print(f"[INFO] Serviço '{servico_nome}' não encontrado na planilha de custos")
-            # Retornar dados vazios mas válidos
+            print(f"[INFO] Serviço '{servico_nome}' não encontrado na planilha de custos — buscando no Orçamento de Engenharia")
+            
+            # Tentar buscar pelo vínculo cronograma_obra → orcamento_etapa_id
+            try:
+                cron_result = db.session.execute(db.text(f"""
+                    SELECT co.id, co.percentual_conclusao, co.area_total, co.area_executada, co.tipo_medicao,
+                           co.orcamento_etapa_id
+                    FROM cronograma_obra co
+                    WHERE co.obra_id = {obra_id}
+                      AND LOWER(co.servico_nome) = LOWER(:nome)
+                    LIMIT 1
+                """), {"nome": servico_nome}).fetchone()
+
+                if cron_result and cron_result[5]:  # tem orcamento_etapa_id
+                    etapa_id = cron_result[5]
+                    # Calcular total da etapa somando itens
+                    totais = db.session.execute(db.text(f"""
+                        SELECT
+                            COALESCE(SUM(CASE
+                                WHEN tipo_composicao = 'separado' THEN quantidade * COALESCE(preco_mao_obra, 0)
+                                ELSE quantidade * COALESCE(preco_unitario, 0) * COALESCE(rateio_mo, 50) / 100
+                            END), 0) as total_mo,
+                            COALESCE(SUM(CASE
+                                WHEN tipo_composicao = 'separado' THEN quantidade * COALESCE(preco_material, 0)
+                                ELSE quantidade * COALESCE(preco_unitario, 0) * COALESCE(rateio_mat, 50) / 100
+                            END), 0) as total_mat
+                        FROM orcamento_eng_item
+                        WHERE etapa_id = {etapa_id}
+                    """)).fetchone()
+
+                    valor_total_orc = float((totais[0] or 0) + (totais[1] or 0))
+
+                    # Calcular valor pago via orcamento_item_id
+                    valor_pago_orc = db.session.execute(db.text(f"""
+                        SELECT COALESCE(SUM(l.valor_pago), 0)
+                        FROM lancamento l
+                        JOIN orcamento_eng_item oi ON l.orcamento_item_id = oi.id
+                        WHERE oi.etapa_id = {etapa_id} AND l.status = 'Pago'
+                    """)).scalar() or 0
+                    valor_pago_orc += db.session.execute(db.text(f"""
+                        SELECT COALESCE(SUM(pf.valor), 0)
+                        FROM pagamento_futuro pf
+                        JOIN orcamento_eng_item oi ON pf.orcamento_item_id = oi.id
+                        WHERE oi.etapa_id = {etapa_id} AND pf.status = 'Pago'
+                    """)).scalar() or 0
+
+                    percentual_pago = round((valor_pago_orc / valor_total_orc * 100) if valor_total_orc > 0 else 0, 1)
+                    percentual_exec = float(cron_result[1] or 0)
+
+                    return jsonify({
+                        'servico_nome': servico_nome,
+                        'valor_total': float(valor_total_orc),
+                        'valor_pago': float(valor_pago_orc),
+                        'area_total': cron_result[2],
+                        'area_executada': cron_result[3],
+                        'percentual_pago': percentual_pago,
+                        'percentual_executado': percentual_exec,
+                        'fonte': 'orcamento_engenharia'
+                    }), 200
+            except Exception as e_orc:
+                print(f"[AVISO] Erro ao buscar do orçamento de engenharia: {e_orc}")
+
+            # Nada encontrado — retornar vazio
             return jsonify({
                 'servico_nome': servico_nome,
                 'valor_total': 0.0,
@@ -16629,69 +16757,53 @@ def obter_orcamento_eng(obra_id):
         # Buscar etapas com itens
         etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).order_by(OrcamentoEngEtapa.ordem, OrcamentoEngEtapa.codigo).all()
         
-        # OTIMIZAÇÃO: 4 queries únicas para todos os itens (elimina N+1 queries)
-        # Também separa MO vs Material pelo tipo real de cada pagamento
-        ids_etapas = [e.id for e in etapas]
-        todos_item_ids_rows = db.session.execute(db.text(
-            "SELECT id FROM orcamento_eng_item WHERE etapa_id = ANY(:ids)"
-        ), {"ids": ids_etapas}).fetchall()
-        todos_item_ids = [r[0] for r in todos_item_ids_rows]
-
-        pago_por_item = {}  # {item_id: {'mo': float, 'mat': float}}
-
-        if todos_item_ids:
-            ids_str = ','.join(str(i) for i in todos_item_ids)
-
-            # 1. Lançamentos pagos (tipo indica MO ou Material)
-            for item_id, tipo, valor in db.session.execute(db.text(f"""
-                SELECT orcamento_item_id, tipo, COALESCE(SUM(valor_pago), 0)
-                FROM lancamento
-                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
-                GROUP BY orcamento_item_id, tipo
-            """)).fetchall():
-                d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
-                if tipo and 'obra' in tipo.lower(): d['mo'] += float(valor or 0)
-                else: d['mat'] += float(valor or 0)
-
-            # 2. Pagamentos Futuros pagos (tipo indica MO ou Material)
-            for item_id, tipo, valor in db.session.execute(db.text(f"""
-                SELECT orcamento_item_id, tipo, COALESCE(SUM(valor), 0)
-                FROM pagamento_futuro
-                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
-                GROUP BY orcamento_item_id, tipo
-            """)).fetchall():
-                d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
-                if tipo and 'obra' in tipo.lower(): d['mo'] += float(valor or 0)
-                else: d['mat'] += float(valor or 0)
-
-            # 3. Parcelas pagas (segmento do pagamento parcelado)
-            for item_id, segmento, valor in db.session.execute(db.text(f"""
-                SELECT pp.orcamento_item_id, pp.segmento, COALESCE(SUM(pi.valor_parcela), 0)
+        # NOVO: Calcular valores pagos por item baseado nos pagamentos vinculados
+        def calcular_pago_item(item_id):
+            """Calcula o total pago para um item do orçamento somando todos os pagamentos vinculados"""
+            total_pago = 0
+            
+            # 1. Lançamentos pagos vinculados ao item
+            lancamentos_pagos = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(valor_pago), 0) as total
+                FROM lancamento 
+                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(lancamentos_pagos)
+            
+            # 2. Pagamentos Futuros pagos vinculados ao item
+            pf_pagos = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(valor), 0) as total
+                FROM pagamento_futuro 
+                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(pf_pagos)
+            
+            # 3. Parcelas pagas de pagamentos parcelados vinculados ao item
+            parcelas_pagas = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(pi.valor_parcela), 0) as total
                 FROM parcela_individual pi
                 JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
-                WHERE pp.orcamento_item_id IN ({ids_str}) AND pi.status = 'Pago'
-                GROUP BY pp.orcamento_item_id, pp.segmento
-            """)).fetchall():
-                d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
-                if segmento and 'obra' in segmento.lower(): d['mo'] += float(valor or 0)
-                else: d['mat'] += float(valor or 0)
-
-            # 4. Boletos pagos (sem tipo → Material)
-            for item_id, valor in db.session.execute(db.text(f"""
-                SELECT orcamento_item_id, COALESCE(SUM(valor), 0)
-                FROM boleto
-                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
-                GROUP BY orcamento_item_id
-            """)).fetchall():
-                pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})['mat'] += float(valor or 0)
-
+                WHERE pp.orcamento_item_id = {item_id} AND pi.status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(parcelas_pagas)
+            
+            # 4. Boletos pagos vinculados ao item
+            boletos_pagos = db.session.execute(db.text(f"""
+                SELECT COALESCE(SUM(valor), 0) as total
+                FROM boleto 
+                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
+            """)).scalar() or 0
+            total_pago += float(boletos_pagos)
+            
+            return total_pago
+        
         # Calcular totais
         total_mo = 0
         total_mat = 0
-        total_servico = 0
+        total_servico = 0  # NOVO: Total de serviços compostos
         total_pago_mo = 0
         total_pago_mat = 0
-        total_pago_servico = 0
+        total_pago_servico = 0  # NOVO
         total_itens = 0
         itens_vinculados = 0
         
@@ -16699,47 +16811,49 @@ def obter_orcamento_eng(obra_id):
         for etapa in etapas:
             etapa_mo = 0
             etapa_mat = 0
-            etapa_servico = 0
+            etapa_servico = 0  # NOVO
             etapa_pago = 0
-            etapa_pago_mo = 0
-            etapa_pago_mat = 0
             
             itens_dict = []
             for item in etapa.itens:
                 totais = item.calcular_totais()
                 etapa_mo += totais['total_mao_obra']
                 etapa_mat += totais['total_material']
-                etapa_servico += totais.get('total_servico', 0)
-
-                pago = pago_por_item.get(item.id, {'mo': 0.0, 'mat': 0.0})
-                item_pago_mo = pago['mo']
-                item_pago_mat = pago['mat']
-                item_pago = item_pago_mo + item_pago_mat
+                etapa_servico += totais.get('total_servico', 0)  # NOVO
+                
+                # NOVO: Calcular valor pago dinamicamente
+                item_pago = calcular_pago_item(item.id)
                 etapa_pago += item_pago
-                etapa_pago_mo += item_pago_mo
-                etapa_pago_mat += item_pago_mat
-
+                
                 total_itens += 1
                 if item.servico_id:
                     itens_vinculados += 1
                 
+                # Montar dict do item com valor pago calculado
                 item_dict = item.to_dict()
                 item_dict['total_pago'] = item_pago
-                item_dict['valor_pago_mo'] = item_pago_mo
-                item_dict['valor_pago_mat'] = item_pago_mat
                 item_dict['percentual_executado'] = round((item_pago / totais['total'] * 100) if totais['total'] > 0 else 0, 1)
                 itens_dict.append(item_dict)
             
             total_mo += etapa_mo
             total_mat += etapa_mat
-            total_servico += etapa_servico
-            etapa_total = etapa_mo + etapa_mat + etapa_servico
-
-            etapa_pago_servico = (etapa_pago * (etapa_servico / etapa_total)) if etapa_total > 0 and etapa_servico > 0 else 0
+            total_servico += etapa_servico  # NOVO
+            
+            etapa_total = etapa_mo + etapa_mat + etapa_servico  # MODIFICADO: incluir serviço
+            
+            # Calcular rateio do pago (proporcional ao orçamento)
+            if etapa_total > 0:
+                etapa_pago_mo = etapa_pago * (etapa_mo / etapa_total) if etapa_mo > 0 else 0
+                etapa_pago_mat = etapa_pago * (etapa_mat / etapa_total) if etapa_mat > 0 else 0
+                etapa_pago_servico = etapa_pago * (etapa_servico / etapa_total) if etapa_servico > 0 else 0
+            else:
+                etapa_pago_mo = 0
+                etapa_pago_mat = 0
+                etapa_pago_servico = 0
             
             total_pago_mo += etapa_pago_mo
             total_pago_mat += etapa_pago_mat
-            total_pago_servico += etapa_pago_servico
+            total_pago_servico += etapa_pago_servico  # NOVO
             
             etapas_dict.append({
                 **etapa.to_dict(include_itens=False),
