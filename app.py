@@ -11294,8 +11294,19 @@ def get_servico_financeiro(obra_id):
                     LIMIT 1
                 """), {"nome": servico_nome}).fetchone()
 
-                if cron_result and cron_result[5]:  # tem orcamento_etapa_id
-                    etapa_id = cron_result[5]
+                # Se não tem orcamento_etapa_id, tentar encontrar a etapa pelo nome
+                etapa_id_fallback = None
+                if cron_result and not cron_result[5]:
+                    etapa_by_name = db.session.execute(db.text(f"""
+                        SELECT id FROM orcamento_eng_etapa
+                        WHERE obra_id = {obra_id} AND LOWER(nome) = LOWER(:nome)
+                        LIMIT 1
+                    """), {"nome": servico_nome}).fetchone()
+                    if etapa_by_name:
+                        etapa_id_fallback = etapa_by_name[0]
+
+                if cron_result and (cron_result[5] or etapa_id_fallback):
+                    etapa_id = cron_result[5] or etapa_id_fallback
                     # Calcular total da etapa somando itens
                     totais = db.session.execute(db.text(f"""
                         SELECT
@@ -16779,53 +16790,72 @@ def obter_orcamento_eng(obra_id):
         # Buscar etapas com itens
         etapas = OrcamentoEngEtapa.query.filter_by(obra_id=obra_id).order_by(OrcamentoEngEtapa.ordem, OrcamentoEngEtapa.codigo).all()
         
-        # NOVO: Calcular valores pagos por item baseado nos pagamentos vinculados
-        def calcular_pago_item(item_id):
-            """Calcula o total pago para um item do orçamento somando todos os pagamentos vinculados"""
-            total_pago = 0
-            
-            # 1. Lançamentos pagos vinculados ao item
-            lancamentos_pagos = db.session.execute(db.text(f"""
-                SELECT COALESCE(SUM(valor_pago), 0) as total
-                FROM lancamento 
-                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
-            """)).scalar() or 0
-            total_pago += float(lancamentos_pagos)
-            
-            # 2. Pagamentos Futuros pagos vinculados ao item
-            pf_pagos = db.session.execute(db.text(f"""
-                SELECT COALESCE(SUM(valor), 0) as total
-                FROM pagamento_futuro 
-                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
-            """)).scalar() or 0
-            total_pago += float(pf_pagos)
-            
-            # 3. Parcelas pagas de pagamentos parcelados vinculados ao item
-            parcelas_pagas = db.session.execute(db.text(f"""
-                SELECT COALESCE(SUM(pi.valor_parcela), 0) as total
+        # OTIMIZAÇÃO: 4 queries bulk para todos os itens (elimina N+1 queries)
+        # Separa MO vs Material pelo tipo real de cada pagamento
+        ids_etapas = [e.id for e in etapas]
+        if ids_etapas:
+            todos_item_ids_rows = db.session.execute(db.text(
+                "SELECT id FROM orcamento_eng_item WHERE etapa_id = ANY(:ids)"
+            ), {"ids": ids_etapas}).fetchall()
+        else:
+            todos_item_ids_rows = []
+        todos_item_ids = [r[0] for r in todos_item_ids_rows]
+
+        pago_por_item = {}  # {item_id: {'mo': float, 'mat': float}}
+
+        if todos_item_ids:
+            ids_str = ','.join(str(i) for i in todos_item_ids)
+
+            # 1. Lançamentos pagos
+            for item_id, tipo, valor in db.session.execute(db.text(f"""
+                SELECT orcamento_item_id, tipo, COALESCE(SUM(valor_pago), 0)
+                FROM lancamento
+                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
+                GROUP BY orcamento_item_id, tipo
+            """)).fetchall():
+                d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
+                if tipo and 'obra' in tipo.lower(): d['mo'] += float(valor or 0)
+                else: d['mat'] += float(valor or 0)
+
+            # 2. Pagamentos Futuros pagos
+            for item_id, tipo, valor in db.session.execute(db.text(f"""
+                SELECT orcamento_item_id, tipo, COALESCE(SUM(valor), 0)
+                FROM pagamento_futuro
+                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
+                GROUP BY orcamento_item_id, tipo
+            """)).fetchall():
+                d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
+                if tipo and 'obra' in tipo.lower(): d['mo'] += float(valor or 0)
+                else: d['mat'] += float(valor or 0)
+
+            # 3. Parcelas pagas
+            for item_id, segmento, valor in db.session.execute(db.text(f"""
+                SELECT pp.orcamento_item_id, pp.segmento, COALESCE(SUM(pi.valor_parcela), 0)
                 FROM parcela_individual pi
                 JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
-                WHERE pp.orcamento_item_id = {item_id} AND pi.status = 'Pago'
-            """)).scalar() or 0
-            total_pago += float(parcelas_pagas)
-            
-            # 4. Boletos pagos vinculados ao item
-            boletos_pagos = db.session.execute(db.text(f"""
-                SELECT COALESCE(SUM(valor), 0) as total
-                FROM boleto 
-                WHERE orcamento_item_id = {item_id} AND status = 'Pago'
-            """)).scalar() or 0
-            total_pago += float(boletos_pagos)
-            
-            return total_pago
-        
+                WHERE pp.orcamento_item_id IN ({ids_str}) AND pi.status = 'Pago'
+                GROUP BY pp.orcamento_item_id, pp.segmento
+            """)).fetchall():
+                d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
+                if segmento and 'obra' in segmento.lower(): d['mo'] += float(valor or 0)
+                else: d['mat'] += float(valor or 0)
+
+            # 4. Boletos pagos (sem tipo → Material)
+            for item_id, valor in db.session.execute(db.text(f"""
+                SELECT orcamento_item_id, COALESCE(SUM(valor), 0)
+                FROM boleto
+                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
+                GROUP BY orcamento_item_id
+            """)).fetchall():
+                pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})['mat'] += float(valor or 0)
+
         # Calcular totais
         total_mo = 0
         total_mat = 0
-        total_servico = 0  # NOVO: Total de serviços compostos
+        total_servico = 0
         total_pago_mo = 0
         total_pago_mat = 0
-        total_pago_servico = 0  # NOVO
+        total_pago_servico = 0
         total_itens = 0
         itens_vinculados = 0
         
@@ -16833,49 +16863,46 @@ def obter_orcamento_eng(obra_id):
         for etapa in etapas:
             etapa_mo = 0
             etapa_mat = 0
-            etapa_servico = 0  # NOVO
-            etapa_pago = 0
+            etapa_servico = 0
+            etapa_pago_mo = 0
+            etapa_pago_mat = 0
             
             itens_dict = []
             for item in etapa.itens:
                 totais = item.calcular_totais()
                 etapa_mo += totais['total_mao_obra']
                 etapa_mat += totais['total_material']
-                etapa_servico += totais.get('total_servico', 0)  # NOVO
-                
-                # NOVO: Calcular valor pago dinamicamente
-                item_pago = calcular_pago_item(item.id)
-                etapa_pago += item_pago
-                
+                etapa_servico += totais.get('total_servico', 0)
+
+                pago = pago_por_item.get(item.id, {'mo': 0.0, 'mat': 0.0})
+                item_pago_mo = pago['mo']
+                item_pago_mat = pago['mat']
+                item_pago = item_pago_mo + item_pago_mat
+                etapa_pago_mo += item_pago_mo
+                etapa_pago_mat += item_pago_mat
+
                 total_itens += 1
                 if item.servico_id:
                     itens_vinculados += 1
                 
-                # Montar dict do item com valor pago calculado
                 item_dict = item.to_dict()
                 item_dict['total_pago'] = item_pago
+                item_dict['valor_pago_mo'] = item_pago_mo
+                item_dict['valor_pago_mat'] = item_pago_mat
                 item_dict['percentual_executado'] = round((item_pago / totais['total'] * 100) if totais['total'] > 0 else 0, 1)
                 itens_dict.append(item_dict)
             
             total_mo += etapa_mo
             total_mat += etapa_mat
-            total_servico += etapa_servico  # NOVO
-            
-            etapa_total = etapa_mo + etapa_mat + etapa_servico  # MODIFICADO: incluir serviço
-            
-            # Calcular rateio do pago (proporcional ao orçamento)
-            if etapa_total > 0:
-                etapa_pago_mo = etapa_pago * (etapa_mo / etapa_total) if etapa_mo > 0 else 0
-                etapa_pago_mat = etapa_pago * (etapa_mat / etapa_total) if etapa_mat > 0 else 0
-                etapa_pago_servico = etapa_pago * (etapa_servico / etapa_total) if etapa_servico > 0 else 0
-            else:
-                etapa_pago_mo = 0
-                etapa_pago_mat = 0
-                etapa_pago_servico = 0
+            total_servico += etapa_servico
+            etapa_total = etapa_mo + etapa_mat + etapa_servico
+            etapa_pago = etapa_pago_mo + etapa_pago_mat
+
+            etapa_pago_servico = (etapa_pago * (etapa_servico / etapa_total)) if etapa_total > 0 and etapa_servico > 0 else 0
             
             total_pago_mo += etapa_pago_mo
             total_pago_mat += etapa_pago_mat
-            total_pago_servico += etapa_pago_servico  # NOVO
+            total_pago_servico += etapa_pago_servico
             
             etapas_dict.append({
                 **etapa.to_dict(include_itens=False),
