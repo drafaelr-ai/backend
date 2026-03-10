@@ -11313,14 +11313,41 @@ def get_servico_financeiro(obra_id):
 
                     valor_total_orc = float((totais[0] or 0) + (totais[1] or 0))
 
-                    # Calcular valor pago: lê diretamente de valor_pago_mo + valor_pago_mat
-                    # (campos persistidos no banco, atualizados a cada pagamento vinculado)
-                    pago_result = db.session.execute(db.text(f"""
-                        SELECT COALESCE(SUM(COALESCE(valor_pago_mo, 0) + COALESCE(valor_pago_mat, 0)), 0)
-                        FROM orcamento_eng_item
-                        WHERE etapa_id = {etapa_id}
+                    # Calcular valor pago: mesma lógica do orçamento (4 fontes de pagamento)
+                    # 1. Lançamentos pagos vinculados aos itens da etapa
+                    vp_lanc = db.session.execute(db.text(f"""
+                        SELECT COALESCE(SUM(l.valor_pago), 0)
+                        FROM lancamento l
+                        JOIN orcamento_eng_item oi ON l.orcamento_item_id = oi.id
+                        WHERE oi.etapa_id = {etapa_id} AND l.status = 'Pago'
                     """)).scalar() or 0
-                    valor_pago_orc = float(pago_result)
+
+                    # 2. Pagamentos futuros pagos
+                    vp_futuro = db.session.execute(db.text(f"""
+                        SELECT COALESCE(SUM(pf.valor), 0)
+                        FROM pagamento_futuro pf
+                        JOIN orcamento_eng_item oi ON pf.orcamento_item_id = oi.id
+                        WHERE oi.etapa_id = {etapa_id} AND pf.status = 'Pago'
+                    """)).scalar() or 0
+
+                    # 3. Parcelas pagas de pagamentos parcelados
+                    vp_parcelas = db.session.execute(db.text(f"""
+                        SELECT COALESCE(SUM(pi.valor_parcela), 0)
+                        FROM parcela_individual pi
+                        JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
+                        JOIN orcamento_eng_item oi ON pp.orcamento_item_id = oi.id
+                        WHERE oi.etapa_id = {etapa_id} AND pi.status = 'Pago'
+                    """)).scalar() or 0
+
+                    # 4. Boletos pagos
+                    vp_boletos = db.session.execute(db.text(f"""
+                        SELECT COALESCE(SUM(b.valor), 0)
+                        FROM boleto b
+                        JOIN orcamento_eng_item oi ON b.orcamento_item_id = oi.id
+                        WHERE oi.etapa_id = {etapa_id} AND b.status = 'Pago'
+                    """)).scalar() or 0
+
+                    valor_pago_orc = float(vp_lanc) + float(vp_futuro) + float(vp_parcelas) + float(vp_boletos)
 
                     percentual_pago = round((valor_pago_orc / valor_total_orc * 100) if valor_total_orc > 0 else 0, 1)
                     percentual_exec = float(cron_result[1] or 0)
