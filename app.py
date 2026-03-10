@@ -2480,7 +2480,7 @@ def get_obra_detalhes(obra_id):
             total_budget_mat_ajustado = max(0, total_budget_mat - servicos_orcamento_mat)
                 
         except Exception as e:
-                import traceback
+            import traceback
             traceback.print_exc()
             total_orcamento_eng = 0.0
             total_orcamento_eng_mo = 0.0
@@ -5752,9 +5752,6 @@ def relatorio_resumo_completo(obra_id):
         elements.append(Spacer(1, 0.3*cm))
         
         if orcamentos:
-            # <-- MUDANÇA: Log de debug para verificar status
-                for orc in orcamentos:
-                    
             orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
             orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
             orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
@@ -6238,9 +6235,6 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
         elements.append(Spacer(1, 0.3*cm))
         
         if orcamentos:
-            # <-- MUDANÇA: Log de debug para verificar status
-                for orc in orcamentos:
-                    
             orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
             orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
             orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
@@ -6514,9 +6508,6 @@ def criar_pagamento_futuro(obra_id):
         
         # Verificar se foi salvo
         verificacao = PagamentoFuturo.query.get(novo_pagamento.id)
-        if verificacao:
-                else:
-            
         print(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com Tipo: {tipo}, Serviço: {servico_id} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
@@ -6566,7 +6557,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if 'tipo' in data:
             pagamento.tipo = data['tipo']
             if 'servico_id' in data:
-            pagamento.servico_id = data['servico_id'] if data['servico_id'] else None
+                pagamento.servico_id = data['servico_id'] if data['servico_id'] else None
             
         # NOVO: Atualizar orcamento_item_id via SQL direto
         if 'orcamento_item_id' in data:
@@ -8033,23 +8024,23 @@ def obter_alertas_vencimento(obra_id):
             }
             
             if pag.data_vencimento < hoje:
-                        alertas["vencidos"]["quantidade"] += 1
+                alertas["vencidos"]["quantidade"] += 1
                 alertas["vencidos"]["valor_total"] += pag.valor
                 alertas["vencidos"]["itens"].append(item)
             elif pag.data_vencimento == hoje:
-                        alertas["vence_hoje"]["quantidade"] += 1
+                alertas["vence_hoje"]["quantidade"] += 1
                 alertas["vence_hoje"]["valor_total"] += pag.valor
                 alertas["vence_hoje"]["itens"].append(item)
             elif pag.data_vencimento == amanha:
-                        alertas["vence_amanha"]["quantidade"] += 1
+                alertas["vence_amanha"]["quantidade"] += 1
                 alertas["vence_amanha"]["valor_total"] += pag.valor
                 alertas["vence_amanha"]["itens"].append(item)
             elif pag.data_vencimento <= em_7_dias:
-                        alertas["vence_7_dias"]["quantidade"] += 1
+                alertas["vence_7_dias"]["quantidade"] += 1
                 alertas["vence_7_dias"]["valor_total"] += pag.valor
                 alertas["vence_7_dias"]["itens"].append(item)
             else:
-                        alertas["futuros"]["quantidade"] += 1
+                alertas["futuros"]["quantidade"] += 1
                 alertas["futuros"]["valor_total"] += pag.valor
                 alertas["futuros"]["itens"].append(item)
         
