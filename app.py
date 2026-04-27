@@ -1496,6 +1496,17 @@ class PagamentoParcelado(db.Model):
             segmento_value = self.segmento if hasattr(self, 'segmento') and self.segmento else 'Material'
         except:
             segmento_value = 'Material'
+
+        # Bug Extra: detectar se há parcela de ENTRADA (numero_parcela = 0)
+        # Frontend usa esse flag para ajustar o denominador na exibição "X/Y"
+        # de modo que parcelas regulares contem 1..N ignorando a entrada
+        try:
+            tem_entrada = ParcelaIndividual.query.filter_by(
+                pagamento_parcelado_id=self.id,
+                numero_parcela=0
+            ).first() is not None
+        except Exception:
+            tem_entrada = False
         
         # Montar dicionário de resposta
         # Tratar pix e forma_pagamento de forma defensiva (colunas podem não existir ainda)
@@ -1534,6 +1545,7 @@ class PagamentoParcelado(db.Model):
             "forma_pagamento": forma_pagamento_value,
             "proxima_parcela_numero": proxima_parcela_numero if proxima_parcela_numero is not None else None,
             "proxima_parcela_vencimento": proxima_parcela_vencimento,
+            "tem_entrada": tem_entrada,
             "servico_id": self.servico_id,
             "servico_nome": servico_nome,
             "orcamento_item_id": orcamento_item_id,
