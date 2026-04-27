@@ -63,6 +63,10 @@ def run_auto_migration():
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN tipo VARCHAR(50);")
             print("✅ Coluna tipo adicionada")
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'codigo_barras';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN codigo_barras VARCHAR(100);")
+            print("✅ Coluna codigo_barras adicionada em pagamento_futuro")
         # 2. Verificar coluna segmento em pagamento_parcelado_v2
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_parcelado_v2' AND column_name = 'segmento';")
         if not cur.fetchone():
@@ -405,7 +409,81 @@ def run_auto_migration():
                 print("   🔄 Adicionando coluna horário à tabela agenda_demanda...")
                 cur.execute("ALTER TABLE agenda_demanda ADD COLUMN horario VARCHAR(10)")
                 print("   ✅ Coluna horário adicionada!")
-            
+
+        # =================================================================
+        # MÓDULO DIÁRIO DE OBRAS - GARANTIR EXISTÊNCIA DAS TABELAS
+        # =================================================================
+        print("🔄 Verificando tabela diario_obra...")
+        cur.execute("SELECT to_regclass('public.diario_obra');")
+        if not cur.fetchone()[0]:
+            print("📝 Criando tabela diario_obra...")
+            cur.execute("""
+                CREATE TABLE diario_obra (
+                    id SERIAL PRIMARY KEY,
+                    obra_id INTEGER NOT NULL REFERENCES obra(id) ON DELETE CASCADE,
+                    data DATE NOT NULL,
+                    titulo VARCHAR(200) NOT NULL,
+                    descricao TEXT,
+                    clima VARCHAR(50),
+                    temperatura VARCHAR(50),
+                    equipe_presente TEXT,
+                    atividades_realizadas TEXT,
+                    materiais_utilizados TEXT,
+                    equipamentos_utilizados TEXT,
+                    observacoes TEXT,
+                    criado_por INTEGER,
+                    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX idx_diario_obra_obra ON diario_obra(obra_id);
+                CREATE INDEX idx_diario_obra_data ON diario_obra(data);
+            """)
+            print("✅ Tabela diario_obra criada!")
+        else:
+            print("   ℹ️ Tabela diario_obra já existe")
+            # Garantir colunas que podem estar ausentes em bases antigas
+            colunas_diario = [
+                ('clima', 'VARCHAR(50)'),
+                ('temperatura', 'VARCHAR(50)'),
+                ('equipe_presente', 'TEXT'),
+                ('atividades_realizadas', 'TEXT'),
+                ('materiais_utilizados', 'TEXT'),
+                ('equipamentos_utilizados', 'TEXT'),
+                ('observacoes', 'TEXT'),
+                ('criado_por', 'INTEGER'),
+                ('criado_em', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+                ('atualizado_em', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+            ]
+            for col, tipo in colunas_diario:
+                cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='diario_obra' AND column_name=%s;",
+                    (col,)
+                )
+                if not cur.fetchone():
+                    cur.execute(f"ALTER TABLE diario_obra ADD COLUMN {col} {tipo};")
+                    print(f"   ✅ Coluna {col} adicionada em diario_obra")
+
+        print("🔄 Verificando tabela diario_imagens...")
+        cur.execute("SELECT to_regclass('public.diario_imagens');")
+        if not cur.fetchone()[0]:
+            print("📝 Criando tabela diario_imagens...")
+            cur.execute("""
+                CREATE TABLE diario_imagens (
+                    id SERIAL PRIMARY KEY,
+                    diario_id INTEGER NOT NULL REFERENCES diario_obra(id) ON DELETE CASCADE,
+                    arquivo_nome VARCHAR(255) NOT NULL,
+                    arquivo_base64 TEXT NOT NULL,
+                    legenda VARCHAR(500),
+                    ordem INTEGER DEFAULT 0,
+                    criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX idx_diario_imagens_diario ON diario_imagens(diario_id);
+            """)
+            print("✅ Tabela diario_imagens criada!")
+        else:
+            print("   ℹ️ Tabela diario_imagens já existe")
+
         conn.commit()
         cur.close()
         conn.close()
@@ -1269,6 +1347,7 @@ class PagamentoFuturo(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto/Pago/Cancelado
     fornecedor = db.Column(db.String(150), nullable=True)
     pix = db.Column(db.String(100), nullable=True)  # Chave PIX para pagamento
+    codigo_barras = db.Column(db.String(100), nullable=True)  # Código de barras / linha digitável
     observacoes = db.Column(db.Text, nullable=True)
     
     # NOVOS CAMPOS: Para vincular pagamentos futuros a serviços
@@ -1300,6 +1379,7 @@ class PagamentoFuturo(db.Model):
             "status": self.status,
             "fornecedor": self.fornecedor,
             "pix": self.pix,
+            "codigo_barras": self.codigo_barras,
             "observacoes": self.observacoes,
             "servico_id": self.servico_id,
             "tipo": self.tipo,
@@ -2690,12 +2770,51 @@ def get_obra_detalhes(obra_id):
                 "fornecedor": parcela.fornecedor
             })
         
-        # CORREÇÃO: Incluir parcelas SEM serviço que podem não ter criado Lançamento
-        # (backup para casos onde a criação do lançamento falhou)
-        # NOTA: Parcelas pagas SEM serviço NÃO são adicionadas aqui
-        # Elas já aparecem via Lancamento criado em marcar_parcela_paga()
-        # Isso evita DUPLICAÇÃO no histórico
-        print(f"--- [DEBUG] Parcelas pagas SEM serviço: não adicionadas (já têm Lancamento) ---")
+        # Bug F: Incluir parcelas órfãs (pagas sem serviço E sem orcamento_item, sem Lançamento)
+        # Pode acontecer via bulk pay ou editar_parcela_individual que não criam Lançamento
+        descricoes_lancamentos_existentes = {
+            item['descricao'] for item in historico_unificado
+            if item.get('tipo_registro') == 'lancamento'
+        }
+
+        parcelas_orfas_query = db.session.execute(db.text("""
+            SELECT pi.id, pi.numero_parcela, pi.valor_parcela, pi.data_vencimento, pi.data_pagamento,
+                   pp.id as pagamento_parcelado_id, pp.descricao, pp.numero_parcelas, pp.segmento, pp.fornecedor
+            FROM parcela_individual pi
+            JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
+            WHERE pp.obra_id = :obra_id
+              AND pi.status = 'Pago'
+              AND pp.servico_id IS NULL
+              AND pp.orcamento_item_id IS NULL
+        """), {"obra_id": obra_id}).fetchall()
+
+        orfas_adicionadas = 0
+        for parcela in parcelas_orfas_query:
+            descricao_esperada = f"{parcela.descricao} (Parcela {parcela.numero_parcela}/{parcela.numero_parcelas})"
+            if descricao_esperada in descricoes_lancamentos_existentes:
+                continue  # já está no histórico via Lançamento
+            historico_unificado.append({
+                "id": f"parcela-{parcela.id}",
+                "tipo_registro": "parcela_individual",
+                "data": parcela.data_pagamento or parcela.data_vencimento,
+                "data_vencimento": parcela.data_vencimento,
+                "descricao": descricao_esperada,
+                "tipo": parcela.segmento or "Material",
+                "valor_total": float(parcela.valor_parcela or 0.0),
+                "valor_pago": float(parcela.valor_parcela or 0.0),
+                "status": "Pago",
+                "pix": None,
+                "servico_id": None,
+                "servico_nome": None,
+                "orcamento_item_id": None,
+                "orcamento_item_nome": None,
+                "pagamento_parcelado_id": parcela.pagamento_parcelado_id,
+                "parcela_id": parcela.id,
+                "prioridade": 0,
+                "fornecedor": parcela.fornecedor
+            })
+            orfas_adicionadas += 1
+        print(f"--- [DEBUG Bug F] Parcelas órfãs adicionadas ao histórico: {orfas_adicionadas} ---")
         
         # --- INCLUIR BOLETOS PAGOS NO HISTÓRICO ---
         for boleto in boletos_obra:
@@ -2965,11 +3084,47 @@ def add_lancamento(obra_id):
             return jsonify({"erro": f"Formato de data inválido: {str(e)}"}), 400
         
         print(f"--- [LOG] Status='{status}', Valor={valor_total}, Data Vencimento={data_vencimento_obj} ---")
-        
+
+        # =====================================================================
+        # ANTI-DUPLICAÇÃO (BUG #2): bloquear lançamento idêntico já existente
+        # Critério: mesmo obra_id + descricao + valor_total + data
+        # Não criamos UNIQUE constraint para preservar dados históricos.
+        # =====================================================================
+        descricao_norm = (dados.get('descricao') or '').strip()
+        data_dup_check = data_registro
+
+        lanc_duplicado = Lancamento.query.filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.valor_total == valor_total,
+            Lancamento.data == data_dup_check,
+            func.lower(func.trim(Lancamento.descricao)) == descricao_norm.lower()
+        ).first()
+        if lanc_duplicado:
+            print(f"--- [LOG] ⚠️ Duplicidade detectada (Lancamento existente ID {lanc_duplicado.id}) — abortando criação ---")
+            return jsonify({
+                "erro": "Lançamento duplicado: já existe um lançamento com mesma descrição, valor e data nesta obra.",
+                "lancamento_id_existente": lanc_duplicado.id
+            }), 409
+
+        # Para fluxo 'A Pagar', verificar também na tabela PagamentoFuturo
+        if status == 'A Pagar':
+            futuro_duplicado = PagamentoFuturo.query.filter(
+                PagamentoFuturo.obra_id == obra_id,
+                PagamentoFuturo.valor == valor_total,
+                PagamentoFuturo.data_vencimento == data_vencimento_obj,
+                func.lower(func.trim(PagamentoFuturo.descricao)) == descricao_norm.lower()
+            ).first()
+            if futuro_duplicado:
+                print(f"--- [LOG] ⚠️ Duplicidade detectada (PagamentoFuturo existente ID {futuro_duplicado.id}) — abortando criação ---")
+                return jsonify({
+                    "erro": "Pagamento futuro duplicado: já existe um pagamento agendado com mesma descrição, valor e data de vencimento nesta obra.",
+                    "pagamento_id_existente": futuro_duplicado.id
+                }), 409
+
         # LÓGICA PRINCIPAL: Se é "A Pagar", cria PagamentoFuturo
         if status == 'A Pagar':
             print(f"--- [LOG] Status='A Pagar' → Criando PagamentoFuturo ---")
-            
+
             novo_pagamento_futuro = PagamentoFuturo(
                 obra_id=obra_id,
                 descricao=dados['descricao'],
@@ -3157,6 +3312,8 @@ def atualizar_lancamento_parcial(lancamento_id):
             lancamento.fornecedor = dados['fornecedor']
         if 'prioridade' in dados:
             lancamento.prioridade = int(dados['prioridade'])
+        if 'tipo' in dados:
+            lancamento.tipo = dados['tipo']  # 'Mão de Obra' ou 'Material'
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
         if 'orcamento_item_id' in dados:
@@ -3629,6 +3786,35 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
 # ===============================================================================
 
 # Rota para deletar pagamento de serviço pelo ID (usado pelo histórico de pagamentos)
+@app.route('/pagamentos-servico/<int:pagamento_id>', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def atualizar_pagamento_servico(pagamento_id):
+    """Atualização parcial de pagamento de serviço (tipo_pagamento, orcamento_item_id)"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    try:
+        pagamento = db.session.get(PagamentoServico, pagamento_id)
+        if not pagamento:
+            return jsonify({"erro": "Pagamento não encontrado"}), 404
+        dados = request.json
+        if 'tipo_pagamento' in dados:
+            pagamento.tipo_pagamento = dados['tipo_pagamento']  # 'mao_de_obra' ou 'material'
+        if 'orcamento_item_id' in dados:
+            orcamento_item_id = dados['orcamento_item_id']
+            try:
+                db.session.execute(db.text(
+                    f"UPDATE pagamento_servico SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
+                ))
+            except Exception as e:
+                print(f"[AVISO] Erro ao atualizar orcamento_item_id em pagamento_servico: {e}")
+        db.session.commit()
+        return jsonify({"sucesso": True, "id": pagamento_id})
+    except Exception as e:
+        db.session.rollback()
+        error_details = traceback.format_exc()
+        print(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (PATCH): {str(e)}\n{error_details} ---")
+        return jsonify({"erro": str(e)}), 500
+
 @app.route('/pagamentos-servico/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_pagamento_servico_por_id(pagamento_id):
@@ -6527,6 +6713,7 @@ def criar_pagamento_futuro(obra_id):
             data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             fornecedor=data.get('fornecedor'),
             pix=pix_value,
+            codigo_barras=data.get('codigo_barras'),
             observacoes=data.get('observacoes'),
             status=status,
             servico_id=servico_id if servico_id else None,
@@ -6602,6 +6789,8 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if 'pix' in data:
             print(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
             pagamento.pix = data['pix']
+        if 'codigo_barras' in data:
+            pagamento.codigo_barras = data['codigo_barras']
         if 'observacoes' in data:
             pagamento.observacoes = data['observacoes']
         if 'status' in data:
@@ -10015,7 +10204,30 @@ def marcar_multiplos_como_pago(obra_id):
                     
                     parcela.status = 'Pago'
                     parcela.data_pagamento = data_pagamento
-                    
+
+                    # Bug F: Criar Lançamento se parcela não tiver serviço (consistência com marcar_parcela_paga)
+                    if not pag_parcelado.servico_id:
+                        descricao_lanc = f"{pag_parcelado.descricao} (Parcela {parcela.numero_parcela}/{pag_parcelado.numero_parcelas})"
+                        segmento_info = getattr(pag_parcelado, 'segmento', None) or 'Material'
+                        novo_lanc = Lancamento(
+                            obra_id=pag_parcelado.obra_id,
+                            tipo='Despesa',
+                            descricao=descricao_lanc,
+                            valor_total=parcela.valor_parcela,
+                            valor_pago=parcela.valor_parcela,
+                            data=parcela.data_pagamento,
+                            data_vencimento=parcela.data_vencimento,
+                            status='Pago',
+                            pix=None,
+                            prioridade=0,
+                            fornecedor=pag_parcelado.fornecedor,
+                            servico_id=None
+                        )
+                        if hasattr(novo_lanc, 'segmento'):
+                            novo_lanc.segmento = segmento_info
+                        db.session.add(novo_lanc)
+                        db.session.flush()
+
                     # Atualizar contador de parcelas pagas
                     parcelas_pagas = ParcelaIndividual.query.filter_by(
                         pagamento_parcelado_id=pag_parcelado.id,
@@ -10177,31 +10389,35 @@ def marcar_multiplos_como_pago(obra_id):
 # ROTAS DO DIÁRIO DE OBRAS
 # ========================================
 
-@app.route('/obras/<int:obra_id>/diario', methods=['GET'])
+@app.route('/obras/<int:obra_id>/diario', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def listar_diario_obra(obra_id):
     """Lista todas as entradas do diário de uma obra"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
-        
+
         entradas = DiarioObra.query.filter_by(obra_id=obra_id).order_by(DiarioObra.data.desc()).all()
-        
+
         return jsonify({
             'entradas': [entrada.to_dict() for entrada in entradas]
         }), 200
-        
+
     except Exception as e:
         error_details = traceback.format_exc()
         print(f"--- [ERRO] GET /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-@app.route('/obras/<int:obra_id>/diario', methods=['POST'])
+@app.route('/obras/<int:obra_id>/diario', methods=['POST', 'OPTIONS'])
 @jwt_required()
 def criar_entrada_diario(obra_id):
     """Cria uma nova entrada no diário de obras"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -10255,10 +10471,12 @@ def criar_entrada_diario(obra_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-@app.route('/diario/<int:entrada_id>', methods=['GET'])
+@app.route('/diario/<int:entrada_id>', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def obter_entrada_diario(entrada_id):
     """Obtém uma entrada específica do diário"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         entrada = db.session.get(DiarioObra, entrada_id)
         if not entrada:
@@ -10276,10 +10494,12 @@ def obter_entrada_diario(entrada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-@app.route('/diario/<int:entrada_id>', methods=['PUT'])
+@app.route('/diario/<int:entrada_id>', methods=['PUT', 'OPTIONS'])
 @jwt_required()
 def atualizar_entrada_diario(entrada_id):
     """Atualiza uma entrada do diário"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         entrada = db.session.get(DiarioObra, entrada_id)
         if not entrada:
@@ -10328,10 +10548,12 @@ def atualizar_entrada_diario(entrada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-@app.route('/diario/<int:entrada_id>', methods=['DELETE'])
+@app.route('/diario/<int:entrada_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_entrada_diario(entrada_id):
     """Deleta uma entrada do diário"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         entrada = db.session.get(DiarioObra, entrada_id)
         if not entrada:
@@ -10354,10 +10576,12 @@ def deletar_entrada_diario(entrada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-@app.route('/diario/<int:entrada_id>/imagens', methods=['POST'])
+@app.route('/diario/<int:entrada_id>/imagens', methods=['POST', 'OPTIONS'])
 @jwt_required()
 def adicionar_imagem_diario(entrada_id):
     """Adiciona uma imagem a uma entrada existente"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         entrada = db.session.get(DiarioObra, entrada_id)
         if not entrada:
@@ -10396,10 +10620,12 @@ def adicionar_imagem_diario(entrada_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-@app.route('/diario/imagens/<int:imagem_id>', methods=['GET'])
+@app.route('/diario/imagens/<int:imagem_id>', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def get_imagem_diario(imagem_id):
     """Busca uma imagem do diario com base64"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         imagem = db.session.get(DiarioImagem, imagem_id)
         if not imagem:
@@ -10418,10 +10644,12 @@ def get_imagem_diario(imagem_id):
         return jsonify({"erro": str(e)}), 500
 
 
-@app.route('/diario/imagens/<int:imagem_id>', methods=['DELETE'])
+@app.route('/diario/imagens/<int:imagem_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
 def deletar_imagem_diario(imagem_id):
     """Deleta uma imagem do diário"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         imagem = db.session.get(DiarioImagem, imagem_id)
         if not imagem:
@@ -10445,10 +10673,12 @@ def deletar_imagem_diario(imagem_id):
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
-@app.route('/obras/<int:obra_id>/diario/relatorio', methods=['GET'])
+@app.route('/obras/<int:obra_id>/diario/relatorio', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def gerar_relatorio_diario(obra_id):
     """Gera relatório PDF do diário de obras"""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -11389,8 +11619,34 @@ def get_servico_financeiro(obra_id):
         
         # 2. Calcular valor total orçado (MO + Material)
         valor_total = float(servico.valor_global_mao_de_obra or 0.0) + float(servico.valor_global_material or 0.0)
-        print(f"[LOG] Valor total orçado: R$ {valor_total:.2f}")
-        
+        print(f"[LOG] Valor total orçado (Servico): R$ {valor_total:.2f}")
+
+        # CORREÇÃO BUG #3: Se Servico tem valor zero (caso típico quando o usuário
+        # mantém o orçamento no módulo Orçamento de Engenharia), buscar o valor
+        # somando os itens vinculados ao servico_id no orcamento_eng_item.
+        if valor_total <= 0:
+            try:
+                totais_orc = db.session.execute(db.text("""
+                    SELECT
+                        COALESCE(SUM(CASE
+                            WHEN tipo_composicao = 'separado' THEN quantidade * COALESCE(preco_mao_obra, 0)
+                            ELSE quantidade * COALESCE(preco_unitario, 0) * COALESCE(rateio_mo, 50) / 100
+                        END), 0) AS total_mo,
+                        COALESCE(SUM(CASE
+                            WHEN tipo_composicao = 'separado' THEN quantidade * COALESCE(preco_material, 0)
+                            ELSE quantidade * COALESCE(preco_unitario, 0) * COALESCE(rateio_mat, 50) / 100
+                        END), 0) AS total_mat
+                    FROM orcamento_eng_item
+                    WHERE servico_id = :sid
+                """), {"sid": servico.id}).fetchone()
+                if totais_orc:
+                    valor_total_orc_eng = float((totais_orc[0] or 0) + (totais_orc[1] or 0))
+                    if valor_total_orc_eng > 0:
+                        valor_total = valor_total_orc_eng
+                        print(f"[LOG] Valor total recalculado via orcamento_eng_item: R$ {valor_total:.2f}")
+            except Exception as e_fallback:
+                print(f"[AVISO] Falha ao calcular valor_total via orcamento_eng_item: {e_fallback}")
+
         # 3. Calcular valor já pago
         # Opção A: Pagamentos vinculados diretamente ao servico_id via PagamentoServico
         pagamentos_servico = db.session.query(
@@ -11398,27 +11654,47 @@ def get_servico_financeiro(obra_id):
         ).filter(
             PagamentoServico.servico_id == servico.id
         ).first()
-        
+
         valor_pago_servico = float(pagamentos_servico.total_pago or 0.0)
-        
-        # Opção B: Lançamentos vinculados ao servico_id e marcados como 'Pago'
+
+        # Opção B: Lançamentos vinculados ao servico_id (qualquer status — usamos valor_pago)
         lancamentos_pagos = db.session.query(
             func.sum(Lancamento.valor_pago).label('total_pago')
         ).filter(
             Lancamento.obra_id == obra_id,
             Lancamento.servico_id == servico.id
         ).first()
-        
+
         valor_pago_lancamentos = float(lancamentos_pagos.total_pago or 0.0)
-        
+
+        # CORREÇÃO BUG #3: Opção C — lançamentos vinculados aos itens do orçamento
+        # de engenharia que pertencem a este serviço. Necessário porque o módulo
+        # de orçamento de engenharia grava o vínculo via orcamento_item_id em vez
+        # de servico_id. Sem isto, valor_pago vinha zero quando o usuário registra
+        # custos pelo módulo novo de orçamento.
+        valor_pago_orc_item = 0.0
+        try:
+            res_orc_item = db.session.execute(db.text("""
+                SELECT COALESCE(SUM(l.valor_pago), 0)
+                FROM lancamento l
+                JOIN orcamento_eng_item oei ON l.orcamento_item_id = oei.id
+                WHERE l.obra_id = :obra_id
+                  AND oei.servico_id = :sid
+                  AND l.servico_id IS DISTINCT FROM :sid
+            """), {"obra_id": obra_id, "sid": servico.id}).scalar()
+            valor_pago_orc_item = float(res_orc_item or 0.0)
+        except Exception as e_oc:
+            print(f"[AVISO] Falha em Opção C (orcamento_item_id): {e_oc}")
+
         # NOTA: Não somamos parcelas pagas aqui porque quando uma parcela é marcada como paga,
         # já é criado um PagamentoServico (contabilizado na Opção A acima).
         # Somar aqui causaria duplicidade de valores!
-        
+
         # Somar todos os pagamentos (sem duplicidade)
-        valor_pago = valor_pago_servico + valor_pago_lancamentos
+        valor_pago = valor_pago_servico + valor_pago_lancamentos + valor_pago_orc_item
         print(f"[LOG] Valor já pago (PagamentoServico): R$ {valor_pago_servico:.2f}")
-        print(f"[LOG] Valor já pago (Lancamentos): R$ {valor_pago_lancamentos:.2f}")
+        print(f"[LOG] Valor já pago (Lancamentos servico_id): R$ {valor_pago_lancamentos:.2f}")
+        print(f"[LOG] Valor já pago (Lancamentos orcamento_item_id): R$ {valor_pago_orc_item:.2f}")
         print(f"[LOG] Valor total pago: R$ {valor_pago:.2f}")
         
         # 4. Buscar dados do cronograma
@@ -16435,19 +16711,25 @@ def bi_historico_mensal():
             Lancamento.status == 'Pago'
         ).all()
         print(f"[BI HISTORICO] Lançamentos pagos: {len(lancamentos)}")
-        
-        # Buscar parcelas pagas
+
+        # ALERTA #2 (correção 207%): Buscar APENAS parcelas pagas COM serviço vinculado.
+        # Parcelas SEM serviço já criam um Lancamento em marcar_parcela_paga(),
+        # então somar aqui ParcelaIndividual e Lancamento da mesma parcela
+        # gerava DUPLICAÇÃO (% acima de 100%).
         parcelas = ParcelaIndividual.query.join(PagamentoParcelado).filter(
             PagamentoParcelado.obra_id.in_(obras_ids),
-            ParcelaIndividual.status == 'Pago'
+            ParcelaIndividual.status == 'Pago',
+            PagamentoParcelado.servico_id.isnot(None)
         ).all()
-        print(f"[BI HISTORICO] Parcelas pagas: {len(parcelas)}")
-        
-        # Buscar pagamentos de serviço
+        print(f"[BI HISTORICO] Parcelas pagas (apenas com servico, sem duplicar Lancamento): {len(parcelas)}")
+
+        # Buscar pagamentos de serviço.
+        # ALERTA #2: usar valor_pago > 0 evita registros zerados/duplicados.
         pagamentos_servico = PagamentoServico.query.join(Servico).filter(
-            Servico.obra_id.in_(obras_ids)
+            Servico.obra_id.in_(obras_ids),
+            PagamentoServico.valor_pago > 0
         ).all()
-        print(f"[BI HISTORICO] Pagamentos de serviço: {len(pagamentos_servico)}")
+        print(f"[BI HISTORICO] Pagamentos de serviço (valor_pago>0): {len(pagamentos_servico)}")
         
         # Agrupar por mês
         meses = {}
