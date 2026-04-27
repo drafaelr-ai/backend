@@ -7612,30 +7612,29 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         print(f"      - servico_id: {pagamento.servico_id}")
         
         # ===== DELETAR TODOS OS REGISTROS RELACIONADOS =====
-        
+
         # 1. Buscar todas as parcelas deste pagamento
         parcelas = ParcelaIndividual.query.filter_by(
             pagamento_parcelado_id=pagamento_id
         ).all()
-        
+
         print(f"   📋 Encontradas {len(parcelas)} parcelas")
-        
-        # 2. Para cada parcela paga, deletar os registros relacionados
+
+        # Bug E: cascade catch-all de Lançamentos relacionados (independente do status da parcela)
+        # marcar_parcela_paga e bulk pay criam Lançamento com padrão "<descricao> (Parcela X/Y)"
+        descricao_pattern = f"{pagamento.descricao} (Parcela %"
+        lancs_relacionados = Lancamento.query.filter(
+            Lancamento.obra_id == obra_id,
+            Lancamento.descricao.like(descricao_pattern)
+        ).all()
+        print(f"   🗑️ Cascade Lançamentos: {len(lancs_relacionados)} encontrados via padrão '{descricao_pattern}'")
+        for lanc in lancs_relacionados:
+            print(f"      ❌ Deletando Lancamento ID={lanc.id}: '{lanc.descricao}'")
+            db.session.delete(lanc)
+
+        # 2. Para cada parcela paga, limpar PagamentoServico relacionado
         for parcela in parcelas:
             if parcela.status == 'Pago':
-                print(f"   🔍 Parcela {parcela.numero_parcela} está PAGA, buscando registros relacionados...")
-                
-                # Deletar Lançamentos vinculados
-                descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
-                lancamentos = Lancamento.query.filter_by(
-                    obra_id=obra_id,
-                    descricao=descricao_lancamento
-                ).all()
-                
-                for lanc in lancamentos:
-                    print(f"      ❌ Deletando Lancamento ID={lanc.id}")
-                    db.session.delete(lanc)
-                
                 # Se o pagamento está vinculado a um serviço, deletar PagamentoServico
                 if pagamento.servico_id:
                     # Buscar PagamentoServico que pode ter sido criado para esta parcela
