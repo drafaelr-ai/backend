@@ -7886,11 +7886,60 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
             return jsonify({"erro": "Parcela não encontrada"}), 404
         
         data = request.get_json()
-        
+
         # Atualiza os campos permitidos
         if 'valor_parcela' in data:
-            parcela.valor_parcela = float(data['valor_parcela'])
-        
+            # Bug C: redistribuir delta nas outras parcelas PENDENTES proporcionalmente
+            if parcela.status == 'Pago':
+                return jsonify({"erro": "Não é possível alterar o valor de uma parcela já paga"}), 400
+
+            novo_valor = float(data['valor_parcela'])
+            if novo_valor < 0:
+                return jsonify({"erro": "Valor da parcela não pode ser negativo"}), 400
+
+            valor_antigo = float(parcela.valor_parcela or 0.0)
+            delta = novo_valor - valor_antigo
+
+            outras_pendentes = ParcelaIndividual.query.filter(
+                ParcelaIndividual.pagamento_parcelado_id == pagamento_id,
+                ParcelaIndividual.id != parcela_id,
+                ParcelaIndividual.status != 'Pago'
+            ).order_by(ParcelaIndividual.numero_parcela.asc()).all()
+
+            if abs(delta) > 0.005 and outras_pendentes:
+                soma_outras = sum(float(p.valor_parcela or 0.0) for p in outras_pendentes)
+                if soma_outras <= 0:
+                    return jsonify({"erro": "Não há saldo positivo nas outras parcelas pendentes para redistribuir"}), 400
+
+                ajuste_total = -delta  # se parcela aumentou, outras diminuem
+                novos_valores = []
+                for p in outras_pendentes:
+                    valor_atual = float(p.valor_parcela or 0.0)
+                    proporção = valor_atual / soma_outras
+                    novo = round(valor_atual + (ajuste_total * proporção), 2)
+                    if novo < 0:
+                        return jsonify({
+                            "erro": f"Edição inviável: parcela {p.numero_parcela} ficaria negativa após redistribuição (R$ {novo:.2f})"
+                        }), 400
+                    novos_valores.append(novo)
+
+                # Acertar resíduo de arredondamento na última pendente
+                desejado_outras = round(soma_outras + ajuste_total, 2)
+                soma_apos = round(sum(novos_valores), 2)
+                residuo = round(desejado_outras - soma_apos, 2)
+                if abs(residuo) > 0.001 and novos_valores:
+                    novos_valores[-1] = round(novos_valores[-1] + residuo, 2)
+                    if novos_valores[-1] < 0:
+                        return jsonify({
+                            "erro": "Edição inviável: resíduo de arredondamento tornaria a última parcela negativa"
+                        }), 400
+
+                for p, nv in zip(outras_pendentes, novos_valores):
+                    p.valor_parcela = nv
+                print(f"--- [Bug C] Redistribuído delta {delta:.2f} em {len(outras_pendentes)} parcelas pendentes ---")
+
+            parcela.valor_parcela = novo_valor
+
         if 'data_vencimento' in data:
             parcela.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
         
