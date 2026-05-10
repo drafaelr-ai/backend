@@ -530,7 +530,13 @@ print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: 
 # -----------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
-app.config["JWT_SECRET_KEY"] = os.environ.get('JWT_SECRET_KEY', 'sua-chave-secreta-muito-forte-aqui-mude-depois')
+JWT_SECRET = os.environ.get('JWT_SECRET_KEY')
+if not JWT_SECRET:
+    raise RuntimeError(
+        "JWT_SECRET_KEY environment variable is required. "
+        "Defina-a no .env (dev) ou no provedor de deploy (prod)."
+    )
+app.config["JWT_SECRET_KEY"] = JWT_SECRET
 # CORREÇÃO: Aumentar tempo de expiração do token de 15min (padrão) para 24 horas
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
 jwt = JWTManager(app)
