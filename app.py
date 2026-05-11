@@ -28,7 +28,7 @@ from sqlalchemy.orm import joinedload
 from datetime import datetime, date, timedelta
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import (create_access_token, create_refresh_token,
+from flask_jwt_extended import (create_access_token,
                                 jwt_required, get_jwt_identity, JWTManager,
                                 verify_jwt_in_request, get_jwt)
 from functools import wraps
@@ -562,10 +562,9 @@ if not JWT_SECRET:
         "Defina-a no .env (dev) ou no provedor de deploy (prod)."
     )
 app.config["JWT_SECRET_KEY"] = JWT_SECRET
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
-app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
 jwt = JWTManager(app)
-logger.info("JWT configurado: access=1h, refresh=30d")
+logger.info("JWT configurado: access=7d")
 # ------------------------------------------------
 
 
@@ -2147,9 +2146,8 @@ def login():
             identity = str(user.id)
             additional_claims = {"username": user.username, "role": user.role}
             access_token = create_access_token(identity=identity, additional_claims=additional_claims)
-            refresh_token = create_refresh_token(identity=identity, additional_claims=additional_claims)
             logger.info(f"Login bem-sucedido para '{username}'")
-            return jsonify(access_token=access_token, refresh_token=refresh_token, user=user.to_dict())
+            return jsonify(access_token=access_token, user=user.to_dict())
         else:
             logger.warning(f"Falha no login para '{username}'")
             return jsonify({"erro": "Credenciais inválidas"}), 401
@@ -2157,19 +2155,6 @@ def login():
         logger.exception("Erro em /login")
         return jsonify({"erro": str(e)}), 500
 
-
-@app.route('/refresh', methods=['POST', 'OPTIONS'])
-@jwt_required(refresh=True)
-def refresh_token():
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    identity = get_jwt_identity()
-    claims = get_jwt()
-    additional_claims = {k: claims[k] for k in ('username', 'role') if k in claims}
-    new_access = create_access_token(identity=identity, additional_claims=additional_claims)
-    logger.info(f"Token renovado para user_id={identity}")
-    return jsonify(access_token=new_access)
-# ------------------------------------
 
 # --- ROTAS DE API (PROTEGIDAS) ---
 
