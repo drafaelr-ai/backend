@@ -30,6 +30,8 @@ from datetime import datetime, date, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
 from functools import wraps
+import logging
+from logging_setup import setup_logging
 
 print("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
 def run_auto_migration():
@@ -499,6 +501,8 @@ run_auto_migration()
 print("--- [LOG] Auto-migration concluída, iniciando app.py ---\n")
 
 app = Flask(__name__)
+setup_logging()
+logger = logging.getLogger(__name__)
 
 # --- CORS global canônico ---
 CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
