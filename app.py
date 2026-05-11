@@ -504,13 +504,22 @@ app = Flask(__name__)
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# --- CORS global canônico ---
-CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
+# --- CORS --- origens permitidas explicitamente
+ALLOWED_ORIGINS = [
+    'https://obraly.uk',
+    'https://www.obraly.uk',
+    'http://localhost:3000',
+    'http://localhost:3001',
+]
 
-# --- Reforço universal de cabeçalhos CORS em todas as respostas ---
+CORS(app, resources={r'/*': {'origins': ALLOWED_ORIGINS}}, supports_credentials=False)
+
+# --- Reforço de cabeçalhos CORS: ecoa a origem apenas se estiver na lista ---
 @app.after_request
 def apply_cors_headers(response):
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
     return response
@@ -530,7 +539,7 @@ def sid_options(any_path):
     return ('', 200)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
-logger.info(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: GET, POST, PUT, DELETE, OPTIONS ---")
+logger.info(f"CORS configurado para origens: {ALLOWED_ORIGINS}")
 # -----------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
@@ -4720,7 +4729,7 @@ def export_csv(obra_id):
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     logger.info(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
-        verify_jwt_in_request(optional=True) 
+        verify_jwt_in_request() 
         user = get_current_user()
         if not user or not user_has_access_to_obra(user, obra_id):
            logger.warning(f"--- [AVISO] Tentativa de export CSV sem permissão ou token (obra_id={obra_id}) ---")
@@ -6650,7 +6659,7 @@ def listar_pagamentos_futuros(obra_id):
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def criar_pagamento_futuro(obra_id):
     """Cria um novo pagamento futuro"""
     # OPTIONS é permitido sem JWT
@@ -6787,7 +6796,7 @@ def criar_pagamento_futuro(obra_id):
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def editar_pagamento_futuro(obra_id, pagamento_id):
     """Edita um pagamento futuro existente"""
     # OPTIONS é permitido sem JWT
@@ -7803,7 +7812,7 @@ def calcular_previsoes(obra_id):
 # ========================================
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas', methods=['GET', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def listar_parcelas_individuais(obra_id, pagamento_id):
     """
     Lista todas as parcelas individuais de um pagamento parcelado.
@@ -8020,7 +8029,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
 
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
     """Marca uma parcela individual como paga e cria lançamento no histórico"""
     
@@ -8167,7 +8176,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
 
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/desfazer', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
     """Desfaz o pagamento de uma parcela individual - volta para status Previsto"""
     
@@ -12339,7 +12348,7 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
 
 
 @app.route('/cronograma', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def create_cronograma():
     """Cria uma nova etapa do cronograma"""
     # Tratar OPTIONS para CORS preflight
@@ -12426,7 +12435,7 @@ def create_cronograma():
 
 
 @app.route('/cronograma/<int:cronograma_id>', methods=['PUT', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def update_cronograma(cronograma_id):
     """Atualiza uma etapa do cronograma"""
     # Tratar OPTIONS para CORS preflight
@@ -12531,7 +12540,7 @@ def update_cronograma(cronograma_id):
 
 
 @app.route('/cronograma/<int:cronograma_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def delete_cronograma(cronograma_id):
     """Deleta uma etapa do cronograma"""
     # Tratar OPTIONS para CORS preflight
@@ -12700,7 +12709,7 @@ def get_etapas_cronograma(cronograma_id):
 
 
 @app.route('/cronograma/<int:cronograma_id>/etapas', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def create_etapa_cronograma(cronograma_id):
     """
     Cria uma nova etapa ou subetapa no cronograma
@@ -12890,7 +12899,7 @@ def recalcular_subetapas_cascata(etapa_pai_id):
 
 
 @app.route('/cronograma/<int:cronograma_id>/etapas/<int:etapa_id>', methods=['PUT', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def update_etapa_cronograma(cronograma_id, etapa_id):
     """Atualiza uma etapa do cronograma"""
     if request.method == 'OPTIONS':
@@ -12960,7 +12969,7 @@ def update_etapa_cronograma(cronograma_id, etapa_id):
 
 
 @app.route('/cronograma/<int:cronograma_id>/etapas/<int:etapa_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def delete_etapa_cronograma(cronograma_id, etapa_id):
     """Exclui uma etapa do cronograma"""
     if request.method == 'OPTIONS':
@@ -13002,7 +13011,7 @@ def delete_etapa_cronograma(cronograma_id, etapa_id):
 
 
 @app.route('/cronograma/<int:cronograma_id>/etapas/reordenar', methods=['PUT', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def reordenar_etapas_cronograma(cronograma_id):
     """Reordena as etapas do cronograma"""
     if request.method == 'OPTIONS':
@@ -13121,7 +13130,7 @@ def listar_etapas_orcamento_para_cronograma(obra_id):
 
 
 @app.route('/obras/<int:obra_id>/cronograma/importar-orcamento', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def importar_orcamento_para_cronograma(obra_id):
     """
     Importa etapas selecionadas do orçamento de engenharia para o cronograma.
@@ -13687,7 +13696,7 @@ def setup_migrate_pagamentos_orcamento():
 # ==============================================================================
 
 @app.route('/cronograma/<int:cronograma_id>/sincronizar-orcamento', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def sincronizar_cronograma_orcamento(cronograma_id):
     """
     Sincroniza o percentual do cronograma para o orçamento vinculado.
@@ -13761,7 +13770,7 @@ def sincronizar_cronograma_orcamento(cronograma_id):
 
 
 @app.route('/cronograma/<int:cronograma_id>/vincular-orcamento', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@jwt_required()
 def vincular_cronograma_orcamento(cronograma_id):
     """
     Vincula manualmente um cronograma a uma etapa do orçamento.
@@ -16501,7 +16510,7 @@ def resumo_boletos(obra_id):
 # ROTA DE DEBUG - VERIFICAR DADOS DE PARCELAS E LANÇAMENTOS
 # ==============================================================================
 @app.route('/admin/debug-kpi/<int:obra_id>', methods=['GET', 'OPTIONS'])
-@jwt_required(optional=True)
+@check_permission(roles=["master"])
 def debug_kpi(obra_id):
     """Rota de debug para verificar cálculos de KPI"""
     if request.method == 'OPTIONS':
@@ -16592,7 +16601,7 @@ def debug_kpi(obra_id):
 # ROTA DE LIMPEZA - REMOVER LANÇAMENTOS DUPLICADOS DE PARCELAS
 # ==============================================================================
 @app.route('/admin/limpar-lancamentos-duplicados', methods=['GET', 'OPTIONS'])
-@jwt_required(optional=True)
+@check_permission(roles=["master"])
 def limpar_lancamentos_duplicados():
     """
     Remove lançamentos duplicados criados por parcelas pagas.
@@ -18800,7 +18809,7 @@ def importar_orcamento_gerado(obra_id):
 # ROTA DE TESTES - VALIDAÇÃO COMPLETA DE PAGAMENTOS E ORÇAMENTO
 # ==============================================================================
 @app.route('/api/testes/validar-sistema/<int:obra_id>', methods=['GET', 'OPTIONS'])
-@jwt_required(optional=True)
+@check_permission(roles=["master"])
 def validar_sistema_completo(obra_id):
     """
     ROTA DE TESTES COMPLETA
@@ -19138,7 +19147,7 @@ def validar_sistema_completo(obra_id):
 
 
 @app.route('/api/testes/simular-pagamento/<int:obra_id>', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@check_permission(roles=["master"])
 def simular_pagamento_teste(obra_id):
     """
     ROTA DE TESTE - Simula criação de pagamento vinculado a item do orçamento
@@ -19262,7 +19271,7 @@ def simular_pagamento_teste(obra_id):
 
 
 @app.route('/api/testes/popular-orcamento/<int:obra_id>', methods=['POST', 'OPTIONS'])
-@jwt_required(optional=True)
+@check_permission(roles=["master"])
 def popular_orcamento_teste(obra_id):
     """
     ROTA DE TESTE - Popula o orçamento de engenharia com dados de exemplo
@@ -19442,7 +19451,7 @@ def popular_orcamento_teste(obra_id):
 
 
 @app.route('/api/testes/limpar-orcamento/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required(optional=True)
+@check_permission(roles=["master"])
 def limpar_orcamento_teste(obra_id):
     """
     ROTA DE TESTE - Remove todo o orçamento de engenharia da obra
@@ -19483,7 +19492,7 @@ def limpar_orcamento_teste(obra_id):
 
 
 @app.route('/api/testes/limpar-testes/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required(optional=True)
+@check_permission(roles=["master"])
 def limpar_dados_teste(obra_id):
     """
     ROTA DE TESTE - Remove todos os registros de teste (marcados com [TESTE])
