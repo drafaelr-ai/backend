@@ -2066,6 +2066,7 @@ def check_permission(roles):
 
 # --- ROTA DE ADMINISTRAÇÃO (Existente) ---
 @app.route('/admin/create_tables', methods=['GET'])
+@check_permission(roles=["master"])
 def create_tables():
     logger.info("--- [LOG] Rota /admin/create_tables (GET) acessada ---")
     try:
@@ -2076,7 +2077,7 @@ def create_tables():
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/create_tables: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": "Falha ao criar tabelas.", "details": error_details}), 500
+        return jsonify({"erro": "Falha ao criar tabelas."}), 500
 # ------------------------------------
 
 
@@ -2106,7 +2107,7 @@ def register():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /register (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
@@ -2133,7 +2134,7 @@ def login():
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /login (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # ------------------------------------
 
 # --- ROTAS DE API (PROTEGIDAS) ---
@@ -2397,7 +2398,7 @@ def get_obras():
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DA ROTA ---
 
 
@@ -2430,7 +2431,7 @@ def add_obra():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- ROTA /obras/<id> (Dashboard Interno) ---
 @app.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
@@ -2608,7 +2609,6 @@ def get_obra_detalhes(obra_id):
             
         except Exception as e:
             logger.exception(f"--- [DEBUG KPI] Erro ao buscar Orçamento de Engenharia: {e} ---")
-            import traceback
             traceback.print_exc()
             total_orcamento_eng = 0.0
             total_orcamento_eng_mo = 0.0
@@ -2983,7 +2983,7 @@ def get_obra_detalhes(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO GERAL] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DA ROTA ---
 
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
@@ -3017,7 +3017,7 @@ def deletar_obra(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/obras/<int:obra_id>/concluir', methods=['PATCH', 'OPTIONS'])
@@ -3056,7 +3056,7 @@ def concluir_obra(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/concluir: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- Rotas de Lançamento (Geral) ---
 @app.route('/obras/<int:obra_id>/lancamentos', methods=['POST', 'OPTIONS'])
@@ -3247,7 +3247,7 @@ def add_lancamento(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -3273,7 +3273,7 @@ def marcar_como_pago(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -3314,7 +3314,7 @@ def editar_lancamento(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PATCH', 'OPTIONS'])
 @jwt_required()
@@ -3364,7 +3364,7 @@ def atualizar_lancamento_parcial(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id} (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
@@ -3424,7 +3424,7 @@ def deletar_lancamento(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 # --- ROTAS DE SERVIÇO (Atualizadas) ---
@@ -3503,7 +3503,7 @@ def add_servico(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/servicos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/obras/<int:obra_id>/servicos-nomes', methods=['GET', 'OPTIONS'])
 @jwt_required()
@@ -3570,7 +3570,7 @@ def editar_servico(servico_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/{servico_id} (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/servicos/<int:servico_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -3586,7 +3586,7 @@ def deletar_servico(servico_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/servicos/<int:servico_id>/concluir', methods=['PATCH', 'OPTIONS'])
@@ -3635,7 +3635,7 @@ def toggle_servico_concluido(servico_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/{servico_id}/concluir (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
 # @app.route('/servicos/<int:servico_id>/pagamentos', methods=['POST', 'OPTIONS'])
@@ -3681,7 +3681,7 @@ def toggle_servico_concluido(servico_id):
 #         db.session.rollback()
 #         error_details = traceback.format_exc()
 #         print(f"--- [ERRO] /servicos/{servico_id}/pagamentos (POST): {str(e)}\n{error_details} ---")
-#         return jsonify({"erro": str(e), "details": error_details}), 500
+#         return jsonify({"erro": str(e)}), 500
 # ===============================================================================
 
 # ===== ROTA PARA LIMPAR PAGAMENTOS DUPLICADOS DE PARCELAS =====
@@ -3751,7 +3751,6 @@ def limpar_pagamentos_parcelas_duplicados(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -3814,7 +3813,7 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # ===============================================================================
 
 # Rota para deletar pagamento de serviço pelo ID (usado pelo histórico de pagamentos)
@@ -3908,7 +3907,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # Rota alternativa para deletar pagamento de serviço (usada pelo histórico)
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
@@ -3964,7 +3963,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
 #         db.session.rollback()
 #         error_details = traceback.format_exc()
 #         print(f"--- [ERRO] /obras/.../servicos/pagamentos (DELETE): {str(e)}\n{error_details} ---")
-#         return jsonify({"erro": str(e), "details": error_details}), 500
+#         return jsonify({"erro": str(e)}), 500
 # ===============================================================================
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
@@ -3995,7 +3994,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
 #         db.session.rollback()
 #         error_details = traceback.format_exc()
 #         print(f"--- [ERRO] /servicos/pagamentos/.../status (PATCH): {str(e)}\n{error_details} ---")
-#         return jsonify({"erro": str(e), "details": error_details}), 500
+#         return jsonify({"erro": str(e)}), 500
 # ===============================================================================
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
@@ -4030,7 +4029,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
 #         db.session.rollback()
 #         error_details = traceback.format_exc()
 #         print(f"--- [ERRO] /servicos/pagamentos/.../prioridade (PATCH): {str(e)}\n{error_details} ---")
-#         return jsonify({"erro": str(e), "details": error_details}), 500
+#         return jsonify({"erro": str(e)}), 500
 # ===============================================================================
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
@@ -4089,7 +4088,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
 #         db.session.rollback()
 #         error_details = traceback.format_exc()
 #         print(f"--- [ERRO] PUT /servicos/pagamentos/{pagamento_id}: {str(e)}\n{error_details} ---")
-#         return jsonify({"erro": str(e), "details": error_details}), 500
+#         return jsonify({"erro": str(e)}), 500
 # ===============================================================================
 # ---------------------------------------------------
 
@@ -4152,7 +4151,7 @@ def pagar_item_parcial(item_type, item_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos/.../pagar (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DA NOVA ROTA ---
 
 
@@ -4201,7 +4200,7 @@ def get_orcamentos_obra(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/orcamentos (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master', 'comum'])  # Operador e Admin podem cadastrar
@@ -4276,7 +4275,7 @@ def add_orcamento(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -4310,7 +4309,7 @@ def editar_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id} (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DA ROTA ---
 
 @app.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
@@ -4472,7 +4471,7 @@ def aprovar_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>/converter_para_servico', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -4541,7 +4540,7 @@ def converter_orcamento_para_servico(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/converter_para_servico (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -4602,7 +4601,7 @@ def rejeitar_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # ---------------------------------------------------
 
 # <--- MUDANÇA: Novas Rotas para Anexos ---
@@ -4623,7 +4622,7 @@ def get_orcamento_anexos(orcamento_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>/anexos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -4657,7 +4656,7 @@ def add_anexos_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/anexos/<int:anexo_id>', methods=['GET', 'OPTIONS'])
@@ -4686,7 +4685,7 @@ def get_anexo_data(anexo_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /anexos/{anexo_id} (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/anexos/<int:anexo_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -4709,7 +4708,7 @@ def delete_anexo(anexo_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /anexos/{anexo_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # ---------------------------------------------------
 
 
@@ -4744,7 +4743,7 @@ def export_csv(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
 # @app.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
@@ -4860,7 +4859,7 @@ def export_pdf_pendentes_DESATIVADO(obra_id):
         logger.info(f"Traceback completo:")
         logger.error(error_details)
         logger.info(f"=" * 80)
-        return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
+        return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id }), 500
         
 # MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
 # @app.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
@@ -5059,9 +5058,8 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
         logger.error(error_details)
         logger.info(f"=" * 80)
         return jsonify({
-            "erro": "Erro ao gerar PDF", 
-            "mensagem": str(e), 
-            "details": error_details
+            "erro": "Erro ao gerar PDF",
+            "mensagem": str(e)
         }), 500
 
 # --- ROTAS DE ADMINISTRAÇÃO DE USUÁRIOS ---
@@ -5077,7 +5075,7 @@ def get_all_users():
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/admin/users', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['master'])
@@ -5109,7 +5107,7 @@ def create_user():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['master'])
@@ -5123,7 +5121,7 @@ def get_user_permissions(user_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users/{user_id}/permissions (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['master'])
@@ -5143,7 +5141,7 @@ def set_user_permissions(user_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- NOVA ROTA PARA DELETAR USUÁRIO ---
 @app.route('/admin/users/<int:user_id>', methods=['DELETE', 'OPTIONS'])
@@ -5233,7 +5231,7 @@ def delete_user(user_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users/{user_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DA NOVA ROTA ---
 # ---------------------------------------------------
 
@@ -5490,7 +5488,7 @@ def upload_nota_fiscal(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/obras/<int:obra_id>/notas-fiscais', methods=['GET', 'OPTIONS'])
@@ -5511,7 +5509,7 @@ def listar_notas_fiscais(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/notas-fiscais/<int:nf_id>', methods=['GET', 'OPTIONS'])
@@ -5538,7 +5536,7 @@ def download_nota_fiscal(nf_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /notas-fiscais/{nf_id} (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/notas-fiscais/<int:nf_id>', methods=['DELETE', 'OPTIONS'])
@@ -5568,7 +5566,7 @@ def deletar_nota_fiscal(nf_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /notas-fiscais/{nf_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DAS ROTAS DE NOTAS FISCAIS ---
 
 
@@ -5611,7 +5609,7 @@ def export_notas_fiscais_zip(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/notas-fiscais/export/zip (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/obras/<int:obra_id>/relatorio/resumo-completo', methods=['GET', 'OPTIONS'])
@@ -6098,7 +6096,7 @@ def relatorio_resumo_completo(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 # --- RELATÓRIO DE PAGAMENTOS PDF ---
@@ -6587,7 +6585,7 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/relatorio/pagamentos-pdf (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- FIM DAS ROTAS DE RELATÓRIOS ---
 
@@ -6649,7 +6647,7 @@ def listar_pagamentos_futuros(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -6786,7 +6784,7 @@ def criar_pagamento_futuro(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
 @jwt_required(optional=True)
@@ -6857,7 +6855,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] ❌ PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
@@ -6882,7 +6880,7 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 # ===================================================================================
@@ -7292,7 +7290,7 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         logger.info(f"\nStack trace:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- PAGAMENTOS PARCELADOS ---
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET'])
@@ -7344,7 +7342,7 @@ def listar_pagamentos_parcelados(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST'])
 @jwt_required()
@@ -7531,7 +7529,7 @@ def criar_pagamento_parcelado(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['PUT'])
 @jwt_required()
@@ -7626,7 +7624,7 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
@@ -7723,7 +7721,7 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         logger.info(f"\nStack trace:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- TABELA DE PREVISÕES (CÁLCULO) ---
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/previsoes', methods=['GET'])
@@ -10065,7 +10063,7 @@ def inserir_pagamento(obra_id):
         logger.info(f"\nStack trace:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT INSERIR PAGAMENTO ---
 
 
@@ -10469,7 +10467,7 @@ def marcar_multiplos_como_pago(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO FATAL] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT MARCAR MÚLTIPLOS COMO PAGO ---
 
 # ========================================
@@ -10496,7 +10494,7 @@ def listar_diario_obra(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/obras/<int:obra_id>/diario', methods=['POST', 'OPTIONS'])
@@ -10555,7 +10553,7 @@ def criar_entrada_diario(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/diario/<int:entrada_id>', methods=['GET', 'OPTIONS'])
@@ -10578,7 +10576,7 @@ def obter_entrada_diario(entrada_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /diario/{entrada_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/diario/<int:entrada_id>', methods=['PUT', 'OPTIONS'])
@@ -10632,7 +10630,7 @@ def atualizar_entrada_diario(entrada_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] PUT /diario/{entrada_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/diario/<int:entrada_id>', methods=['DELETE', 'OPTIONS'])
@@ -10660,7 +10658,7 @@ def deletar_entrada_diario(entrada_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] DELETE /diario/{entrada_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/diario/<int:entrada_id>/imagens', methods=['POST', 'OPTIONS'])
@@ -10704,7 +10702,7 @@ def adicionar_imagem_diario(entrada_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /diario/{entrada_id}/imagens: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/diario/imagens/<int:imagem_id>', methods=['GET', 'OPTIONS'])
@@ -10757,7 +10755,7 @@ def deletar_imagem_diario(imagem_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] DELETE /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 @app.route('/obras/<int:obra_id>/diario/relatorio', methods=['GET', 'OPTIONS'])
@@ -10935,7 +10933,7 @@ def gerar_relatorio_diario(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /obras/{obra_id}/diario/relatorio: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- MIGRAÇÃO DE DADOS ---
 @app.route('/admin/migrar-lancamentos-para-futuros/<int:obra_id>', methods=['POST'])
@@ -11006,7 +11004,7 @@ def migrar_lancamentos_para_futuros(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /admin/migrar-lancamentos-para-futuros/{obra_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e), "details": error_details}), 500
+        return jsonify({"erro": str(e)}), 500
 
 # --- FIM DAS ROTAS DO DIÁRIO DE OBRAS ---
 
@@ -11014,6 +11012,7 @@ def migrar_lancamentos_para_futuros(obra_id):
 # ROTA TEMPORÁRIA PARA MIGRAÇÃO DE PAGAMENTOS ANTIGOS
 # ==============================================================================
 @app.route('/admin/migrar-pagamentos-antigos', methods=['POST', 'OPTIONS'])
+@check_permission(roles=["master"])
 def migrar_pagamentos_antigos():
     """
     ROTA TEMPORÁRIA: Migra pagamentos com status 'Pago' do cronograma para o histórico.
@@ -11154,10 +11153,7 @@ def migrar_pagamentos_antigos():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"❌ ERRO CRÍTICO na migração: {str(e)}\n{error_details}")
-        return jsonify({
-            "erro": str(e),
-            "details": error_details
-        }), 500
+        return jsonify({"erro": str(e)}), 500
 
 # ==============================================================================
 
@@ -13120,7 +13116,6 @@ def listar_etapas_orcamento_para_cronograma(obra_id):
         
     except Exception as e:
         logger.exception(f"[ERRO] listar_etapas_orcamento_para_cronograma: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -13252,7 +13247,6 @@ def importar_orcamento_para_cronograma(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] importar_orcamento_para_cronograma: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -13262,6 +13256,7 @@ def importar_orcamento_para_cronograma(obra_id):
 # ==============================================================================
 
 @app.route('/setup/migrate-cronograma-orcamento', methods=['GET'])
+@check_permission(roles=["master"])
 def setup_migrate_cronograma_orcamento():
     """
     ROTA DE MIGRAÇÃO - Adiciona coluna orcamento_etapa_id ao cronograma_obra
@@ -13339,6 +13334,7 @@ def setup_migrate_cronograma_orcamento():
 # ==============================================================================
 
 @app.route('/setup/migrate-servicos-para-orcamento', methods=['GET'])
+@check_permission(roles=["master"])
 def setup_migrate_servicos_para_orcamento():
     """
     ROTA DE MIGRAÇÃO - Converte Serviços do Kanban em Itens do Orçamento de Engenharia
@@ -13439,12 +13435,12 @@ def setup_migrate_servicos_para_orcamento():
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         traceback.print_exc()
         return jsonify({'erro': str(e)}), 500
 
 
 @app.route('/setup/migrate-servicos-para-orcamento/<int:obra_id>', methods=['GET'])
+@check_permission(roles=["master"])
 def setup_migrate_servicos_para_orcamento_obra(obra_id):
     """
     ROTA DE MIGRAÇÃO - Converte Serviços do Kanban em Itens do Orçamento para UMA obra específica
@@ -13543,7 +13539,6 @@ def setup_migrate_servicos_para_orcamento_obra(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         traceback.print_exc()
         return jsonify({'erro': str(e)}), 500
 
@@ -13553,6 +13548,7 @@ def setup_migrate_servicos_para_orcamento_obra(obra_id):
 # ==============================================================================
 
 @app.route('/setup/migrate-pagamentos-orcamento', methods=['GET'])
+@check_permission(roles=["master"])
 def setup_migrate_pagamentos_orcamento():
     """
     ROTA DE MIGRAÇÃO - Adiciona coluna orcamento_item_id às tabelas de pagamento
@@ -13833,6 +13829,7 @@ def vincular_cronograma_orcamento(cronograma_id):
 # ==============================================================================
 
 @app.route('/setup/migrate-etapas-hierarquia', methods=['GET'])
+@check_permission(roles=["master"])
 def setup_migrate_etapas_hierarquia():
     """
     ROTA TEMPORÁRIA - Adiciona suporte a Etapas Pai e Subetapas
@@ -14002,6 +13999,7 @@ def setup_migrate_etapas_hierarquia():
 
 # ROTA SEM AUTENTICAÇÃO - Use uma única vez e depois remova!
 @app.route('/setup/create-cronograma-etapa-table', methods=['GET'])
+@check_permission(roles=["master"])
 def setup_create_cronograma_etapa():
     """
     ROTA TEMPORÁRIA SEM AUTENTICAÇÃO - Cria tabela cronograma_etapa
@@ -14225,6 +14223,7 @@ def migrate_add_servico_id():
 # ==============================================================================
 
 @app.route('/admin/check-pagamento-parcelado-info', methods=['GET'])
+@check_permission(roles=["master"])
 def check_pagamento_info():
     """Verificar informações sobre a tabela pagamento_parcelado"""
     try:
@@ -14250,6 +14249,7 @@ def check_pagamento_info():
 
 
 @app.route('/admin/limpar-pagamento-parcelado-e-adicionar-coluna', methods=['POST'])
+@check_permission(roles=["master"])
 def limpar_e_adicionar_coluna():
     """ATENÇÃO: APAGA TODOS os pagamentos parcelados e adiciona a coluna"""
     try:
@@ -14284,6 +14284,7 @@ def limpar_e_adicionar_coluna():
 
 
 @app.route('/admin/recuperar-parcelas-pagas', methods=['POST', 'GET'])
+@check_permission(roles=["master"])
 def recuperar_parcelas_pagas():
     """
     RECUPERAÇÃO DE DADOS: Reconstrói parcelas pagas a partir dos lançamentos existentes.
@@ -14460,8 +14461,7 @@ def recuperar_parcelas_pagas():
         logger.error(f"--- [ERRO] recuperar_parcelas_pagas: {str(e)}\n{error_details} ---")
         return jsonify({
             "success": False,
-            "error": str(e),
-            "details": error_details
+            "error": str(e)
         }), 500
 
 
@@ -15257,7 +15257,6 @@ def listar_servicos_para_importar(obra_id):
         
     except Exception as e:
         logger.exception(f"[ERRO] listar_servicos_para_importar: {str(e)}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -15326,7 +15325,6 @@ def sincronizar_cronograma_agenda(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] sincronizar_cronograma_agenda: {str(e)}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -16587,7 +16585,7 @@ def debug_kpi(obra_id):
         
         return jsonify(resultado)
     except Exception as e:
-        return jsonify({"erro": str(e), "trace": traceback.format_exc()}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 # ==============================================================================
@@ -16693,7 +16691,7 @@ def limpar_lancamentos_duplicados():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e), "trace": traceback.format_exc()}), 500
+        return jsonify({"erro": str(e)}), 500
 
 
 # ==============================================================================
@@ -17109,7 +17107,6 @@ def autocomplete_servicos():
         
     except Exception as e:
         logger.exception(f"[AUTOCOMPLETE] Erro: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -17336,7 +17333,6 @@ def obter_orcamento_eng(obra_id):
         
     except Exception as e:
         logger.exception(f"[ORCAMENTO-ENG] Erro: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -17498,7 +17494,6 @@ def deletar_etapa_orcamento(obra_id, etapa_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -17632,7 +17627,6 @@ def criar_item_orcamento(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ORCAMENTO-ENG] Erro ao criar item: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -17749,7 +17743,6 @@ def deletar_item_orcamento(obra_id, item_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -17828,7 +17821,6 @@ def sincronizar_servicos_com_orcamento(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -17889,7 +17881,6 @@ def apagar_orcamento_completo(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"Erro ao apagar orçamento: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -18701,7 +18692,6 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
         return jsonify({"erro": f"Erro de conexão: {e.reason}"}), 500
     except Exception as e:
         logger.exception(f"[PLANTA-IA] Erro: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -18802,7 +18792,6 @@ def importar_orcamento_gerado(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[IMPORTAR-ORC] Erro: {e}")
-        import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
 
@@ -19143,10 +19132,8 @@ def validar_sistema_completo(obra_id):
         return jsonify(resultados), 200
         
     except Exception as e:
-        import traceback
         return jsonify({
-            "erro": str(e),
-            "traceback": traceback.format_exc()
+            "erro": str(e)
         }), 500
 
 
@@ -19269,10 +19256,8 @@ def simular_pagamento_teste(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         return jsonify({
-            "erro": str(e),
-            "traceback": traceback.format_exc()
+            "erro": str(e)
         }), 500
 
 
@@ -19451,10 +19436,8 @@ def popular_orcamento_teste(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         return jsonify({
-            "erro": str(e),
-            "traceback": traceback.format_exc()
+            "erro": str(e)
         }), 500
 
 
@@ -19494,10 +19477,8 @@ def limpar_orcamento_teste(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         return jsonify({
-            "erro": str(e),
-            "traceback": traceback.format_exc()
+            "erro": str(e)
         }), 500
 
 
@@ -19546,10 +19527,8 @@ def limpar_dados_teste(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        import traceback
         return jsonify({
-            "erro": str(e),
-            "traceback": traceback.format_exc()
+            "erro": str(e)
         }), 500
 
 
