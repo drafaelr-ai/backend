@@ -562,6 +562,9 @@ if not JWT_SECRET:
         "Defina-a no .env (dev) ou no provedor de deploy (prod)."
     )
 app.config["JWT_SECRET_KEY"] = JWT_SECRET
+# JWT expira em 7 dias por decisão deliberada — uso interno (3 pessoas no escritório).
+# REVISAR quando: ampliar para usuários externos, adicionar 2FA, ou implementar refresh token.
+# Trade-off documentado: token roubado dá 7d de acesso até expirar.
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
 jwt = JWTManager(app)
 logger.info("JWT configurado: access=7d")
