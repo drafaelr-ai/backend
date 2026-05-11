@@ -33,12 +33,12 @@ from functools import wraps
 import logging
 from logging_setup import setup_logging
 
-print("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
+logger.debug("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
 def run_auto_migration():
     """Executa migration automaticamente no startup"""
-    print("=" * 70)
-    print("🔧 AUTO-MIGRATION: Corrigindo estrutura do banco...")
-    print("=" * 70)
+    logger.debug("=" * 70)
+    logger.debug("🔧 AUTO-MIGRATION: Corrigindo estrutura do banco...")
+    logger.debug("=" * 70)
     
     try:
         import psycopg2
@@ -46,7 +46,7 @@ def run_auto_migration():
         
         db_password = os.environ.get('DB_PASSWORD')
         if not db_password:
-            print("⚠️ DB_PASSWORD não encontrada, pulando migration")
+            logger.debug("⚠️ DB_PASSWORD não encontrada, pulando migration")
             return
         
         encoded_password = quote_plus(db_password)
@@ -60,46 +60,46 @@ def run_auto_migration():
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'servico_id';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN servico_id INTEGER;")
-            print("✅ Coluna servico_id adicionada")
+            logger.debug("✅ Coluna servico_id adicionada")
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'tipo';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN tipo VARCHAR(50);")
-            print("✅ Coluna tipo adicionada")
+            logger.debug("✅ Coluna tipo adicionada")
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'codigo_barras';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN codigo_barras VARCHAR(100);")
-            print("✅ Coluna codigo_barras adicionada em pagamento_futuro")
+            logger.debug("✅ Coluna codigo_barras adicionada em pagamento_futuro")
         # 2. Verificar coluna segmento em pagamento_parcelado_v2
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_parcelado_v2' AND column_name = 'segmento';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_parcelado_v2 ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';")
-            print("✅ Coluna segmento adicionada")
+            logger.debug("✅ Coluna segmento adicionada")
         
         # 2.5 NOVO: Adicionar campos de pagamento na tabela orcamento
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'data_vencimento';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE orcamento ADD COLUMN data_vencimento DATE;")
-            print("✅ Coluna data_vencimento adicionada em orcamento")
+            logger.debug("✅ Coluna data_vencimento adicionada em orcamento")
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'numero_parcelas';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE orcamento ADD COLUMN numero_parcelas INTEGER DEFAULT 1;")
-            print("✅ Coluna numero_parcelas adicionada em orcamento")
+            logger.debug("✅ Coluna numero_parcelas adicionada em orcamento")
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'periodicidade';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE orcamento ADD COLUMN periodicidade VARCHAR(20) DEFAULT 'Mensal';")
-            print("✅ Coluna periodicidade adicionada em orcamento")
+            logger.debug("✅ Coluna periodicidade adicionada em orcamento")
         
         # 2.6 NOVO: Adicionar coluna concluida na tabela obra
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'obra' AND column_name = 'concluida';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE obra ADD COLUMN concluida BOOLEAN DEFAULT FALSE;")
-            print("✅ Coluna concluida adicionada em obra")
+            logger.debug("✅ Coluna concluida adicionada em obra")
         
         # =================================================================
         # 3. CORREÇÃO DO ERRO DE FOREIGN KEY (CRÍTICO)
         # Verificar se a tabela parcela_individual existe E se a FK está correta
         # =================================================================
-        print("🔄 Verificando tabela parcela_individual...")
+        logger.debug("🔄 Verificando tabela parcela_individual...")
         
         # Verificar se a tabela existe
         cur.execute("SELECT to_regclass('public.parcela_individual');")
@@ -107,7 +107,7 @@ def run_auto_migration():
         
         if not tabela_existe:
             # Tabela não existe, criar
-            print("📝 Criando tabela parcela_individual...")
+            logger.debug("📝 Criando tabela parcela_individual...")
             cur.execute("""
                 CREATE TABLE parcela_individual (
                     id SERIAL PRIMARY KEY,
@@ -125,7 +125,7 @@ def run_auto_migration():
                         ON DELETE CASCADE
                 );
             """)
-            print("✅ Tabela parcela_individual criada!")
+            logger.debug("✅ Tabela parcela_individual criada!")
         else:
             # Tabela existe, verificar se FK está correta
             cur.execute("""
@@ -141,26 +141,26 @@ def run_auto_migration():
             fk_table = fk_result[0] if fk_result else None
             
             if fk_table == 'pagamento_parcelado_v2':
-                print("✅ Tabela parcela_individual já existe com FK correta")
+                logger.debug("✅ Tabela parcela_individual já existe com FK correta")
             else:
-                print(f"⚠️ FK atual aponta para: {fk_table}")
-                print("⚠️ NÃO vamos dropar a tabela para preservar dados")
-                print("⚠️ Se houver problemas de FK, corrija manualmente")
+                logger.debug(f"⚠️ FK atual aponta para: {fk_table}")
+                logger.debug("⚠️ NÃO vamos dropar a tabela para preservar dados")
+                logger.debug("⚠️ Se houver problemas de FK, corrija manualmente")
         
         # 4. Alterar comprovante_url para TEXT (suportar base64 grande)
-        print("🔄 Verificando coluna comprovante_url...")
+        logger.debug("🔄 Verificando coluna comprovante_url...")
         cur.execute("""
             SELECT data_type FROM information_schema.columns 
             WHERE table_name = 'movimentacao_caixa' AND column_name = 'comprovante_url';
         """)
         result = cur.fetchone()
         if result and result[0] != 'text':
-            print("📝 Alterando comprovante_url para TEXT...")
+            logger.debug("📝 Alterando comprovante_url para TEXT...")
             cur.execute("ALTER TABLE movimentacao_caixa ALTER COLUMN comprovante_url TYPE TEXT;")
-            print("✅ Coluna comprovante_url alterada para TEXT!")
+            logger.debug("✅ Coluna comprovante_url alterada para TEXT!")
         
         # 5. Remover FK constraints problemáticas em criado_por (para permitir exclusão de usuários)
-        print("🔄 Removendo FK constraints em criado_por...")
+        logger.debug("🔄 Removendo FK constraints em criado_por...")
         fk_constraints_to_drop = [
             ("diario_obra", "diario_obra_criado_por_fkey"),
             ("movimentacao_caixa", "movimentacao_caixa_criado_por_fkey"),
@@ -169,15 +169,15 @@ def run_auto_migration():
         for table, constraint in fk_constraints_to_drop:
             try:
                 cur.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {constraint};")
-                print(f"   ✅ Constraint {constraint} removida (ou não existia)")
+                logger.debug(f"   ✅ Constraint {constraint} removida (ou não existia)")
             except Exception as e:
-                print(f"   ⚠️ {constraint}: {str(e)[:50]}")
+                logger.debug(f"   ⚠️ {constraint}: {str(e)[:50]}")
         
         # 6. Criar tabela de boletos (Gestão de Boletos)
-        print("🔄 Verificando tabela boleto...")
+        logger.debug("🔄 Verificando tabela boleto...")
         cur.execute("SELECT to_regclass('public.boleto');")
         if not cur.fetchone()[0]:
-            print("📝 Criando tabela boleto...")
+            logger.debug("📝 Criando tabela boleto...")
             cur.execute("""
                 CREATE TABLE boleto (
                     id SERIAL PRIMARY KEY,
@@ -215,25 +215,25 @@ def run_auto_migration():
                 CREATE INDEX idx_boleto_vencimento ON boleto(data_vencimento);
                 CREATE INDEX idx_boleto_status ON boleto(status);
             """)
-            print("✅ Tabela boleto criada!")
+            logger.debug("✅ Tabela boleto criada!")
         else:
-            print("   ℹ️ Tabela boleto já existe")
+            logger.debug("   ℹ️ Tabela boleto já existe")
         
         # =================================================================
         # MÓDULO ORÇAMENTO DE ENGENHARIA - NOVAS TABELAS E CAMPOS
         # =================================================================
-        print("🔄 Verificando estrutura do módulo de Orçamento de Engenharia...")
+        logger.debug("🔄 Verificando estrutura do módulo de Orçamento de Engenharia...")
         
         # 1. Adicionar campos bdi e area na tabela obra
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'obra' AND column_name = 'bdi';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE obra ADD COLUMN bdi FLOAT DEFAULT 0;")
-            print("✅ Coluna bdi adicionada em obra")
+            logger.debug("✅ Coluna bdi adicionada em obra")
         
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'obra' AND column_name = 'area';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE obra ADD COLUMN area FLOAT;")
-            print("✅ Coluna area adicionada em obra")
+            logger.debug("✅ Coluna area adicionada em obra")
         
         # 2. Criar tabela servico_base (base de referência tipo SINAPI)
         cur.execute("SELECT to_regclass('public.servico_base');")
@@ -256,9 +256,9 @@ def run_auto_migration():
                 CREATE INDEX idx_servico_base_categoria ON servico_base(categoria);
                 CREATE INDEX idx_servico_base_descricao ON servico_base(descricao);
             """)
-            print("✅ Tabela servico_base criada!")
+            logger.debug("✅ Tabela servico_base criada!")
         else:
-            print("   ℹ️ Tabela servico_base já existe")
+            logger.debug("   ℹ️ Tabela servico_base já existe")
         
         # 3. Criar tabela servico_usuario (biblioteca do usuário)
         cur.execute("SELECT to_regclass('public.servico_usuario');")
@@ -283,9 +283,9 @@ def run_auto_migration():
                 CREATE INDEX idx_servico_usuario_user ON servico_usuario(user_id);
                 CREATE INDEX idx_servico_usuario_descricao ON servico_usuario(descricao);
             """)
-            print("✅ Tabela servico_usuario criada!")
+            logger.debug("✅ Tabela servico_usuario criada!")
         else:
-            print("   ℹ️ Tabela servico_usuario já existe")
+            logger.debug("   ℹ️ Tabela servico_usuario já existe")
         
         # 4. Criar tabela orcamento_eng_etapa
         cur.execute("SELECT to_regclass('public.orcamento_eng_etapa');")
@@ -301,9 +301,9 @@ def run_auto_migration():
                 );
                 CREATE INDEX idx_orc_etapa_obra ON orcamento_eng_etapa(obra_id);
             """)
-            print("✅ Tabela orcamento_eng_etapa criada!")
+            logger.debug("✅ Tabela orcamento_eng_etapa criada!")
         else:
-            print("   ℹ️ Tabela orcamento_eng_etapa já existe")
+            logger.debug("   ℹ️ Tabela orcamento_eng_etapa já existe")
         
         # 5. Criar tabela orcamento_eng_item
         cur.execute("SELECT to_regclass('public.orcamento_eng_item');")
@@ -331,33 +331,33 @@ def run_auto_migration():
                 CREATE INDEX idx_orc_item_etapa ON orcamento_eng_item(etapa_id);
                 CREATE INDEX idx_orc_item_servico ON orcamento_eng_item(servico_id);
             """)
-            print("✅ Tabela orcamento_eng_item criada!")
+            logger.debug("✅ Tabela orcamento_eng_item criada!")
         else:
-            print("   ℹ️ Tabela orcamento_eng_item já existe")
+            logger.debug("   ℹ️ Tabela orcamento_eng_item já existe")
         
-        print("✅ Módulo de Orçamento de Engenharia verificado!")
+        logger.debug("✅ Módulo de Orçamento de Engenharia verificado!")
         
         # =================================================================
         # CAMPO CONCLUÍDO NO SERVIÇO
         # =================================================================
-        print("🔄 Verificando campo concluido em servico...")
+        logger.debug("🔄 Verificando campo concluido em servico...")
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'servico' AND column_name = 'concluido';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE servico ADD COLUMN concluido BOOLEAN DEFAULT FALSE;")
-            print("✅ Coluna concluido adicionada em servico")
+            logger.debug("✅ Coluna concluido adicionada em servico")
         
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'servico' AND column_name = 'data_conclusao';")
         if not cur.fetchone():
             cur.execute("ALTER TABLE servico ADD COLUMN data_conclusao DATE;")
-            print("✅ Coluna data_conclusao adicionada em servico")
+            logger.debug("✅ Coluna data_conclusao adicionada em servico")
         
         # =================================================================
         # MÓDULO AGENDA DE DEMANDAS - NOVA TABELA
         # =================================================================
-        print("🔄 Verificando tabela agenda_demanda...")
+        logger.debug("🔄 Verificando tabela agenda_demanda...")
         cur.execute("SELECT to_regclass('public.agenda_demanda');")
         if not cur.fetchone()[0]:
-            print("📝 Criando tabela agenda_demanda...")
+            logger.debug("📝 Criando tabela agenda_demanda...")
             cur.execute("""
                 CREATE TABLE agenda_demanda (
                     id SERIAL PRIMARY KEY,
@@ -399,26 +399,26 @@ def run_auto_migration():
                 CREATE INDEX idx_agenda_demanda_data ON agenda_demanda(data_prevista);
                 CREATE INDEX idx_agenda_demanda_status ON agenda_demanda(status);
             """)
-            print("✅ Tabela agenda_demanda criada!")
+            logger.debug("✅ Tabela agenda_demanda criada!")
         else:
-            print("   ℹ️ Tabela agenda_demanda já existe")
+            logger.debug("   ℹ️ Tabela agenda_demanda já existe")
             # Verificar e adicionar coluna horário se não existir
             cur.execute("""
                 SELECT column_name FROM information_schema.columns 
                 WHERE table_name = 'agenda_demanda' AND column_name = 'horario'
             """)
             if not cur.fetchone():
-                print("   🔄 Adicionando coluna horário à tabela agenda_demanda...")
+                logger.debug("   🔄 Adicionando coluna horário à tabela agenda_demanda...")
                 cur.execute("ALTER TABLE agenda_demanda ADD COLUMN horario VARCHAR(10)")
-                print("   ✅ Coluna horário adicionada!")
+                logger.debug("   ✅ Coluna horário adicionada!")
 
         # =================================================================
         # MÓDULO DIÁRIO DE OBRAS - GARANTIR EXISTÊNCIA DAS TABELAS
         # =================================================================
-        print("🔄 Verificando tabela diario_obra...")
+        logger.debug("🔄 Verificando tabela diario_obra...")
         cur.execute("SELECT to_regclass('public.diario_obra');")
         if not cur.fetchone()[0]:
-            print("📝 Criando tabela diario_obra...")
+            logger.debug("📝 Criando tabela diario_obra...")
             cur.execute("""
                 CREATE TABLE diario_obra (
                     id SERIAL PRIMARY KEY,
@@ -440,9 +440,9 @@ def run_auto_migration():
                 CREATE INDEX idx_diario_obra_obra ON diario_obra(obra_id);
                 CREATE INDEX idx_diario_obra_data ON diario_obra(data);
             """)
-            print("✅ Tabela diario_obra criada!")
+            logger.debug("✅ Tabela diario_obra criada!")
         else:
-            print("   ℹ️ Tabela diario_obra já existe")
+            logger.debug("   ℹ️ Tabela diario_obra já existe")
             # Garantir colunas que podem estar ausentes em bases antigas
             colunas_diario = [
                 ('clima', 'VARCHAR(50)'),
@@ -464,12 +464,12 @@ def run_auto_migration():
                 )
                 if not cur.fetchone():
                     cur.execute(f"ALTER TABLE diario_obra ADD COLUMN {col} {tipo};")
-                    print(f"   ✅ Coluna {col} adicionada em diario_obra")
+                    logger.debug(f"   ✅ Coluna {col} adicionada em diario_obra")
 
-        print("🔄 Verificando tabela diario_imagens...")
+        logger.debug("🔄 Verificando tabela diario_imagens...")
         cur.execute("SELECT to_regclass('public.diario_imagens');")
         if not cur.fetchone()[0]:
-            print("📝 Criando tabela diario_imagens...")
+            logger.debug("📝 Criando tabela diario_imagens...")
             cur.execute("""
                 CREATE TABLE diario_imagens (
                     id SERIAL PRIMARY KEY,
@@ -482,23 +482,23 @@ def run_auto_migration():
                 );
                 CREATE INDEX idx_diario_imagens_diario ON diario_imagens(diario_id);
             """)
-            print("✅ Tabela diario_imagens criada!")
+            logger.debug("✅ Tabela diario_imagens criada!")
         else:
-            print("   ℹ️ Tabela diario_imagens já existe")
+            logger.debug("   ℹ️ Tabela diario_imagens já existe")
 
         conn.commit()
         cur.close()
         conn.close()
-        print("🎉 AUTO-MIGRATION CONCLUÍDA!")
+        logger.debug("🎉 AUTO-MIGRATION CONCLUÍDA!")
         
     except Exception as e:
-        print(f"❌ Erro na auto-migration: {e}")
+        logger.debug(f"❌ Erro na auto-migration: {e}")
         traceback.print_exc()
 
 # Executar migration automaticamente
-print("\n--- [LOG] Executando auto-migration antes de iniciar o app ---")
+logger.debug("\n--- [LOG] Executando auto-migration antes de iniciar o app ---")
 run_auto_migration()
-print("--- [LOG] Auto-migration concluída, iniciando app.py ---\n")
+logger.debug("--- [LOG] Auto-migration concluída, iniciando app.py ---\n")
 
 app = Flask(__name__)
 setup_logging()
@@ -530,7 +530,7 @@ def sid_options(any_path):
     return ('', 200)
 
 # --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
-print(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: GET, POST, PUT, DELETE, OPTIONS ---")
+logger.debug(f"--- [LOG] CORS configurado para permitir TODAS AS ORIGENS com métodos: GET, POST, PUT, DELETE, OPTIONS ---")
 # -----------------------------------------------------------------
 
 # --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
@@ -544,7 +544,7 @@ app.config["JWT_SECRET_KEY"] = JWT_SECRET
 # CORREÇÃO: Aumentar tempo de expiração do token de 15min (padrão) para 24 horas
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
 jwt = JWTManager(app)
-print("--- [LOG] JWT Manager inicializado com expiração de 24 horas ---")
+logger.debug("--- [LOG] JWT Manager inicializado com expiração de 24 horas ---")
 # ------------------------------------------------
 
 
@@ -554,19 +554,19 @@ DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
 DB_PORT = "6543"  # Porta 6543 = Transaction mode (mais conexões permitidas)
 DB_NAME = "postgres"
 
-print("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
+logger.debug("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
 DB_PASSWORD = os.environ.get('DB_PASSWORD')
 
 if not DB_PASSWORD:
-    print("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
+    logger.debug("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
     raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
 else:
-    print("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
+    logger.debug("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
 
 encoded_password = quote_plus(DB_PASSWORD)
 
 DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
-print(f"--- [LOG] String de conexão criada para usuário {DB_USER} (com sslmode=require) ---")
+logger.debug(f"--- [LOG] String de conexão criada para usuário {DB_USER} (com sslmode=require) ---")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -587,14 +587,14 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
 # --------------------------------------------------------------
 
 db = SQLAlchemy(app)
-print("--- [LOG] SQLAlchemy inicializado ---")
+logger.debug("--- [LOG] SQLAlchemy inicializado ---")
 
 # --- GERENCIAMENTO AUTOMÁTICO DE CONEXÕES ---
 @app.teardown_appcontext
 def shutdown_session(exception=None):
     """Fecha a sessão do banco após cada requisição para liberar conexões"""
     db.session.remove()
-print("--- [LOG] Teardown de sessão configurado ---")
+logger.debug("--- [LOG] Teardown de sessão configurado ---")
 # ------------------------------------------------
 
 
@@ -672,11 +672,11 @@ def criar_notificacao(usuario_destino_id, tipo, titulo, mensagem=None, obra_id=N
         )
         db.session.add(notificacao)
         db.session.commit()
-        print(f"--- [NOTIF] Notificação criada: {tipo} para usuário {usuario_destino_id} ---")
+        logger.debug(f"--- [NOTIF] Notificação criada: {tipo} para usuário {usuario_destino_id} ---")
         return notificacao
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] Falha ao criar notificação: {e} ---")
+        logger.debug(f"--- [ERRO] Falha ao criar notificação: {e} ---")
         return None
 
 def notificar_masters(tipo, titulo, mensagem=None, obra_id=None, item_id=None, item_type=None, usuario_origem_id=None):
@@ -797,7 +797,7 @@ class Boleto(db.Model):
             try:
                 servico = db.session.get(Servico, self.vinculado_servico_id)
                 servico_nome = servico.nome if servico else None
-            except:
+            except Exception:
                 pass
         
         # Buscar orcamento_item_id de forma segura (coluna pode não existir)
@@ -812,7 +812,7 @@ class Boleto(db.Model):
                 item = OrcamentoEngItem.query.get(orcamento_item_id)
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-        except:
+        except Exception:
             pass
         
         return {
@@ -853,7 +853,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
         boletos_encontrados = []
         
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            print(f"--- [BOLETO] PDF com {len(pdf.pages)} páginas ---")
+            logger.debug(f"--- [BOLETO] PDF com {len(pdf.pages)} páginas ---")
             
             # Processar cada página separadamente
             for page_num, page in enumerate(pdf.pages, 1):
@@ -862,7 +862,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
                 if not texto.strip():
                     continue
                 
-                print(f"--- [BOLETO] Página {page_num}: {len(texto)} chars ---")
+                logger.debug(f"--- [BOLETO] Página {page_num}: {len(texto)} chars ---")
                 
                 boleto = {
                     'codigo_barras': None,
@@ -915,7 +915,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
                             if valor > 10 and valor < 10000000:  # Entre R$10 e R$10mi
                                 boleto['valor'] = valor
                                 break
-                        except:
+                        except Exception:
                             continue
                     if boleto['valor']:
                         break
@@ -939,7 +939,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
                             data_parsed = datetime.strptime(data_str, '%d/%m/%Y').date()
                             if data_parsed.year >= hoje.year:
                                 datas_encontradas.append(data_parsed)
-                        except:
+                        except Exception:
                             continue
                 
                 # Preferir data futura (vencimento) ao invés de data passada (emissão)
@@ -988,7 +988,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
                     )
                     if not codigo_existente:
                         boletos_encontrados.append(boleto)
-                        print(f"--- [BOLETO] Página {page_num}: Código={boleto['codigo_barras'][:20] if boleto['codigo_barras'] else 'N/A'}..., Valor={boleto['valor']}, Venc={boleto['data_vencimento']} ---")
+                        logger.debug(f"--- [BOLETO] Página {page_num}: Código={boleto['codigo_barras'][:20] if boleto['codigo_barras'] else 'N/A'}..., Valor={boleto['valor']}, Venc={boleto['data_vencimento']} ---")
         
         # Retornar resultado
         if len(boletos_encontrados) == 0:
@@ -1017,7 +1017,7 @@ def extrair_dados_boleto_pdf(pdf_base64):
             }
         else:
             # Múltiplos boletos encontrados
-            print(f"--- [BOLETO] {len(boletos_encontrados)} boletos encontrados no PDF ---")
+            logger.debug(f"--- [BOLETO] {len(boletos_encontrados)} boletos encontrados no PDF ---")
             return {
                 'sucesso': True,
                 'multiplos': True,
@@ -1031,10 +1031,10 @@ def extrair_dados_boleto_pdf(pdf_base64):
             }
         
     except ImportError as e:
-        print(f"--- [BOLETO] pdfplumber não instalado: {e} ---")
+        logger.debug(f"--- [BOLETO] pdfplumber não instalado: {e} ---")
         return {'sucesso': False, 'multiplos': False, 'quantidade': 0, 'boletos': [], 'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
     except Exception as e:
-        print(f"--- [BOLETO] Erro: {e} ---")
+        logger.debug(f"--- [BOLETO] Erro: {e} ---")
         traceback.print_exc()
         return {'sucesso': False, 'multiplos': False, 'quantidade': 0, 'boletos': [], 'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
 
@@ -1103,11 +1103,11 @@ def verificar_alertas_boletos():
                 )
         
         db.session.commit()
-        print(f"--- [BOLETO] Verificação de alertas concluída ({len(boletos)} boletos) ---")
+        logger.debug(f"--- [BOLETO] Verificação de alertas concluída ({len(boletos)} boletos) ---")
         
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] Falha ao verificar alertas de boletos: {e} ---")
+        logger.debug(f"--- [ERRO] Falha ao verificar alertas de boletos: {e} ---")
 
 
 # --- MODELOS DO BANCO DE DADOS (PRINCIPAIS) ---
@@ -1133,7 +1133,7 @@ class Obra(db.Model):
         try:
             bdi_val = self.bdi if hasattr(self, 'bdi') and self.bdi is not None else 0
             area_val = self.area if hasattr(self, 'area') else None
-        except:
+        except Exception:
             bdi_val = 0
             area_val = None
         return { 
@@ -1171,7 +1171,7 @@ class Lancamento(db.Model):
         try:
             if hasattr(self, 'segmento') and self.segmento:
                 segmento_value = self.segmento
-        except:
+        except Exception:
             pass
         
         # Buscar orcamento_item_id de forma segura (coluna pode não existir)
@@ -1186,7 +1186,7 @@ class Lancamento(db.Model):
                 item = OrcamentoEngItem.query.get(orcamento_item_id)
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-        except:
+        except Exception:
             pass
         
         return {
@@ -1377,7 +1377,7 @@ class PagamentoFuturo(db.Model):
                 item = OrcamentoEngItem.query.get(orcamento_item_id)
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-        except:
+        except Exception:
             pass
         
         return {
@@ -1460,7 +1460,7 @@ class PagamentoParcelado(db.Model):
                 if proxima_parcela_numero == 0:
                     proxima_parcela_numero = 0  # Manter como 0 para indicar entrada
         except Exception as e:
-            print(f"[AVISO] Erro ao buscar próxima parcela: {e}")
+            logger.debug(f"[AVISO] Erro ao buscar próxima parcela: {e}")
             # Fallback: usar cálculo antigo
             proxima_parcela_numero = self.parcelas_pagas + 1
             if proxima_parcela_numero <= self.numero_parcelas:
@@ -1473,7 +1473,7 @@ class PagamentoParcelado(db.Model):
                     else:  # Mensal
                         proxima_data = add_months_safe(self.data_primeira_parcela, (proxima_parcela_numero - 1))
                         proxima_parcela_vencimento = proxima_data.isoformat()
-                except:
+                except Exception:
                     pass
         
         # Buscar nome do serviço de forma segura
@@ -1483,7 +1483,7 @@ class PagamentoParcelado(db.Model):
                 servico = Servico.query.get(self.servico_id)
                 servico_nome = servico.nome if servico else None
             except Exception as e:
-                print(f"[AVISO] Erro ao buscar serviço {self.servico_id}: {e}")
+                logger.debug(f"[AVISO] Erro ao buscar serviço {self.servico_id}: {e}")
                 servico_nome = None
         
         # Buscar orcamento_item_id de forma segura (coluna pode não existir)
@@ -1498,13 +1498,13 @@ class PagamentoParcelado(db.Model):
                 item = OrcamentoEngItem.query.get(orcamento_item_id)
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-        except:
+        except Exception:
             pass
         
         # Tratar segmento de forma defensiva
         try:
             segmento_value = self.segmento if hasattr(self, 'segmento') and self.segmento else 'Material'
-        except:
+        except Exception:
             segmento_value = 'Material'
 
         # Bug Extra: detectar se há parcela de ENTRADA (numero_parcela = 0)
@@ -1527,13 +1527,13 @@ class PagamentoParcelado(db.Model):
         try:
             if hasattr(self, 'pix'):
                 pix_value = self.pix
-        except:
+        except Exception:
             pass
         
         try:
             if hasattr(self, 'forma_pagamento'):
                 forma_pagamento_value = self.forma_pagamento or 'PIX'
-        except:
+        except Exception:
             pass
         
         return {
@@ -1592,7 +1592,7 @@ class ParcelaIndividual(db.Model):
         try:
             if hasattr(self, 'codigo_barras'):
                 codigo_barras_value = self.codigo_barras
-        except:
+        except Exception:
             pass
         
         return {
@@ -2057,15 +2057,15 @@ def check_permission(roles):
 # --- ROTA DE ADMINISTRAÇÃO (Existente) ---
 @app.route('/admin/create_tables', methods=['GET'])
 def create_tables():
-    print("--- [LOG] Rota /admin/create_tables (GET) acessada ---")
+    logger.debug("--- [LOG] Rota /admin/create_tables (GET) acessada ---")
     try:
         with app.app_context():
             db.create_all()
-        print("--- [LOG] db.create_all() executado com sucesso. (Incluindo NotaFiscal e colunas de pag. parcial) ---")
+        logger.debug("--- [LOG] db.create_all() executado com sucesso. (Incluindo NotaFiscal e colunas de pag. parcial) ---")
         return jsonify({"sucesso": "Tabelas/colunas atualizadas no banco de dados."}), 200
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /admin/create_tables: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /admin/create_tables: {str(e)}\n{error_details} ---")
         return jsonify({"erro": "Falha ao criar tabelas.", "details": error_details}), 500
 # ------------------------------------
 
@@ -2074,7 +2074,7 @@ def create_tables():
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register():
     # ... (código inalterado) ...
-    print("--- [LOG] Rota /register (POST) acessada ---")
+    logger.debug("--- [LOG] Rota /register (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
@@ -2090,18 +2090,18 @@ def register():
         novo_usuario.set_password(password)
         db.session.add(novo_usuario)
         db.session.commit()
-        print(f"--- [LOG] Usuário '{username}' criado com role '{role}' ---")
+        logger.debug(f"--- [LOG] Usuário '{username}' criado com role '{role}' ---")
         return jsonify(novo_usuario.to_dict()), 201
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /register (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /register (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
     # ... (código inalterado) ...
-    print("--- [LOG] Rota /login (POST) acessada ---")
+    logger.debug("--- [LOG] Rota /login (POST) acessada ---")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
@@ -2115,14 +2115,14 @@ def login():
             identity = str(user.id)
             additional_claims = {"username": user.username, "role": user.role}
             access_token = create_access_token(identity=identity, additional_claims=additional_claims)
-            print(f"--- [LOG] Login bem-sucedido para '{username}' ---")
+            logger.debug(f"--- [LOG] Login bem-sucedido para '{username}' ---")
             return jsonify(access_token=access_token, user=user.to_dict())
         else:
-            print(f"--- [LOG] Falha no login para '{username}' (usuário ou senha incorretos) ---")
+            logger.debug(f"--- [LOG] Falha no login para '{username}' (usuário ou senha incorretos) ---")
             return jsonify({"erro": "Credenciais inválidas"}), 401
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /login (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /login (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # ------------------------------------
 
@@ -2130,7 +2130,7 @@ def login():
 
 @app.route('/', methods=['GET'])
 def home():
-    print("--- [LOG] Rota / (home) acessada ---")
+    logger.debug("--- [LOG] Rota / (home) acessada ---")
     return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
@@ -2139,7 +2139,7 @@ def home():
 def get_obras():
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print("--- [LOG] Rota /obras (GET) acessada (4 KPIs Completos) ---")
+    logger.debug("--- [LOG] Rota /obras (GET) acessada (4 KPIs Completos) ---")
     try:
         user = get_current_user() 
         if not user: return jsonify({"erro": "Usuário não encontrado"}), 404
@@ -2386,7 +2386,7 @@ def get_obras():
 
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA ROTA ---
 
@@ -2395,7 +2395,7 @@ def get_obras():
 @check_permission(roles=['administrador', 'master']) 
 def add_obra():
     """Cria uma nova obra e associa automaticamente o usuário criador"""
-    print("--- [LOG] Rota /obras (POST) acessada ---")
+    logger.debug("--- [LOG] Rota /obras (POST) acessada ---")
     try:
         # Obter usuário atual
         current_user = get_current_user()
@@ -2413,13 +2413,13 @@ def add_obra():
         
         db.session.commit()
         
-        print(f"--- [LOG] Obra '{nova_obra.nome}' (ID={nova_obra.id}) criada e associada ao usuário {current_user.username} ---")
+        logger.debug(f"--- [LOG] Obra '{nova_obra.nome}' (ID={nova_obra.id}) criada e associada ao usuário {current_user.username} ---")
         return jsonify(nova_obra.to_dict()), 201
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- ROTA /obras/<id> (Dashboard Interno) ---
@@ -2428,7 +2428,7 @@ def add_obra():
 def get_obra_detalhes(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    print(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Novos KPIs v3) ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id} (GET) acessada (Novos KPIs v3) ---")
     
     try:
         from sqlalchemy.orm import joinedload
@@ -2518,16 +2518,16 @@ def get_obra_detalhes(obra_id):
         total_parcelas_com_servico = total_parcelas_previstas - total_parcelas_extra
         
         # Logs de DEBUG para rastreamento
-        print(f"--- [DEBUG KPI] obra_id={obra_id} ---")
-        print(f"--- [DEBUG KPI] total_lancamentos: R$ {total_lancamentos:.2f} ---")
-        print(f"--- [DEBUG KPI] total_budget_mo: R$ {total_budget_mo:.2f} ---")
-        print(f"--- [DEBUG KPI] total_budget_mat: R$ {total_budget_mat:.2f} ---")
-        print(f"--- [DEBUG KPI] total_futuros (PagamentoFuturo): R$ {total_futuros:.2f} ---")
-        print(f"--- [DEBUG KPI] total_parcelas_previstas: R$ {total_parcelas_previstas:.2f} ---")
-        print(f"--- [DEBUG KPI] total_futuros_com_servico: R$ {total_futuros_com_servico:.2f} ---")
-        print(f"--- [DEBUG KPI] total_parcelas_com_servico: R$ {total_parcelas_com_servico:.2f} ---")
-        print(f"--- [DEBUG KPI] total_futuros_extra (sem serviço): R$ {total_futuros_extra:.2f} ---")
-        print(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] obra_id={obra_id} ---")
+        logger.debug(f"--- [DEBUG KPI] total_lancamentos: R$ {total_lancamentos:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_budget_mo: R$ {total_budget_mo:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_budget_mat: R$ {total_budget_mat:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_futuros (PagamentoFuturo): R$ {total_futuros:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_parcelas_previstas: R$ {total_parcelas_previstas:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_futuros_com_servico: R$ {total_futuros_com_servico:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_parcelas_com_servico: R$ {total_parcelas_com_servico:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_futuros_extra (sem serviço): R$ {total_futuros_extra:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
         
         # CORREÇÃO: Buscar parcelas PAGAS com serviço vinculado ANTES dos KPIs
         # Parcelas sem serviço NÃO devem ser somadas aqui pois já são contabilizadas via Lancamento criado
@@ -2539,12 +2539,12 @@ def get_obra_detalhes(obra_id):
             PagamentoParcelado.servico_id.isnot(None)  # COM serviço
         ).first()
         total_parcelas_pagas_com_servico = float(parcelas_pagas_com_servico.total_parcelas_pagas or 0.0)
-        print(f"--- [DEBUG KPI] total_parcelas_pagas_com_servico: R$ {total_parcelas_pagas_com_servico:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] total_parcelas_pagas_com_servico: R$ {total_parcelas_pagas_com_servico:.2f} ---")
         
         # NOTA: Parcelas PAGAS SEM serviço NÃO são mais contadas aqui
         # Elas já são contabilizadas via Lancamento criado em marcar_parcela_paga()
         # Isso evita DUPLICAÇÃO
-        print(f"--- [DEBUG KPI] parcelas_pagas_sem_servico: NÃO SOMADO (já está no Lancamento) ---")
+        logger.debug(f"--- [DEBUG KPI] parcelas_pagas_sem_servico: NÃO SOMADO (já está no Lancamento) ---")
         
         # === ORÇAMENTO DE ENGENHARIA ===
         # CORREÇÃO: Sempre usar os valores do Orçamento de Engenharia como fonte primária
@@ -2575,7 +2575,7 @@ def get_obra_detalhes(obra_id):
             total_orcamento_eng_mo = float(orcamento_eng_total.total_mo or 0.0)
             total_orcamento_eng_mat = float(orcamento_eng_total.total_mat or 0.0)
             total_orcamento_eng = total_orcamento_eng_mo + total_orcamento_eng_mat
-            print(f"--- [DEBUG KPI] ORÇAMENTO ENG TOTAL: MO R$ {total_orcamento_eng_mo:.2f}, MAT R$ {total_orcamento_eng_mat:.2f} = R$ {total_orcamento_eng:.2f} ---")
+            logger.debug(f"--- [DEBUG KPI] ORÇAMENTO ENG TOTAL: MO R$ {total_orcamento_eng_mo:.2f}, MAT R$ {total_orcamento_eng_mat:.2f} = R$ {total_orcamento_eng:.2f} ---")
             
             # Verificar serviços vinculados ao orçamento de engenharia
             # Para evitar duplicação, subtraímos do total_budget os valores de serviços que vieram do Orçamento
@@ -2588,16 +2588,16 @@ def get_obra_detalhes(obra_id):
             
             servicos_orcamento_mo = float(servicos_do_orcamento.total_mo or 0.0) if servicos_do_orcamento else 0.0
             servicos_orcamento_mat = float(servicos_do_orcamento.total_mat or 0.0) if servicos_do_orcamento else 0.0
-            print(f"--- [DEBUG KPI] Serviços vinculados ao Orçamento: MO R$ {servicos_orcamento_mo:.2f}, MAT R$ {servicos_orcamento_mat:.2f} ---")
+            logger.debug(f"--- [DEBUG KPI] Serviços vinculados ao Orçamento: MO R$ {servicos_orcamento_mo:.2f}, MAT R$ {servicos_orcamento_mat:.2f} ---")
             
             # Remover dos totais do Kanban os valores que vieram do Orçamento de Engenharia
             # para não duplicar, já que vamos usar os valores do Orçamento como fonte primária
             total_budget_mo_ajustado = max(0, total_budget_mo - servicos_orcamento_mo)
             total_budget_mat_ajustado = max(0, total_budget_mat - servicos_orcamento_mat)
-            print(f"--- [DEBUG KPI] Kanban ajustado (sem orçamento eng): MO R$ {total_budget_mo_ajustado:.2f}, MAT R$ {total_budget_mat_ajustado:.2f} ---")
+            logger.debug(f"--- [DEBUG KPI] Kanban ajustado (sem orçamento eng): MO R$ {total_budget_mo_ajustado:.2f}, MAT R$ {total_budget_mat_ajustado:.2f} ---")
             
         except Exception as e:
-            print(f"--- [DEBUG KPI] Erro ao buscar Orçamento de Engenharia: {e} ---")
+            logger.debug(f"--- [DEBUG KPI] Erro ao buscar Orçamento de Engenharia: {e} ---")
             import traceback
             traceback.print_exc()
             total_orcamento_eng = 0.0
@@ -2609,13 +2609,13 @@ def get_obra_detalhes(obra_id):
         # KPI 1: ORÇAMENTO TOTAL
         # = Serviços do Kanban (não vinculados ao orçamento) + Orçamento de Engenharia completo
         kpi_orcamento_total = total_budget_mo_ajustado + total_budget_mat_ajustado + total_orcamento_eng
-        print(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = Kanban({total_budget_mo_ajustado + total_budget_mat_ajustado:.2f}) + OrcEng({total_orcamento_eng:.2f}) = R$ {kpi_orcamento_total:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = Kanban({total_budget_mo_ajustado + total_budget_mat_ajustado:.2f}) + OrcEng({total_orcamento_eng:.2f}) = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS
         # Inclui: lançamentos pagos + pagamentos de serviço + parcelas pagas COM serviço
         # NOTA: Parcelas sem serviço já estão em total_pago_lancamentos (Lancamento criado ao pagar)
         kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico
-        print(f"--- [DEBUG KPI] ✅ VALORES PAGOS = R$ {kpi_valores_pagos:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] ✅ VALORES PAGOS = R$ {kpi_valores_pagos:.2f} ---")
         
         # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
         # Lançamentos com saldo pendente (valor_total - valor_pago > 0)
@@ -2646,7 +2646,7 @@ def get_obra_detalhes(obra_id):
         # KPI 4: DESPESAS EXTRAS (Pagamentos Fora da Planilha de Custos)
         # Pagamentos futuros e parcelas SEM serviço vinculado
         kpi_despesas_extras = total_futuros_extra + total_parcelas_extra
-        print(f"--- [DEBUG KPI] ✅ DESPESAS EXTRAS (fora da planilha) = R$ {kpi_despesas_extras:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] ✅ DESPESAS EXTRAS (fora da planilha) = R$ {kpi_despesas_extras:.2f} ---")
         
         # --- BOLETOS ---
         boletos_obra = Boleto.query.filter_by(obra_id=obra_id).all()
@@ -2667,7 +2667,7 @@ def get_obra_detalhes(obra_id):
         kpi_liberado_pagamento += total_boletos_com_servico_pendentes  # Boletos pendentes com serviço vão para liberado
         kpi_despesas_extras += total_boletos_sem_servico_pendentes + total_boletos_sem_servico_pagos  # Boletos sem serviço vão para despesas extras
         
-        print(f"--- [DEBUG KPI] 📄 BOLETOS: com_servico={total_boletos_com_servico:.2f} (pend={total_boletos_com_servico_pendentes:.2f}, pago={total_boletos_com_servico_pagos:.2f}), sem_servico_pend={total_boletos_sem_servico_pendentes:.2f}, sem_servico_pago={total_boletos_sem_servico_pagos:.2f} ---")
+        logger.debug(f"--- [DEBUG KPI] 📄 BOLETOS: com_servico={total_boletos_com_servico:.2f} (pend={total_boletos_com_servico_pendentes:.2f}, pago={total_boletos_com_servico_pagos:.2f}), sem_servico_pend={total_boletos_sem_servico_pendentes:.2f}, sem_servico_pago={total_boletos_sem_servico_pagos:.2f} ---")
 
         # Sumário de Segmentos (Apenas Lançamentos Gerais)
         total_por_segmento = db.session.query(
@@ -2768,7 +2768,7 @@ def get_obra_detalhes(obra_id):
             AND (pp.servico_id IS NOT NULL OR pp.orcamento_item_id IS NOT NULL)
         """), {"obra_id": obra_id}).fetchall()
         
-        print(f"--- [DEBUG] Parcelas pagas COM serviço ou orcamento_item encontradas: {len(parcelas_pagas_query)} ---")
+        logger.debug(f"--- [DEBUG] Parcelas pagas COM serviço ou orcamento_item encontradas: {len(parcelas_pagas_query)} ---")
         
         for parcela in parcelas_pagas_query:
             historico_unificado.append({
@@ -2836,7 +2836,7 @@ def get_obra_detalhes(obra_id):
                 "fornecedor": parcela.fornecedor
             })
             orfas_adicionadas += 1
-        print(f"--- [DEBUG Bug F] Parcelas órfãs adicionadas ao histórico: {orfas_adicionadas} ---")
+        logger.debug(f"--- [DEBUG Bug F] Parcelas órfãs adicionadas ao histórico: {orfas_adicionadas} ---")
         
         # --- INCLUIR BOLETOS PAGOS NO HISTÓRICO ---
         for boleto in boletos_obra:
@@ -2972,14 +2972,14 @@ def get_obra_detalhes(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO GERAL] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO GERAL] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA ROTA ---
 
 @app.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def deletar_obra(obra_id):
-    print(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id} (DELETE) acessada ---")
     try:
         obra = Obra.query.get_or_404(obra_id)
         
@@ -2989,11 +2989,11 @@ def deletar_obra(obra_id):
             ParcelaIndividual.query.filter(
                 ParcelaIndividual.pagamento_parcelado_id.in_(pagamentos_parcelados_ids)
             ).delete(synchronize_session=False)
-            print(f"--- [LOG] Parcelas individuais deletadas para obra {obra_id} ---")
+            logger.debug(f"--- [LOG] Parcelas individuais deletadas para obra {obra_id} ---")
         
         # 2. Deletar pagamentos parcelados
         PagamentoParcelado.query.filter_by(obra_id=obra_id).delete(synchronize_session=False)
-        print(f"--- [LOG] Pagamentos parcelados deletados para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Pagamentos parcelados deletados para obra {obra_id} ---")
         
         # 3. Deletar CaixaObra associado (não tem cascade automático)
         CaixaObra.query.filter_by(obra_id=obra_id).delete(synchronize_session=False)
@@ -3001,12 +3001,12 @@ def deletar_obra(obra_id):
         # 4. Deletar a obra (cascade deleta o resto)
         db.session.delete(obra)
         db.session.commit()
-        print(f"--- [LOG] Obra {obra_id} deletada com sucesso ---")
+        logger.debug(f"--- [LOG] Obra {obra_id} deletada com sucesso ---")
         return jsonify({"sucesso": "Obra deletada com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -3017,7 +3017,7 @@ def concluir_obra(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/concluir (PATCH) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/concluir (PATCH) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
@@ -3035,7 +3035,7 @@ def concluir_obra(obra_id):
         db.session.commit()
         
         status_texto = "concluída" if obra.concluida else "reaberta"
-        print(f"--- [LOG] Obra '{obra.nome}' marcada como {status_texto} ---")
+        logger.debug(f"--- [LOG] Obra '{obra.nome}' marcada como {status_texto} ---")
         
         return jsonify({
             "sucesso": f"Obra {status_texto} com sucesso!",
@@ -3045,7 +3045,7 @@ def concluir_obra(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/concluir: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/concluir: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- Rotas de Lançamento (Geral) ---
@@ -3057,7 +3057,7 @@ def add_lancamento(obra_id):
     - Se status == 'A Pagar' → Cria PagamentoFuturo (aparece no cronograma)
     - Se status == 'Pago' → Cria Lançamento (vai direto pro histórico)
     """
-    print("--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
+    logger.debug("--- [LOG] Rota /obras/{obra_id}/lancamentos (POST) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
@@ -3105,7 +3105,7 @@ def add_lancamento(obra_id):
         except ValueError as e:
             return jsonify({"erro": f"Formato de data inválido: {str(e)}"}), 400
         
-        print(f"--- [LOG] Status='{status}', Valor={valor_total}, Data Vencimento={data_vencimento_obj} ---")
+        logger.debug(f"--- [LOG] Status='{status}', Valor={valor_total}, Data Vencimento={data_vencimento_obj} ---")
 
         # =====================================================================
         # ANTI-DUPLICAÇÃO (BUG #2): bloquear lançamento idêntico já existente
@@ -3122,7 +3122,7 @@ def add_lancamento(obra_id):
             func.lower(func.trim(Lancamento.descricao)) == descricao_norm.lower()
         ).first()
         if lanc_duplicado:
-            print(f"--- [LOG] ⚠️ Duplicidade detectada (Lancamento existente ID {lanc_duplicado.id}) — abortando criação ---")
+            logger.debug(f"--- [LOG] ⚠️ Duplicidade detectada (Lancamento existente ID {lanc_duplicado.id}) — abortando criação ---")
             return jsonify({
                 "erro": "Lançamento duplicado: já existe um lançamento com mesma descrição, valor e data nesta obra.",
                 "lancamento_id_existente": lanc_duplicado.id
@@ -3137,7 +3137,7 @@ def add_lancamento(obra_id):
                 func.lower(func.trim(PagamentoFuturo.descricao)) == descricao_norm.lower()
             ).first()
             if futuro_duplicado:
-                print(f"--- [LOG] ⚠️ Duplicidade detectada (PagamentoFuturo existente ID {futuro_duplicado.id}) — abortando criação ---")
+                logger.debug(f"--- [LOG] ⚠️ Duplicidade detectada (PagamentoFuturo existente ID {futuro_duplicado.id}) — abortando criação ---")
                 return jsonify({
                     "erro": "Pagamento futuro duplicado: já existe um pagamento agendado com mesma descrição, valor e data de vencimento nesta obra.",
                     "pagamento_id_existente": futuro_duplicado.id
@@ -3145,7 +3145,7 @@ def add_lancamento(obra_id):
 
         # LÓGICA PRINCIPAL: Se é "A Pagar", cria PagamentoFuturo
         if status == 'A Pagar':
-            print(f"--- [LOG] Status='A Pagar' → Criando PagamentoFuturo ---")
+            logger.debug(f"--- [LOG] Status='A Pagar' → Criando PagamentoFuturo ---")
 
             novo_pagamento_futuro = PagamentoFuturo(
                 obra_id=obra_id,
@@ -3173,12 +3173,12 @@ def add_lancamento(obra_id):
                 usuario_origem_id=user.id
             )
             
-            print(f"--- [LOG] ✅ PagamentoFuturo criado: ID {novo_pagamento_futuro.id} ---")
+            logger.debug(f"--- [LOG] ✅ PagamentoFuturo criado: ID {novo_pagamento_futuro.id} ---")
             return jsonify(novo_pagamento_futuro.to_dict()), 201
         
         # Se status == 'Pago', cria Lançamento normalmente
         else:
-            print(f"--- [LOG] Status='Pago' → Criando Lançamento ---")
+            logger.debug(f"--- [LOG] Status='Pago' → Criando Lançamento ---")
             
             # Se é gasto avulso do histórico, força status="Pago"
             is_gasto_avulso_historico = dados.get('is_gasto_avulso_historico', False)
@@ -3213,7 +3213,7 @@ def add_lancamento(obra_id):
                         f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_lancamento.id}"
                     ))
                 except Exception as e:
-                    print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                    logger.debug(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
             
             db.session.commit()
             
@@ -3230,20 +3230,20 @@ def add_lancamento(obra_id):
                 usuario_origem_id=user.id
             )
             
-            print(f"--- [LOG] ✅ Lançamento criado: ID {novo_lancamento.id} ---")
+            logger.debug(f"--- [LOG] ✅ Lançamento criado: ID {novo_lancamento.id} ---")
             return jsonify(novo_lancamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def marcar_como_pago(lancamento_id):
     # ... (código atualizado para valor_total/valor_pago) ...
-    print(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
+    logger.debug(f"--- [LOG] Rota /lancamentos/{lancamento_id}/pago (PATCH) acessada ---")
     try:
         user = get_current_user()
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -3262,14 +3262,14 @@ def marcar_como_pago(lancamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_lancamento(lancamento_id):
     # ... (código atualizado para valor_total/valor_pago) ...
-    print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
+    logger.debug(f"--- [LOG] Rota /lancamentos/{lancamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
         lancamento = Lancamento.query.get_or_404(lancamento_id)
@@ -3296,14 +3296,14 @@ def editar_lancamento(lancamento_id):
                     f"UPDATE lancamento SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {lancamento_id}"
                 ))
             except Exception as e:
-                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+                logger.debug(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         db.session.commit()
         return jsonify(lancamento.to_dict())
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['PATCH', 'OPTIONS'])
@@ -3345,15 +3345,15 @@ def atualizar_lancamento_parcial(lancamento_id):
                     f"UPDATE lancamento SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {lancamento_id}"
                 ))
             except Exception as e:
-                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+                logger.debug(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         db.session.commit()
-        print(f"--- [LOG] Lançamento {lancamento_id} atualizado parcialmente ---")
+        logger.debug(f"--- [LOG] Lançamento {lancamento_id} atualizado parcialmente ---")
         return jsonify(lancamento.to_dict())
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /lancamentos/{lancamento_id} (PATCH): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /lancamentos/{lancamento_id} (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
@@ -3365,7 +3365,7 @@ def deletar_lancamento(lancamento_id):
     - Lançamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
     - Remove também notas fiscais associadas ao lançamento
     """
-    print(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /lancamentos/{lancamento_id} (DELETE) acessada ---")
     
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
@@ -3383,14 +3383,14 @@ def deletar_lancamento(lancamento_id):
         
         # REGRA: Se está PAGO, ADMINISTRADOR ou MASTER podem deletar
         if is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} ---")
+            logger.debug(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} ---")
             return jsonify({
                 "erro": "Acesso negado: Apenas administradores e masters podem excluir pagamentos já executados (PAGOS)."
             }), 403
         
         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
         if not is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar lançamento por usuário {user_role} (sem permissão) ---")
+            logger.debug(f"--- [LOG] ❌ Tentativa de deletar lançamento por usuário {user_role} (sem permissão) ---")
             return jsonify({
                 "erro": "Acesso negado: Permissão insuficiente para excluir este lançamento."
             }), 403
@@ -3401,19 +3401,19 @@ def deletar_lancamento(lancamento_id):
             item_type='lancamento'
         ).delete()
         if notas_removidas > 0:
-            print(f"--- [LOG] {notas_removidas} nota(s) fiscal(is) removida(s) do lançamento {lancamento_id} ---")
+            logger.debug(f"--- [LOG] {notas_removidas} nota(s) fiscal(is) removida(s) do lançamento {lancamento_id} ---")
         
         # 2. Deletar o lançamento
         db.session.delete(lancamento)
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Lançamento {lancamento_id} (Status: {lancamento.status}) e dados associados deletados com sucesso pelo usuário {user_role} ---")
+        logger.debug(f"--- [LOG] ✅ Lançamento {lancamento_id} (Status: {lancamento.status}) e dados associados deletados com sucesso pelo usuário {user_role} ---")
         return jsonify({"sucesso": "Lançamento e dados associados deletados"}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /lancamentos/{lancamento_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /lancamentos/{lancamento_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -3423,7 +3423,7 @@ def deletar_lancamento(lancamento_id):
 @check_permission(roles=['administrador', 'master', 'comum']) 
 def add_servico(obra_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /obras/{obra_id}/servicos (POST) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/servicos (POST) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
@@ -3492,7 +3492,7 @@ def add_servico(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/servicos (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/servicos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/servicos-nomes', methods=['GET', 'OPTIONS'])
@@ -3523,14 +3523,14 @@ def listar_servicos_nomes(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/servicos-nomes (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/servicos-nomes (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/servicos/<int:servico_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def editar_servico(servico_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /servicos/{servico_id} (PUT) acessada ---")
+    logger.debug(f"--- [LOG] Rota /servicos/{servico_id} (PUT) acessada ---")
     try:
         user = get_current_user()
         servico = Servico.query.get_or_404(servico_id)
@@ -3559,14 +3559,14 @@ def editar_servico(servico_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/{servico_id} (PUT): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /servicos/{servico_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/servicos/<int:servico_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
 def deletar_servico(servico_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /servicos/{servico_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /servicos/{servico_id} (DELETE) acessada ---")
     try:
         servico = Servico.query.get_or_404(servico_id)
         db.session.delete(servico)
@@ -3575,7 +3575,7 @@ def deletar_servico(servico_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -3589,7 +3589,7 @@ def toggle_servico_concluido(servico_id):
     if request.method == 'OPTIONS':
         return '', 200
         
-    print(f"--- [LOG] Rota /servicos/{servico_id}/concluir (PATCH) acessada ---")
+    logger.debug(f"--- [LOG] Rota /servicos/{servico_id}/concluir (PATCH) acessada ---")
     try:
         user = get_current_user()
         servico = Servico.query.get_or_404(servico_id)
@@ -3614,7 +3614,7 @@ def toggle_servico_concluido(servico_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] Serviço {servico_id} marcado como {'CONCLUÍDO' if servico.concluido else 'NÃO CONCLUÍDO'} ---")
+        logger.debug(f"--- [LOG] Serviço {servico_id} marcado como {'CONCLUÍDO' if servico.concluido else 'NÃO CONCLUÍDO'} ---")
         
         return jsonify({
             "sucesso": f"Serviço {'marcado como concluído' if servico.concluido else 'desmarcado como concluído'}",
@@ -3624,7 +3624,7 @@ def toggle_servico_concluido(servico_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/{servico_id}/concluir (PATCH): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /servicos/{servico_id}/concluir (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
@@ -3755,7 +3755,7 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
     - Pagamentos PAGOS só podem ser deletados por usuários MASTER
     - Pagamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
     """
-    print(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /servicos/{servico_id}/pagamentos/{pagamento_id} (DELETE) acessada ---")
     
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
@@ -3782,14 +3782,14 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
         
         # REGRA: Se está PAGO, ADMINISTRADOR ou MASTER podem deletar
         if is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} ---")
+            logger.debug(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO de serviço por usuário {user_role} ---")
             return jsonify({
                 "erro": "Acesso negado: Apenas administradores e masters podem excluir pagamentos já executados (PAGOS)."
             }), 403
         
         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
         if not is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
+            logger.debug(f"--- [LOG] ❌ Tentativa de deletar pagamento de serviço por usuário {user_role} (sem permissão) ---")
             return jsonify({
                 "erro": "Acesso negado: Permissão insuficiente para excluir este pagamento."
             }), 403
@@ -3797,13 +3797,13 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
         db.session.delete(pagamento)
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
+        logger.debug(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado com sucesso pelo usuário {user_role} ---")
         return jsonify({"sucesso": "Pagamento deletado com sucesso"}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # ===============================================================================
 
@@ -3828,13 +3828,13 @@ def atualizar_pagamento_servico(pagamento_id):
                     f"UPDATE pagamento_servico SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
                 ))
             except Exception as e:
-                print(f"[AVISO] Erro ao atualizar orcamento_item_id em pagamento_servico: {e}")
+                logger.debug(f"[AVISO] Erro ao atualizar orcamento_item_id em pagamento_servico: {e}")
         db.session.commit()
         return jsonify({"sucesso": True, "id": pagamento_id})
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (PATCH): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/pagamentos-servico/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
@@ -3847,7 +3847,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
     - Pagamentos NÃO PAGOS podem ser deletados por ADMINISTRADOR ou MASTER
     - Remove também notas fiscais associadas ao pagamento
     """
-    print(f"--- [LOG] Rota /pagamentos-servico/{pagamento_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /pagamentos-servico/{pagamento_id} (DELETE) acessada ---")
     
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
@@ -3867,14 +3867,14 @@ def deletar_pagamento_servico_por_id(pagamento_id):
         
         # REGRA: Se está PAGO, ADMINISTRADOR ou MASTER podem deletar
         if is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} ---")
+            logger.debug(f"--- [LOG] ❌ Tentativa de deletar pagamento PAGO por usuário {user_role} ---")
             return jsonify({
                 "erro": "Acesso negado: Apenas administradores e masters podem excluir pagamentos já executados."
             }), 403
         
         # REGRA: Se NÃO está pago, ADMINISTRADOR ou MASTER podem deletar
         if not is_pago and user_role not in ['administrador', 'master']:
-            print(f"--- [LOG] ❌ Tentativa de deletar pagamento por usuário {user_role} ---")
+            logger.debug(f"--- [LOG] ❌ Tentativa de deletar pagamento por usuário {user_role} ---")
             return jsonify({
                 "erro": "Acesso negado: Permissão insuficiente."
             }), 403
@@ -3885,19 +3885,19 @@ def deletar_pagamento_servico_por_id(pagamento_id):
             item_type='pagamento_servico'
         ).delete()
         if notas_removidas > 0:
-            print(f"--- [LOG] {notas_removidas} nota(s) fiscal(is) removida(s) do pagamento {pagamento_id} ---")
+            logger.debug(f"--- [LOG] {notas_removidas} nota(s) fiscal(is) removida(s) do pagamento {pagamento_id} ---")
         
         # 2. Remover o pagamento
         db.session.delete(pagamento)
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado pelo usuário {user_role} ---")
+        logger.debug(f"--- [LOG] ✅ Pagamento de serviço {pagamento_id} deletado pelo usuário {user_role} ---")
         return jsonify({"sucesso": "Pagamento e dados associados deletados com sucesso"}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # Rota alternativa para deletar pagamento de serviço (usada pelo histórico)
@@ -4141,7 +4141,7 @@ def pagar_item_parcial(item_type, item_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /pagamentos/.../pagar (PATCH): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /pagamentos/.../pagar (PATCH): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA NOVA ROTA ---
 
@@ -4155,7 +4155,7 @@ def get_orcamentos_obra(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (GET) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
@@ -4185,19 +4185,19 @@ def get_orcamentos_obra(obra_id):
             ]
             orcamentos_data.append(orc_dict)
         
-        print(f"--- [LOG] {len(orcamentos_data)} orçamentos encontrados para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] {len(orcamentos_data)} orçamentos encontrados para obra {obra_id} ---")
         return jsonify(orcamentos_data), 200
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/orcamentos (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/orcamentos (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master', 'comum'])  # Operador e Admin podem cadastrar
 def add_orcamento(obra_id):
     """Cria uma nova solicitação de compra"""
-    print(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/orcamentos (POST) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
@@ -4210,7 +4210,7 @@ def add_orcamento(obra_id):
         if dados.get('data_vencimento'):
             try:
                 data_vencimento = datetime.strptime(dados['data_vencimento'], '%Y-%m-%d').date()
-            except:
+            except Exception:
                 pass
         
         novo_orcamento = Orcamento(
@@ -4264,14 +4264,14 @@ def add_orcamento(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def editar_orcamento(orcamento_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (PUT) acessada ---")
+    logger.debug(f"--- [LOG] Rota /orcamentos/{orcamento_id} (PUT) acessada ---")
     try:
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
@@ -4298,7 +4298,7 @@ def editar_orcamento(orcamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /orcamentos/{orcamento_id} (PUT): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /orcamentos/{orcamento_id} (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA ROTA ---
 
@@ -4313,7 +4313,7 @@ def aprovar_orcamento(orcamento_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/aprovar (POST) acessada ---")
+    logger.debug(f"--- [LOG] Rota /orcamentos/{orcamento_id}/aprovar (POST) acessada ---")
     try:
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
@@ -4334,10 +4334,10 @@ def aprovar_orcamento(orcamento_id):
                 tipo_orcamento = orcamento.tipo or ''
                 if 'material' in tipo_orcamento.lower():
                     servico.valor_global_material = (servico.valor_global_material or 0) + (orcamento.valor or 0)
-                    print(f"[LOG] ✅ Valor somado ao material do serviço {servico.id}: +R$ {orcamento.valor}")
+                    logger.debug(f"[LOG] ✅ Valor somado ao material do serviço {servico.id}: +R$ {orcamento.valor}")
                 else:
                     servico.valor_global_mao_de_obra = (servico.valor_global_mao_de_obra or 0) + (orcamento.valor or 0)
-                    print(f"[LOG] ✅ Valor somado à MO do serviço {servico.id}: +R$ {orcamento.valor}")
+                    logger.debug(f"[LOG] ✅ Valor somado à MO do serviço {servico.id}: +R$ {orcamento.valor}")
         
         # 3. Criar Pagamento Futuro automaticamente
         valor_orcamento = orcamento.valor or 0.0
@@ -4361,7 +4361,7 @@ def aprovar_orcamento(orcamento_id):
                 observacoes=f"Solicitação #{orcamento.id} aprovada"
             )
             db.session.add(pagamento_futuro)
-            print(f"[LOG] ✅ Pagamento Futuro criado: R$ {valor_orcamento:.2f} para {data_vencimento}")
+            logger.debug(f"[LOG] ✅ Pagamento Futuro criado: R$ {valor_orcamento:.2f} para {data_vencimento}")
             
         else:
             # Criar Pagamento Parcelado
@@ -4410,7 +4410,7 @@ def aprovar_orcamento(orcamento_id):
                 )
                 db.session.add(parcela)
             
-            print(f"[LOG] ✅ Pagamento Parcelado criado: {numero_parcelas}x R$ {valor_parcela:.2f}")
+            logger.debug(f"[LOG] ✅ Pagamento Parcelado criado: {numero_parcelas}x R$ {valor_parcela:.2f}")
         
         db.session.commit()
         
@@ -4460,14 +4460,14 @@ def aprovar_orcamento(orcamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>/converter_para_servico', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def converter_orcamento_para_servico(orcamento_id):
     # ... (código atualizado para valor_total/valor_pago) ...
-    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/converter_para_servico (POST) acessada ---")
+    logger.debug(f"--- [LOG] Rota /orcamentos/{orcamento_id}/converter_para_servico (POST) acessada ---")
     try:
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
@@ -4529,14 +4529,14 @@ def converter_orcamento_para_servico(orcamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /orcamentos/{orcamento_id}/converter_para_servico (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /orcamentos/{orcamento_id}/converter_para_servico (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def rejeitar_orcamento(orcamento_id):
     # <-- MUDANÇA: Mudar status para 'Rejeitado' em vez de deletar
-    print(f"--- [LOG] Rota /orcamentos/{orcamento_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /orcamentos/{orcamento_id} (DELETE) acessada ---")
     try:
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
@@ -4585,12 +4585,12 @@ def rejeitar_orcamento(orcamento_id):
             usuario_origem_id=user.id
         )
         
-        print(f"--- [LOG] Orçamento {orcamento_id} marcado como Rejeitado ---")
+        logger.debug(f"--- [LOG] Orçamento {orcamento_id} marcado como Rejeitado ---")
         return jsonify({"sucesso": "Orçamento rejeitado com sucesso"}), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /orcamentos/{orcamento_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /orcamentos/{orcamento_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # ---------------------------------------------------
 
@@ -4599,7 +4599,7 @@ def rejeitar_orcamento(orcamento_id):
 @check_permission(roles=['administrador', 'master', 'comum'])
 def get_orcamento_anexos(orcamento_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (GET) acessada ---")
     try:
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
@@ -4611,14 +4611,14 @@ def get_orcamento_anexos(orcamento_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/orcamentos/<int:orcamento_id>/anexos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def add_anexos_orcamento(orcamento_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (POST) acessada ---")
+    logger.debug(f"--- [LOG] Rota /orcamentos/{orcamento_id}/anexos (POST) acessada ---")
     try:
         user = get_current_user()
         orcamento = Orcamento.query.get_or_404(orcamento_id)
@@ -4645,7 +4645,7 @@ def add_anexos_orcamento(orcamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -4656,7 +4656,7 @@ def get_anexo_data(anexo_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
 
-    print(f"--- [LOG] Rota /anexos/{anexo_id} (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /anexos/{anexo_id} (GET) acessada ---")
     try:
         user = get_current_user()
         anexo = AnexoOrcamento.query.get_or_404(anexo_id)
@@ -4674,14 +4674,14 @@ def get_anexo_data(anexo_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /anexos/{anexo_id} (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /anexos/{anexo_id} (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/anexos/<int:anexo_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
 def delete_anexo(anexo_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /anexos/{anexo_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /anexos/{anexo_id} (DELETE) acessada ---")
     try:
         user = get_current_user()
         anexo = AnexoOrcamento.query.get_or_404(anexo_id)
@@ -4697,7 +4697,7 @@ def delete_anexo(anexo_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /anexos/{anexo_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /anexos/{anexo_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # ---------------------------------------------------
 
@@ -4708,12 +4708,12 @@ def delete_anexo(anexo_id):
 def export_csv(obra_id):
     # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    print(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
+    logger.debug(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
     try:
         verify_jwt_in_request(optional=True) 
         user = get_current_user()
         if not user or not user_has_access_to_obra(user, obra_id):
-           print(f"--- [AVISO] Tentativa de export CSV sem permissão ou token (obra_id={obra_id}) ---")
+           logger.debug(f"--- [AVISO] Tentativa de export CSV sem permissão ou token (obra_id={obra_id}) ---")
            pass
         obra = Obra.query.get_or_404(obra_id)
         items = obra.lancamentos
@@ -4732,7 +4732,7 @@ def export_csv(obra_id):
         return output
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
@@ -4741,7 +4741,7 @@ def export_csv(obra_id):
 def export_pdf_pendentes_DESATIVADO(obra_id):
     # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    print(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
+    logger.debug(f"--- [LOG] Rota /export/pdf_pendentes (GET) para obra_id={obra_id} ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
@@ -4843,12 +4843,12 @@ def export_pdf_pendentes_DESATIVADO(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"=" * 80)
-        print(f"ERRO ao gerar PDF para obra_id={obra_id}")
-        print(f"Erro: {str(e)}")
-        print(f"Traceback completo:")
-        print(error_details)
-        print(f"=" * 80)
+        logger.debug(f"=" * 80)
+        logger.debug(f"ERRO ao gerar PDF para obra_id={obra_id}")
+        logger.debug(f"Erro: {str(e)}")
+        logger.debug(f"Traceback completo:")
+        logger.debug(error_details)
+        logger.debug(f"=" * 80)
         return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id, "details": error_details }), 500
         
 # MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
@@ -4859,7 +4859,7 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
     if request.method == 'OPTIONS': 
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print("--- [LOG] Rota /export/pdf_pendentes_todas_obras (GET) acessada ---")
+    logger.debug("--- [LOG] Rota /export/pdf_pendentes_todas_obras (GET) acessada ---")
     
     try:
         user = get_current_user()
@@ -4867,7 +4867,7 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
             return jsonify({"erro": "Usuário não encontrado"}), 404
         
         prioridade_filtro = request.args.get('prioridade')
-        print(f"--- [LOG] Filtro de prioridade recebido: {prioridade_filtro} ---")
+        logger.debug(f"--- [LOG] Filtro de prioridade recebido: {prioridade_filtro} ---")
         
         titulo_relatorio = "<b>Relatório de Pagamentos Pendentes - Todas as Obras</b>"
         if prioridade_filtro and prioridade_filtro != 'todas':
@@ -5041,12 +5041,12 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"=" * 80)
-        print(f"ERRO ao gerar PDF de todas as obras")
-        print(f"Erro: {str(e)}")
-        print(f"Traceback completo:")
-        print(error_details)
-        print(f"=" * 80)
+        logger.debug(f"=" * 80)
+        logger.debug(f"ERRO ao gerar PDF de todas as obras")
+        logger.debug(f"Erro: {str(e)}")
+        logger.debug(f"Traceback completo:")
+        logger.debug(error_details)
+        logger.debug(f"=" * 80)
         return jsonify({
             "erro": "Erro ao gerar PDF", 
             "mensagem": str(e), 
@@ -5058,14 +5058,14 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
 @check_permission(roles=['master'])
 def get_all_users():
     # ... (código inalterado) ...
-    print("--- [LOG] Rota /admin/users (GET) acessada ---")
+    logger.debug("--- [LOG] Rota /admin/users (GET) acessada ---")
     try:
         current_user = get_current_user()
         users = User.query.filter(User.id != current_user.id).order_by(User.username).all()
         return jsonify([user.to_dict() for user in users]), 200
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /admin/users (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /admin/users (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/admin/users', methods=['POST', 'OPTIONS'])
@@ -5076,7 +5076,7 @@ def create_user():
     APENAS usuários MASTER podem criar novos usuários.
     """
     # ... (código inalterado) ...
-    print("--- [LOG] Rota /admin/users (POST) acessada ---")
+    logger.debug("--- [LOG] Rota /admin/users (POST) acessada ---")
     try:
         dados = request.json
         username = dados.get('username')
@@ -5092,33 +5092,33 @@ def create_user():
         novo_usuario.set_password(password)
         db.session.add(novo_usuario)
         db.session.commit()
-        print(f"--- [LOG] Admin criou usuário '{username}' com role '{role}' ---")
+        logger.debug(f"--- [LOG] Admin criou usuário '{username}' com role '{role}' ---")
         return jsonify(novo_usuario.to_dict()), 201
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /admin/users (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /admin/users (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['master'])
 def get_user_permissions(user_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /admin/users/{user_id}/permissions (GET) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
         obra_ids = [obra.id for obra in user.obras_permitidas]
         return jsonify({"user_id": user.id, "obra_ids": obra_ids}), 200
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /admin/users/{user_id}/permissions (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /admin/users/{user_id}/permissions (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['master'])
 def set_user_permissions(user_id):
     # ... (código inalterado) ...
-    print(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
+    logger.debug(f"--- [LOG] Rota /admin/users/{user_id}/permissions (PUT) acessada ---")
     try:
         user = User.query.get_or_404(user_id)
         dados = request.json
@@ -5126,12 +5126,12 @@ def set_user_permissions(user_id):
         obras_permitidas = Obra.query.filter(Obra.id.in_(obra_ids_para_permitir)).all()
         user.obras_permitidas = obras_permitidas
         db.session.commit()
-        print(f"--- [LOG] Permissões atualizadas para user_id={user_id} ---")
+        logger.debug(f"--- [LOG] Permissões atualizadas para user_id={user_id} ---")
         return jsonify({"sucesso": f"Permissões atualizadas para {user.username}"}), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- NOVA ROTA PARA DELETAR USUÁRIO ---
@@ -5141,7 +5141,7 @@ def delete_user(user_id):
     if request.method == 'OPTIONS': 
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
 
-    print(f"--- [LOG] Rota /admin/users/{user_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /admin/users/{user_id} (DELETE) acessada ---")
     try:
         current_user_id = int(get_jwt_identity())
         
@@ -5158,7 +5158,7 @@ def delete_user(user_id):
         if user.role == 'master' and current_user_role != 'master':
             return jsonify({"erro": "Apenas usuários MASTER podem excluir outros MASTER."}), 403
 
-        print(f"--- [LOG] Limpando referências do usuário '{username_backup}' (ID: {user_id}) ---")
+        logger.debug(f"--- [LOG] Limpando referências do usuário '{username_backup}' (ID: {user_id}) ---")
         
         # Lista de tabelas/colunas para limpar (SET NULL)
         tabelas_para_limpar = [
@@ -5177,10 +5177,10 @@ def delete_user(user_id):
                     {"uid": user_id}
                 )
                 db.session.commit()
-                print(f"   ✅ {tabela}.{coluna} limpo ({result.rowcount} registros)")
+                logger.debug(f"   ✅ {tabela}.{coluna} limpo ({result.rowcount} registros)")
             except Exception as e:
                 db.session.rollback()
-                print(f"   ⚠️ {tabela}.{coluna}: {str(e)[:50]}")
+                logger.debug(f"   ⚠️ {tabela}.{coluna}: {str(e)[:50]}")
         
         # Deletar notificações do usuário (tanto enviadas quanto recebidas)
         try:
@@ -5189,10 +5189,10 @@ def delete_user(user_id):
                 {"uid": user_id}
             )
             db.session.commit()
-            print(f"   ✅ notificacao (destino) deletado ({result.rowcount} registros)")
+            logger.debug(f"   ✅ notificacao (destino) deletado ({result.rowcount} registros)")
         except Exception as e:
             db.session.rollback()
-            print(f"   ⚠️ notificacao (destino): {str(e)[:50]}")
+            logger.debug(f"   ⚠️ notificacao (destino): {str(e)[:50]}")
         
         # Remover associações de user_obra
         try:
@@ -5201,10 +5201,10 @@ def delete_user(user_id):
                 {"uid": user_id}
             )
             db.session.commit()
-            print(f"   ✅ user_obra_association removido ({result.rowcount} registros)")
+            logger.debug(f"   ✅ user_obra_association removido ({result.rowcount} registros)")
         except Exception as e:
             db.session.rollback()
-            print(f"   ⚠️ user_obra_association: {str(e)[:50]}")
+            logger.debug(f"   ⚠️ user_obra_association: {str(e)[:50]}")
         
         # Recarregar o usuário (pode ter sido invalidado pelos commits)
         user = User.query.get(user_id)
@@ -5215,13 +5215,13 @@ def delete_user(user_id):
         db.session.delete(user)
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Usuário '{username_backup}' (ID: {user_id}) foi deletado com sucesso ---")
+        logger.debug(f"--- [LOG] ✅ Usuário '{username_backup}' (ID: {user_id}) foi deletado com sucesso ---")
         return jsonify({"sucesso": f"Usuário {username_backup} deletado com sucesso."}), 200
 
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /admin/users/{user_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /admin/users/{user_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DA NOVA ROTA ---
 # ---------------------------------------------------
@@ -5250,7 +5250,7 @@ def listar_notificacoes():
         
         return jsonify([n.to_dict() for n in notificacoes]), 200
     except Exception as e:
-        print(f"--- [ERRO] GET /notificacoes: {e} ---")
+        logger.debug(f"--- [ERRO] GET /notificacoes: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/notificacoes/count', methods=['GET', 'OPTIONS'])
@@ -5269,7 +5269,7 @@ def contar_notificacoes():
         
         return jsonify({"count": count}), 200
     except Exception as e:
-        print(f"--- [ERRO] GET /notificacoes/count: {e} ---")
+        logger.debug(f"--- [ERRO] GET /notificacoes/count: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/notificacoes/<int:notificacao_id>/lida', methods=['PATCH', 'OPTIONS'])
@@ -5297,7 +5297,7 @@ def marcar_notificacao_lida(notificacao_id):
         return jsonify(notificacao.to_dict()), 200
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] PATCH /notificacoes/{notificacao_id}/lida: {e} ---")
+        logger.debug(f"--- [ERRO] PATCH /notificacoes/{notificacao_id}/lida: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/notificacoes/marcar-todas-lidas', methods=['POST', 'OPTIONS'])
@@ -5320,7 +5320,7 @@ def marcar_todas_lidas():
         return jsonify({"sucesso": "Todas as notificações foram marcadas como lidas"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] POST /notificacoes/marcar-todas-lidas: {e} ---")
+        logger.debug(f"--- [ERRO] POST /notificacoes/marcar-todas-lidas: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/notificacoes/limpar-lidas', methods=['DELETE', 'OPTIONS'])
@@ -5343,7 +5343,7 @@ def limpar_notificacoes_lidas():
         return jsonify({"sucesso": f"{deleted} notificações removidas"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] DELETE /notificacoes/limpar-lidas: {e} ---")
+        logger.debug(f"--- [ERRO] DELETE /notificacoes/limpar-lidas: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -5366,7 +5366,7 @@ def limpar_todas_notificacoes():
         return jsonify({"sucesso": f"{deleted} notificações removidas"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] DELETE /notificacoes/limpar-todas: {e} ---")
+        logger.debug(f"--- [ERRO] DELETE /notificacoes/limpar-todas: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -5392,7 +5392,7 @@ def deletar_notificacao(notificacao_id):
         return jsonify({"sucesso": "Notificação removida"}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] DELETE /notificacoes/{notificacao_id}: {e} ---")
+        logger.debug(f"--- [ERRO] DELETE /notificacoes/{notificacao_id}: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 # --- ROTA PARA ALTERAR ROLE DE USUÁRIO ---
@@ -5417,7 +5417,7 @@ def alterar_role_usuario(user_id):
         user.role = novo_role
         db.session.commit()
         
-        print(f"--- [LOG] Role do usuário '{user.username}' alterado de '{role_anterior}' para '{novo_role}' ---")
+        logger.debug(f"--- [LOG] Role do usuário '{user.username}' alterado de '{role_anterior}' para '{novo_role}' ---")
         
         return jsonify({
             "sucesso": f"Role alterado para {novo_role}",
@@ -5425,7 +5425,7 @@ def alterar_role_usuario(user_id):
         }), 200
     except Exception as e:
         db.session.rollback()
-        print(f"--- [ERRO] PATCH /admin/users/{user_id}/role: {e} ---")
+        logger.debug(f"--- [ERRO] PATCH /admin/users/{user_id}/role: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 # ---------------------------------------------------
@@ -5437,7 +5437,7 @@ def upload_nota_fiscal(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais (POST) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais (POST) acessada ---")
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -5472,13 +5472,13 @@ def upload_nota_fiscal(obra_id):
         db.session.add(nota_fiscal)
         db.session.commit()
         
-        print(f"--- [LOG] Nota fiscal '{file.filename}' anexada ao item {item_type}:{item_id} da obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Nota fiscal '{file.filename}' anexada ao item {item_type}:{item_id} da obra {obra_id} ---")
         return jsonify(nota_fiscal.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (POST): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (POST): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -5488,7 +5488,7 @@ def listar_notas_fiscais(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais (GET) acessada ---")
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -5499,7 +5499,7 @@ def listar_notas_fiscais(obra_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -5509,7 +5509,7 @@ def download_nota_fiscal(nf_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /notas-fiscais/{nf_id} (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /notas-fiscais/{nf_id} (GET) acessada ---")
     try:
         nota = NotaFiscal.query.get_or_404(nf_id)
         
@@ -5526,7 +5526,7 @@ def download_nota_fiscal(nf_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /notas-fiscais/{nf_id} (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /notas-fiscais/{nf_id} (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -5536,7 +5536,7 @@ def deletar_nota_fiscal(nf_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /notas-fiscais/{nf_id} (DELETE) acessada ---")
+    logger.debug(f"--- [LOG] Rota /notas-fiscais/{nf_id} (DELETE) acessada ---")
     try:
         nota = NotaFiscal.query.get_or_404(nf_id)
         
@@ -5550,13 +5550,13 @@ def deletar_nota_fiscal(nf_id):
         db.session.delete(nota)
         db.session.commit()
         
-        print(f"--- [LOG] Nota fiscal {nf_id} deletada ---")
+        logger.debug(f"--- [LOG] Nota fiscal {nf_id} deletada ---")
         return jsonify({"sucesso": "Nota fiscal deletada com sucesso"}), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /notas-fiscais/{nf_id} (DELETE): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /notas-fiscais/{nf_id} (DELETE): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DAS ROTAS DE NOTAS FISCAIS ---
 
@@ -5568,7 +5568,7 @@ def export_notas_fiscais_zip(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais/export/zip (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/notas-fiscais/export/zip (GET) acessada ---")
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -5594,12 +5594,12 @@ def export_notas_fiscais_zip(obra_id):
         response.headers['Content-Type'] = 'application/zip'
         response.headers['Content-Disposition'] = f'attachment; filename=notas_fiscais_{obra.nome.replace(" ", "_")}.zip'
         
-        print(f"--- [LOG] ZIP com {len(notas)} notas fiscais gerado para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] ZIP com {len(notas)} notas fiscais gerado para obra {obra_id} ---")
         return response
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/notas-fiscais/export/zip (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/notas-fiscais/export/zip (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -5609,7 +5609,7 @@ def relatorio_resumo_completo(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/relatorio/resumo-completo (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/relatorio/resumo-completo (GET) acessada ---")
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -5983,15 +5983,15 @@ def relatorio_resumo_completo(obra_id):
         
         if orcamentos:
             # <-- MUDANÇA: Log de debug para verificar status
-            print(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
+            logger.debug(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
             for orc in orcamentos:
-                print(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
+                logger.debug(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
             
             orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
             orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
             orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
             
-            print(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
+            logger.debug(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
             
             if orcamentos_pendentes:
                 elements.append(Paragraph("<b>5.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
@@ -6081,12 +6081,12 @@ def relatorio_resumo_completo(obra_id):
         response.headers['Content-Type'] = 'application/pdf'
         response.headers['Content-Disposition'] = f'attachment; filename=resumo_completo_{obra.nome.replace(" ", "_")}.pdf'
         
-        print(f"--- [LOG] Relatório completo gerado para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Relatório completo gerado para obra {obra_id} ---")
         return response
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -6098,7 +6098,7 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/relatorio/pagamentos-pdf (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/relatorio/pagamentos-pdf (GET) acessada ---")
     try:
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -6472,15 +6472,15 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
         
         if orcamentos:
             # <-- MUDANÇA: Log de debug para verificar status
-            print(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
+            logger.debug(f"--- [DEBUG] Total de orçamentos: {len(orcamentos)}")
             for orc in orcamentos:
-                print(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
+                logger.debug(f"--- [DEBUG] Orçamento: {orc.descricao} | Status: '{orc.status}'")
             
             orcamentos_pendentes = [o for o in orcamentos if o.status == 'Pendente']
             orcamentos_aprovados = [o for o in orcamentos if o.status == 'Aprovado']
             orcamentos_rejeitados = [o for o in orcamentos if o.status == 'Rejeitado']
             
-            print(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
+            logger.debug(f"--- [DEBUG] Pendentes: {len(orcamentos_pendentes)} | Aprovados: {len(orcamentos_aprovados)} | Rejeitados: {len(orcamentos_rejeitados)}")
             
             if orcamentos_pendentes:
                 elements.append(Paragraph("<b>5.1. Orçamentos Pendentes de Aprovação</b>", styles['Heading3']))
@@ -6570,12 +6570,12 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
         response.headers['Content-Type'] = 'application/pdf'
         response.headers['Content-Disposition'] = f'attachment; filename=relatorio_pagamentos_{obra.nome.replace(" ", "_")}.pdf'
         
-        print(f"--- [LOG] Relatório de pagamentos (completo) gerado para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Relatório de pagamentos (completo) gerado para obra {obra_id} ---")
         return response
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /obras/{obra_id}/relatorio/pagamentos-pdf (GET): {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /obras/{obra_id}/relatorio/pagamentos-pdf (GET): {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- FIM DAS ROTAS DE RELATÓRIOS ---
@@ -6637,7 +6637,7 @@ def listar_pagamentos_futuros(obra_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
@@ -6650,30 +6650,30 @@ def criar_pagamento_futuro(obra_id):
     
     # POST requer JWT
     try:
-        print(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
+        logger.debug(f"--- [DEBUG] Iniciando criação de pagamento futuro na obra {obra_id} ---")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         data = request.get_json()
-        print(f"--- [DEBUG] Dados recebidos: {data} ---")
+        logger.debug(f"--- [DEBUG] Dados recebidos: {data} ---")
         
         pix_value = data.get('pix')
-        print(f"--- [DEBUG] Campo PIX recebido: '{pix_value}' (tipo: {type(pix_value)}) ---")
+        logger.debug(f"--- [DEBUG] Campo PIX recebido: '{pix_value}' (tipo: {type(pix_value)}) ---")
         
         # Obter servico_id e tipo do payload
         servico_id = data.get('servico_id')
         tipo = data.get('tipo')  # 'Mão de Obra', 'Material', ou 'Despesa'
         status = data.get('status', 'Previsto')
         
-        print(f"--- [DEBUG] servico_id: {servico_id}, tipo: {tipo}, status: {status} ---")
+        logger.debug(f"--- [DEBUG] servico_id: {servico_id}, tipo: {tipo}, status: {status} ---")
         
         # ===== CASO 1: Status='Pago' e tem servico_id → Criar PagamentoServico diretamente =====
         if status == 'Pago' and servico_id:
             servico = db.session.get(Servico, servico_id)
             if servico:
-                print(f"--- [DEBUG] Pagamento já PAGO com serviço vinculado, criando PagamentoServico ---")
+                logger.debug(f"--- [DEBUG] Pagamento já PAGO com serviço vinculado, criando PagamentoServico ---")
                 
                 # Determinar tipo_pagamento
                 if tipo == 'Mão de Obra':
@@ -6699,7 +6699,7 @@ def criar_pagamento_futuro(obra_id):
                 db.session.add(novo_pag_servico)
                 db.session.flush()
                 
-                print(f"--- [DEBUG] PagamentoServico criado com ID={novo_pag_servico.id}, tipo_pagamento={tipo_pagamento} ---")
+                logger.debug(f"--- [DEBUG] PagamentoServico criado com ID={novo_pag_servico.id}, tipo_pagamento={tipo_pagamento} ---")
                 
                 # Recalcular percentual do serviço
                 pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
@@ -6709,15 +6709,15 @@ def criar_pagamento_futuro(obra_id):
                 if servico.valor_global_mao_de_obra > 0:
                     total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
                     servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
-                    print(f"--- [DEBUG] Percentual MO atualizado: {servico.percentual_conclusao_mao_obra:.1f}% ---")
+                    logger.debug(f"--- [DEBUG] Percentual MO atualizado: {servico.percentual_conclusao_mao_obra:.1f}% ---")
                 
                 if servico.valor_global_material > 0:
                     total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
                     servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
-                    print(f"--- [DEBUG] Percentual Material atualizado: {servico.percentual_conclusao_material:.1f}% ---")
+                    logger.debug(f"--- [DEBUG] Percentual Material atualizado: {servico.percentual_conclusao_material:.1f}% ---")
                 
                 db.session.commit()
-                print(f"--- [LOG] ✅ Pagamento PAGO criado como PagamentoServico ID={novo_pag_servico.id} vinculado ao serviço '{servico.nome}' ---")
+                logger.debug(f"--- [LOG] ✅ Pagamento PAGO criado como PagamentoServico ID={novo_pag_servico.id} vinculado ao serviço '{servico.nome}' ---")
                 
                 return jsonify({
                     "mensagem": f"Pagamento criado e vinculado ao serviço '{servico.nome}'",
@@ -6742,10 +6742,10 @@ def criar_pagamento_futuro(obra_id):
             tipo=tipo if tipo else None
         )
         
-        print(f"--- [DEBUG] Objeto PagamentoFuturo criado, tentando adicionar ao banco... ---")
+        logger.debug(f"--- [DEBUG] Objeto PagamentoFuturo criado, tentando adicionar ao banco... ---")
         db.session.add(novo_pagamento)
         db.session.flush()  # Flush para obter o ID antes do commit
-        print(f"--- [DEBUG] Flush OK, ID atribuído: {novo_pagamento.id} ---")
+        logger.debug(f"--- [DEBUG] Flush OK, ID atribuído: {novo_pagamento.id} ---")
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
         orcamento_item_id = data.get('orcamento_item_id')
@@ -6755,26 +6755,26 @@ def criar_pagamento_futuro(obra_id):
                     f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_pagamento.id}"
                 ))
             except Exception as e:
-                print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                logger.debug(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
         
         db.session.commit()
-        print(f"--- [DEBUG] Commit realizado! ---")
+        logger.debug(f"--- [DEBUG] Commit realizado! ---")
         
         # Verificar se foi salvo
         verificacao = PagamentoFuturo.query.get(novo_pagamento.id)
         if verificacao:
-            print(f"--- [DEBUG] ✅ VERIFICAÇÃO: PagamentoFuturo ID {verificacao.id} encontrado no banco ---")
-            print(f"--- [DEBUG] ✅ Descrição: {verificacao.descricao}, Valor: {verificacao.valor}, Tipo: {verificacao.tipo}, Serviço: {verificacao.servico_id} ---")
+            logger.debug(f"--- [DEBUG] ✅ VERIFICAÇÃO: PagamentoFuturo ID {verificacao.id} encontrado no banco ---")
+            logger.debug(f"--- [DEBUG] ✅ Descrição: {verificacao.descricao}, Valor: {verificacao.valor}, Tipo: {verificacao.tipo}, Serviço: {verificacao.servico_id} ---")
         else:
-            print(f"--- [DEBUG] ❌ ERRO: PagamentoFuturo NÃO encontrado após commit! ---")
+            logger.debug(f"--- [DEBUG] ❌ ERRO: PagamentoFuturo NÃO encontrado após commit! ---")
         
-        print(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com Tipo: {tipo}, Serviço: {servico_id} ---")
+        logger.debug(f"--- [LOG] ✅ Pagamento futuro criado: ID {novo_pagamento.id} na obra {obra_id} com Tipo: {tipo}, Serviço: {servico_id} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
@@ -6787,7 +6787,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
     
     # PUT requer JWT
     try:
-        print(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
+        logger.debug(f"--- [DEBUG] Iniciando edição do pagamento {pagamento_id} da obra {obra_id} ---")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -6798,7 +6798,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         data = request.get_json()
-        print(f"--- [DEBUG] Dados recebidos: {data} ---")
+        logger.debug(f"--- [DEBUG] Dados recebidos: {data} ---")
         
         if 'descricao' in data:
             pagamento.descricao = data['descricao']
@@ -6809,7 +6809,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         if 'fornecedor' in data:
             pagamento.fornecedor = data['fornecedor']
         if 'pix' in data:
-            print(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
+            logger.debug(f"--- [DEBUG] Salvando PIX: {data['pix']} ---")
             pagamento.pix = data['pix']
         if 'codigo_barras' in data:
             pagamento.codigo_barras = data['codigo_barras']
@@ -6821,10 +6821,10 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         # CORRIGIDO: Atualizar tipo e servico_id
         if 'tipo' in data:
             pagamento.tipo = data['tipo']
-            print(f"--- [DEBUG] Tipo atualizado: {data['tipo']} ---")
+            logger.debug(f"--- [DEBUG] Tipo atualizado: {data['tipo']} ---")
         if 'servico_id' in data:
             pagamento.servico_id = data['servico_id'] if data['servico_id'] else None
-            print(f"--- [DEBUG] Serviço ID atualizado: {data['servico_id']} ---")
+            logger.debug(f"--- [DEBUG] Serviço ID atualizado: {data['servico_id']} ---")
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
         if 'orcamento_item_id' in data:
@@ -6834,18 +6834,18 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
                     f"UPDATE pagamento_futuro SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
                 ))
             except Exception as e:
-                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+                logger.debug(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
-        print(f"--- [DEBUG] Tentando commit no banco... ---")
+        logger.debug(f"--- [DEBUG] Tentando commit no banco... ---")
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso na obra {obra_id} ---")
+        logger.debug(f"--- [LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso na obra {obra_id} ---")
         return jsonify(pagamento.to_dict()), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] ❌ PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] ❌ PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE'])
@@ -6864,13 +6864,13 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
         db.session.delete(pagamento)
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento futuro {pagamento_id} deletado da obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Pagamento futuro {pagamento_id} deletado da obra {obra_id} ---")
         return jsonify({"mensagem": "Pagamento futuro deletado com sucesso"}), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -6946,7 +6946,7 @@ def diagnostico_pagamentos(obra_id):
         }), 200
         
     except Exception as e:
-        print(f"[ERRO] Diagnóstico pagamentos: {e}")
+        logger.debug(f"[ERRO] Diagnóstico pagamentos: {e}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -7002,8 +7002,8 @@ def corrigir_tipo_pagamento(obra_id, pagamento_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] ✅ Pagamento {pagamento_id} corrigido: {tipo_anterior} → {novo_tipo} ---")
-        print(f"--- [LOG] Serviço '{servico.nome}': MO={servico.percentual_conclusao_mao_obra:.1f}%, MAT={servico.percentual_conclusao_material:.1f}% ---")
+        logger.debug(f"--- [LOG] ✅ Pagamento {pagamento_id} corrigido: {tipo_anterior} → {novo_tipo} ---")
+        logger.debug(f"--- [LOG] Serviço '{servico.nome}': MO={servico.percentual_conclusao_mao_obra:.1f}%, MAT={servico.percentual_conclusao_material:.1f}% ---")
         
         return jsonify({
             "mensagem": f"Tipo de pagamento corrigido de '{tipo_anterior}' para '{novo_tipo}'",
@@ -7015,7 +7015,7 @@ def corrigir_tipo_pagamento(obra_id, pagamento_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] Corrigir pagamento: {e}")
+        logger.debug(f"[ERRO] Corrigir pagamento: {e}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -7105,7 +7105,7 @@ def corrigir_pagamentos_lote(obra_id):
         db.session.commit()
         
         corrigidos = len([r for r in resultados if r['status'] == 'ok'])
-        print(f"--- [LOG] ✅ Correção em lote: {corrigidos} pagamentos corrigidos, {len(servicos_afetados)} serviços recalculados ---")
+        logger.debug(f"--- [LOG] ✅ Correção em lote: {corrigidos} pagamentos corrigidos, {len(servicos_afetados)} serviços recalculados ---")
         
         return jsonify({
             "mensagem": f"{corrigidos} pagamentos corrigidos",
@@ -7115,7 +7115,7 @@ def corrigir_pagamentos_lote(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] Correção em lote: {e}")
+        logger.debug(f"[ERRO] Correção em lote: {e}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -7124,10 +7124,10 @@ def corrigir_pagamentos_lote(obra_id):
 def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
     """Marca um pagamento futuro como pago e move para o histórico ou serviço"""
     try:
-        print(f"\n{'='*80}")
-        print(f"💰 INÍCIO: marcar_pagamento_futuro_pago")
-        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
-        print(f"{'='*80}")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"💰 INÍCIO: marcar_pagamento_futuro_pago")
+        logger.debug(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
+        logger.debug(f"{'='*80}")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -7140,10 +7140,10 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         if pagamento.status == 'Pago':
             return jsonify({"mensagem": "Pagamento já está marcado como pago"}), 200
         
-        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
-        print(f"      - servico_id: {pagamento.servico_id}")
-        print(f"      - tipo: {pagamento.tipo}")
-        print(f"      - valor: R$ {pagamento.valor}")
+        logger.debug(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        logger.debug(f"      - servico_id: {pagamento.servico_id}")
+        logger.debug(f"      - tipo: {pagamento.tipo}")
+        logger.debug(f"      - valor: R$ {pagamento.valor}")
         
         data_pagamento = date.today()
         
@@ -7153,7 +7153,7 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         if pagamento.servico_id:
             servico = db.session.get(Servico, pagamento.servico_id)
             if servico:
-                print(f"   📋 Pagamento vinculado ao serviço '{servico.nome}'")
+                logger.debug(f"   📋 Pagamento vinculado ao serviço '{servico.nome}'")
                 
                 # Determinar tipo_pagamento
                 if pagamento.tipo == 'Mão de Obra':
@@ -7163,7 +7163,7 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
                 else:
                     tipo_pagamento = 'material'  # default
                 
-                print(f"      - tipo_pagamento determinado: {tipo_pagamento}")
+                logger.debug(f"      - tipo_pagamento determinado: {tipo_pagamento}")
                 
                 # Criar PagamentoServico
                 novo_pag_servico = PagamentoServico(
@@ -7181,7 +7181,7 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
                 db.session.add(novo_pag_servico)
                 db.session.flush()
                 
-                print(f"   ✅ PagamentoServico criado com ID={novo_pag_servico.id}")
+                logger.debug(f"   ✅ PagamentoServico criado com ID={novo_pag_servico.id}")
                 
                 # Recalcular percentual do serviço
                 pagamentos_serv = PagamentoServico.query.filter_by(servico_id=servico.id).all()
@@ -7191,12 +7191,12 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
                 if servico.valor_global_mao_de_obra > 0:
                     total_pago_mao = sum(p.valor_pago for p in pagamentos_mao_de_obra)
                     servico.percentual_conclusao_mao_obra = min(100, (total_pago_mao / servico.valor_global_mao_de_obra) * 100)
-                    print(f"   📊 Percentual MO atualizado: {servico.percentual_conclusao_mao_obra:.1f}%")
+                    logger.debug(f"   📊 Percentual MO atualizado: {servico.percentual_conclusao_mao_obra:.1f}%")
                 
                 if servico.valor_global_material > 0:
                     total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
                     servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
-                    print(f"   📊 Percentual Material atualizado: {servico.percentual_conclusao_material:.1f}%")
+                    logger.debug(f"   📊 Percentual Material atualizado: {servico.percentual_conclusao_material:.1f}%")
                 
                 # DELETE o PagamentoFuturo
                 db.session.delete(pagamento)
@@ -7204,18 +7204,18 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
                 # Commit das alterações
                 db.session.commit()
                 
-                print(f"   🎉 SUCESSO: Pagamento vinculado ao serviço '{servico.nome}' e marcado como pago")
-                print(f"{'='*80}\n")
+                logger.debug(f"   🎉 SUCESSO: Pagamento vinculado ao serviço '{servico.nome}' e marcado como pago")
+                logger.debug(f"{'='*80}\n")
                 
                 return jsonify({
                     "mensagem": f"Pagamento vinculado ao serviço '{servico.nome}' e marcado como pago",
                     "pagamento_servico_id": novo_pag_servico.id
                 }), 200
             else:
-                print(f"   ⚠️ Serviço {pagamento.servico_id} não encontrado, criando lançamento genérico")
+                logger.debug(f"   ⚠️ Serviço {pagamento.servico_id} não encontrado, criando lançamento genérico")
         
         # CASO 2: Pagamento SEM vínculo com serviço
-        print(f"   📄 Criando lançamento no histórico (sem vínculo de serviço)")
+        logger.debug(f"   📄 Criando lançamento no histórico (sem vínculo de serviço)")
         
         # Buscar orcamento_item_id do PagamentoFuturo original
         orcamento_item_id_original = None
@@ -7225,9 +7225,9 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
             )).fetchone()
             if result and result[0]:
                 orcamento_item_id_original = result[0]
-                print(f"   📦 Item do orçamento vinculado: {orcamento_item_id_original}")
+                logger.debug(f"   📦 Item do orçamento vinculado: {orcamento_item_id_original}")
         except Exception as e:
-            print(f"   ⚠️ Erro ao buscar orcamento_item_id: {e}")
+            logger.debug(f"   ⚠️ Erro ao buscar orcamento_item_id: {e}")
         
         # Criar Lançamento no Histórico
         novo_lancamento = Lancamento(
@@ -7253,9 +7253,9 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
                 db.session.execute(db.text(
                     f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id_original} WHERE id = {novo_lancamento.id}"
                 ))
-                print(f"   ✅ orcamento_item_id copiado para lançamento")
+                logger.debug(f"   ✅ orcamento_item_id copiado para lançamento")
             except Exception as e:
-                print(f"   ⚠️ Erro ao copiar orcamento_item_id: {e}")
+                logger.debug(f"   ⚠️ Erro ao copiar orcamento_item_id: {e}")
         
         # DELETE o PagamentoFuturo
         db.session.delete(pagamento)
@@ -7263,9 +7263,9 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         # Commit das alterações
         db.session.commit()
         
-        print(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
-        print(f"   🎉 SUCESSO: Pagamento movido para o histórico")
-        print(f"{'='*80}\n")
+        logger.debug(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
+        logger.debug(f"   🎉 SUCESSO: Pagamento movido para o histórico")
+        logger.debug(f"{'='*80}\n")
         
         return jsonify({
             "mensagem": "Pagamento marcado como pago e movido para o histórico com sucesso",
@@ -7275,12 +7275,12 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"\n{'='*80}")
-        print(f"❌ ERRO em marcar_pagamento_futuro_pago:")
-        print(f"   {str(e)}")
-        print(f"\nStack trace:")
-        print(error_details)
-        print(f"{'='*80}\n")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"❌ ERRO em marcar_pagamento_futuro_pago:")
+        logger.debug(f"   {str(e)}")
+        logger.debug(f"\nStack trace:")
+        logger.debug(error_details)
+        logger.debug(f"{'='*80}\n")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- PAGAMENTOS PARCELADOS ---
@@ -7332,7 +7332,7 @@ def listar_pagamentos_parcelados(obra_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST'])
@@ -7364,7 +7364,7 @@ def criar_pagamento_parcelado(obra_id):
         # Total de pagamentos = entrada (se houver) + parcelas
         total_pagamentos = numero_parcelas + (1 if tem_entrada else 0)
         
-        print(f"--- [LOG] Criando parcelamento: Total={valor_total}, Entrada={valor_entrada} ({percentual_entrada}%), Parcelas={numero_parcelas}x{valor_parcela:.2f} ---")
+        logger.debug(f"--- [LOG] Criando parcelamento: Total={valor_total}, Entrada={valor_entrada} ({percentual_entrada}%), Parcelas={numero_parcelas}x{valor_parcela:.2f} ---")
         
         # Criar pagamento parcelado
         novo_pagamento = PagamentoParcelado(
@@ -7385,12 +7385,12 @@ def criar_pagamento_parcelado(obra_id):
         # Tentar atribuir campos opcionais
         try:
             novo_pagamento.pix = data.get('pix') or None
-        except:
+        except Exception:
             pass
         
         try:
             novo_pagamento.forma_pagamento = forma_pagamento
-        except:
+        except Exception:
             pass
         
         db.session.add(novo_pagamento)
@@ -7398,7 +7398,7 @@ def criar_pagamento_parcelado(obra_id):
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
         orcamento_item_id_raw = data.get('orcamento_item_id')
-        print(f"--- [LOG] orcamento_item_id recebido: {orcamento_item_id_raw} (tipo: {type(orcamento_item_id_raw)}) ---")
+        logger.debug(f"--- [LOG] orcamento_item_id recebido: {orcamento_item_id_raw} (tipo: {type(orcamento_item_id_raw)}) ---")
         
         # Converter para int se for string válida
         orcamento_item_id = None
@@ -7406,16 +7406,16 @@ def criar_pagamento_parcelado(obra_id):
             try:
                 orcamento_item_id = int(orcamento_item_id_raw)
             except (ValueError, TypeError):
-                print(f"[AVISO] orcamento_item_id inválido: {orcamento_item_id_raw}")
+                logger.debug(f"[AVISO] orcamento_item_id inválido: {orcamento_item_id_raw}")
         
         if orcamento_item_id:
             try:
                 db.session.execute(db.text(
                     f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_pagamento.id}"
                 ))
-                print(f"--- [LOG] orcamento_item_id {orcamento_item_id} salvo no pagamento {novo_pagamento.id} ---")
+                logger.debug(f"--- [LOG] orcamento_item_id {orcamento_item_id} salvo no pagamento {novo_pagamento.id} ---")
             except Exception as e:
-                print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                logger.debug(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
         
         # 🆕 Criar parcela de ENTRADA (se houver)
         if tem_entrada and valor_entrada > 0:
@@ -7432,14 +7432,14 @@ def criar_pagamento_parcelado(obra_id):
                 observacao=f'ENTRADA ({percentual_entrada:.0f}%)'
             )
             db.session.add(parcela_entrada)
-            print(f"--- [LOG] Parcela de ENTRADA criada: R$ {valor_entrada:.2f} para {data_entrada_parsed} ---")
+            logger.debug(f"--- [LOG] Parcela de ENTRADA criada: R$ {valor_entrada:.2f} para {data_entrada_parsed} ---")
         
         # Verificar se há parcelas customizadas (valores diferentes ou boletos com código)
         parcelas_customizadas = data.get('parcelas_customizadas', [])
         
         if parcelas_customizadas and len(parcelas_customizadas) > 0:
             # Criar parcelas com valores e códigos de barras customizados
-            print(f"--- [LOG] Criando {len(parcelas_customizadas)} parcelas customizadas ---")
+            logger.debug(f"--- [LOG] Criando {len(parcelas_customizadas)} parcelas customizadas ---")
             
             for i, parcela_data in enumerate(parcelas_customizadas):
                 numero = i + 1
@@ -7460,7 +7460,7 @@ def criar_pagamento_parcelado(obra_id):
                 
                 try:
                     nova_parcela.codigo_barras = codigo_barras
-                except:
+                except Exception:
                     pass
                 
                 db.session.add(nova_parcela)
@@ -7510,13 +7510,13 @@ def criar_pagamento_parcelado(obra_id):
         else:
             msg += f" ({numero_parcelas}x R$ {valor_parcela:.2f})"
         
-        print(f"--- [LOG] {msg} ---")
+        logger.debug(f"--- [LOG] {msg} ---")
         return jsonify(novo_pagamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['PUT'])
@@ -7543,12 +7543,12 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         if 'pix' in data:
             try:
                 pagamento.pix = data['pix']
-            except:
+            except Exception:
                 pass
         if 'forma_pagamento' in data:
             try:
                 pagamento.forma_pagamento = data['forma_pagamento']
-            except:
+            except Exception:
                 pass
         
         # CORREÇÃO: Atualizar servico_id quando vinculado a um serviço
@@ -7559,13 +7559,13 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
                 servico = db.session.get(Servico, servico_id_novo)
                 if servico and servico.obra_id == obra_id:
                     pagamento.servico_id = servico_id_novo
-                    print(f"--- [LOG] PagamentoParcelado {pagamento_id} vinculado ao serviço '{servico.nome}' ---")
+                    logger.debug(f"--- [LOG] PagamentoParcelado {pagamento_id} vinculado ao serviço '{servico.nome}' ---")
                 else:
-                    print(f"--- [WARN] Serviço {servico_id_novo} não encontrado ou não pertence à obra ---")
+                    logger.debug(f"--- [WARN] Serviço {servico_id_novo} não encontrado ou não pertence à obra ---")
             else:
                 # Desvincular do serviço
                 pagamento.servico_id = None
-                print(f"--- [LOG] PagamentoParcelado {pagamento_id} desvinculado de serviço ---")
+                logger.debug(f"--- [LOG] PagamentoParcelado {pagamento_id} desvinculado de serviço ---")
         
         # NOVO: Atualizar orcamento_item_id via SQL direto
         if 'orcamento_item_id' in data:
@@ -7574,9 +7574,9 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
                 db.session.execute(db.text(
                     f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
                 ))
-                print(f"--- [LOG] PagamentoParcelado {pagamento_id} orcamento_item_id atualizado para {orcamento_item_id} ---")
+                logger.debug(f"--- [LOG] PagamentoParcelado {pagamento_id} orcamento_item_id atualizado para {orcamento_item_id} ---")
             except Exception as e:
-                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+                logger.debug(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         # CORREÇÃO: Atualizar segmento quando alterado
         if 'segmento' in data:
@@ -7603,13 +7603,13 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] Pagamento parcelado {pagamento_id} editado na obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Pagamento parcelado {pagamento_id} editado na obra {obra_id} ---")
         return jsonify(pagamento.to_dict()), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
@@ -7617,10 +7617,10 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
 def deletar_pagamento_parcelado(obra_id, pagamento_id):
     """Deleta um pagamento parcelado e todos os registros relacionados"""
     try:
-        print(f"\n{'='*80}")
-        print(f"🗑️ INÍCIO: deletar_pagamento_parcelado")
-        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
-        print(f"{'='*80}")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"🗑️ INÍCIO: deletar_pagamento_parcelado")
+        logger.debug(f"   obra_id={obra_id}, pagamento_id={pagamento_id}")
+        logger.debug(f"{'='*80}")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -7630,8 +7630,8 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         if not pagamento or pagamento.obra_id != obra_id:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
-        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
-        print(f"      - servico_id: {pagamento.servico_id}")
+        logger.debug(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        logger.debug(f"      - servico_id: {pagamento.servico_id}")
         
         # ===== DELETAR TODOS OS REGISTROS RELACIONADOS =====
 
@@ -7640,7 +7640,7 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
             pagamento_parcelado_id=pagamento_id
         ).all()
 
-        print(f"   📋 Encontradas {len(parcelas)} parcelas")
+        logger.debug(f"   📋 Encontradas {len(parcelas)} parcelas")
 
         # Bug E: cascade catch-all de Lançamentos relacionados (independente do status da parcela)
         # marcar_parcela_paga e bulk pay criam Lançamento com padrão "<descricao> (Parcela X/Y)"
@@ -7649,9 +7649,9 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
             Lancamento.obra_id == obra_id,
             Lancamento.descricao.like(descricao_pattern)
         ).all()
-        print(f"   🗑️ Cascade Lançamentos: {len(lancs_relacionados)} encontrados via padrão '{descricao_pattern}'")
+        logger.debug(f"   🗑️ Cascade Lançamentos: {len(lancs_relacionados)} encontrados via padrão '{descricao_pattern}'")
         for lanc in lancs_relacionados:
-            print(f"      ❌ Deletando Lancamento ID={lanc.id}: '{lanc.descricao}'")
+            logger.debug(f"      ❌ Deletando Lancamento ID={lanc.id}: '{lanc.descricao}'")
             db.session.delete(lanc)
 
         # 2. Para cada parcela paga, limpar PagamentoServico relacionado
@@ -7671,42 +7671,42 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
                         # ou reduzir o valor_pago se for maior
                         if pag_serv.valor_pago >= parcela.valor_parcela:
                             if pag_serv.valor_pago == parcela.valor_parcela:
-                                print(f"      ❌ Deletando PagamentoServico ID={pag_serv.id} (valor_pago={pag_serv.valor_pago})")
+                                logger.debug(f"      ❌ Deletando PagamentoServico ID={pag_serv.id} (valor_pago={pag_serv.valor_pago})")
                                 db.session.delete(pag_serv)
                             else:
-                                print(f"      ➖ Reduzindo PagamentoServico ID={pag_serv.id}: {pag_serv.valor_pago} -> {pag_serv.valor_pago - parcela.valor_parcela}")
+                                logger.debug(f"      ➖ Reduzindo PagamentoServico ID={pag_serv.id}: {pag_serv.valor_pago} -> {pag_serv.valor_pago - parcela.valor_parcela}")
                                 pag_serv.valor_pago -= parcela.valor_parcela
                                 if pag_serv.valor_pago <= 0:
-                                    print(f"      ❌ Valor zerado, deletando PagamentoServico ID={pag_serv.id}")
+                                    logger.debug(f"      ❌ Valor zerado, deletando PagamentoServico ID={pag_serv.id}")
                                     db.session.delete(pag_serv)
                             break  # Processar apenas o primeiro encontrado
         
         # 3. Deletar todas as parcelas individuais
         for parcela in parcelas:
-            print(f"   ❌ Deletando ParcelaIndividual ID={parcela.id}")
+            logger.debug(f"   ❌ Deletando ParcelaIndividual ID={parcela.id}")
             db.session.delete(parcela)
         
         # 4. Finalmente, deletar o pagamento parcelado
-        print(f"   ❌ Deletando PagamentoParcelado ID={pagamento_id}")
+        logger.debug(f"   ❌ Deletando PagamentoParcelado ID={pagamento_id}")
         db.session.delete(pagamento)
         
         # 5. Commit de todas as alterações
         db.session.commit()
         
-        print(f"   🎉 SUCESSO: Pagamento parcelado e todos os registros relacionados deletados")
-        print(f"{'='*80}\n")
+        logger.debug(f"   🎉 SUCESSO: Pagamento parcelado e todos os registros relacionados deletados")
+        logger.debug(f"{'='*80}\n")
         
         return jsonify({"mensagem": "Pagamento parcelado deletado com sucesso"}), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"\n{'='*80}")
-        print(f"❌ ERRO em deletar_pagamento_parcelado:")
-        print(f"   {str(e)}")
-        print(f"\nStack trace:")
-        print(error_details)
-        print(f"{'='*80}\n")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"❌ ERRO em deletar_pagamento_parcelado:")
+        logger.debug(f"   {str(e)}")
+        logger.debug(f"\nStack trace:")
+        logger.debug(error_details)
+        logger.debug(f"{'='*80}\n")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- TABELA DE PREVISÕES (CÁLCULO) ---
@@ -7781,7 +7781,7 @@ def calcular_previsoes(obra_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET previsões: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET previsões: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 # ========================================
@@ -7817,7 +7817,7 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
         
         # Gerar parcelas automaticamente se não existirem
         if not parcelas:
-            print(f"--- [LOG] Gerando parcelas para Pagamento ID {pagamento_id} ---")
+            logger.debug(f"--- [LOG] Gerando parcelas para Pagamento ID {pagamento_id} ---")
             
             import calendar
             from datetime import timedelta
@@ -7874,7 +7874,7 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
             # OTIMIZAÇÃO: Inserir todas as parcelas de uma vez (bulk insert)
             db.session.bulk_save_objects(parcelas_para_inserir)
             db.session.commit()
-            print(f"--- [LOG] {len(parcelas_para_inserir)} parcelas geradas em lote (bulk insert) ---")
+            logger.debug(f"--- [LOG] {len(parcelas_para_inserir)} parcelas geradas em lote (bulk insert) ---")
             
             # Recarregar parcelas geradas
             parcelas = ParcelaIndividual.query.filter_by(
@@ -7886,7 +7886,7 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] listar_parcelas_individuais: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] listar_parcelas_individuais: {str(e)}\n{error_details} ---")
         return jsonify({"erro": f"Erro interno: {str(e)}"}), 500
 
 @app.route('/sid/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT'])
@@ -7957,7 +7957,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
 
                 for p, nv in zip(outras_pendentes, novos_valores):
                     p.valor_parcela = nv
-                print(f"--- [Bug C] Redistribuído delta {delta:.2f} em {len(outras_pendentes)} parcelas pendentes ---")
+                logger.debug(f"--- [Bug C] Redistribuído delta {delta:.2f} em {len(outras_pendentes)} parcelas pendentes ---")
 
             parcela.valor_parcela = novo_valor
 
@@ -7970,7 +7970,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
         if 'codigo_barras' in data:
             try:
                 parcela.codigo_barras = data['codigo_barras'] or None
-            except:
+            except Exception:
                 pass
         
         if 'status' in data:
@@ -7994,13 +7994,13 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] Parcela {parcela_id} editada ---")
+        logger.debug(f"--- [LOG] Parcela {parcela_id} editada ---")
         return jsonify(parcela.to_dict()), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] PUT parcela individual: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] PUT parcela individual: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -8019,41 +8019,41 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         return response
 
     try:
-        print(f"\n{'='*80}")
-        print(f"💳 INÍCIO: marcar_parcela_paga")
-        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id}")
-        print(f"{'='*80}")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"💳 INÍCIO: marcar_parcela_paga")
+        logger.debug(f"   obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id}")
+        logger.debug(f"{'='*80}")
         
         # Validações de acesso
         current_user = get_current_user()
-        print(f"   👤 Usuário: {current_user.username} (role: {current_user.role})")
+        logger.debug(f"   👤 Usuário: {current_user.username} (role: {current_user.role})")
         
         if not user_has_access_to_obra(current_user, obra_id):
-            print(f"   ❌ Acesso negado à obra {obra_id}")
+            logger.debug(f"   ❌ Acesso negado à obra {obra_id}")
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         # Buscar pagamento parcelado
         pagamento = db.session.get(PagamentoParcelado, pagamento_id)
         if not pagamento or pagamento.obra_id != obra_id:
-            print(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
+            logger.debug(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
-        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
-        print(f"      - servico_id: {pagamento.servico_id}")
-        print(f"      - fornecedor: {pagamento.fornecedor}")
+        logger.debug(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        logger.debug(f"      - servico_id: {pagamento.servico_id}")
+        logger.debug(f"      - fornecedor: {pagamento.fornecedor}")
         
         # Buscar parcela
         parcela = db.session.get(ParcelaIndividual, parcela_id)
         if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
-            print(f"   ❌ Parcela {parcela_id} não encontrada ou não pertence ao pagamento {pagamento_id}")
+            logger.debug(f"   ❌ Parcela {parcela_id} não encontrada ou não pertence ao pagamento {pagamento_id}")
             return jsonify({"erro": "Parcela não encontrada"}), 404
         
         if parcela.status == 'Pago':
-            print(f"   ⚠️ Parcela {parcela_id} já estava paga")
+            logger.debug(f"   ⚠️ Parcela {parcela_id} já estava paga")
             return jsonify({"mensagem": "Parcela já está marcada como paga"}), 200
         
-        print(f"   ✅ Parcela encontrada: {parcela.numero_parcela}/{pagamento.numero_parcelas}")
-        print(f"      - valor: R$ {parcela.valor_parcela}")
+        logger.debug(f"   ✅ Parcela encontrada: {parcela.numero_parcela}/{pagamento.numero_parcelas}")
+        logger.debug(f"      - valor: R$ {parcela.valor_parcela}")
         
         # Processar dados
         data = request.get_json()
@@ -8066,7 +8066,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         ).date()
         parcela.forma_pagamento = data.get('forma_pagamento', None)
         
-        print(f"   ✅ Parcela marcada como paga em {parcela.data_pagamento}")
+        logger.debug(f"   ✅ Parcela marcada como paga em {parcela.data_pagamento}")
         
         # Criar lançamento ou pagamento de serviço baseado no vínculo
         descricao_lancamento = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
@@ -8076,9 +8076,9 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         if hasattr(pagamento, 'segmento') and pagamento.segmento:
             segmento_info = pagamento.segmento
         
-        print(f"   📄 Processando pagamento: '{descricao_lancamento}'")
-        print(f"      - segmento: {segmento_info}")
-        print(f"      - servico_id: {pagamento.servico_id}")
+        logger.debug(f"   📄 Processando pagamento: '{descricao_lancamento}'")
+        logger.debug(f"      - segmento: {segmento_info}")
+        logger.debug(f"      - servico_id: {pagamento.servico_id}")
         
         # CORREÇÃO: Se tem serviço vinculado, NÃO criar PagamentoServico
         # As parcelas pagas já aparecem no histórico do serviço via query de ParcelaIndividual
@@ -8086,13 +8086,13 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         if pagamento.servico_id:
             servico = db.session.get(Servico, pagamento.servico_id)
             if servico:
-                print(f"   ✅ Parcela vinculada ao serviço '{servico.nome}'")
-                print(f"      - NÃO criando PagamentoServico (parcela já aparece no histórico via ParcelaIndividual)")
+                logger.debug(f"   ✅ Parcela vinculada ao serviço '{servico.nome}'")
+                logger.debug(f"      - NÃO criando PagamentoServico (parcela já aparece no histórico via ParcelaIndividual)")
             else:
-                print(f"   ⚠️ Serviço {pagamento.servico_id} não existe, mas parcela será mostrada via ParcelaIndividual")
+                logger.debug(f"   ⚠️ Serviço {pagamento.servico_id} não existe, mas parcela será mostrada via ParcelaIndividual")
         else:
             # Parcela SEM serviço - criar Lancamento normal
-            print(f"   ✅ Parcela sem serviço, criando lançamento geral")
+            logger.debug(f"   ✅ Parcela sem serviço, criando lançamento geral")
             novo_lancamento = Lancamento(
                 obra_id=pagamento.obra_id,
                 tipo='Despesa',
@@ -8111,7 +8111,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
                 novo_lancamento.segmento = segmento_info
             db.session.add(novo_lancamento)
             db.session.flush()
-            print(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
+            logger.debug(f"   ✅ Lançamento criado com ID={novo_lancamento.id}")
         
         # Atualizar contador de parcelas pagas
         todas_parcelas = ParcelaIndividual.query.filter_by(
@@ -8121,18 +8121,18 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         parcelas_pagas_count = sum(1 for p in todas_parcelas if p.status == 'Pago')
         pagamento.parcelas_pagas = parcelas_pagas_count
         
-        print(f"   📊 Total de parcelas pagas: {parcelas_pagas_count}/{pagamento.numero_parcelas}")
+        logger.debug(f"   📊 Total de parcelas pagas: {parcelas_pagas_count}/{pagamento.numero_parcelas}")
         
         # Se todas foram pagas, atualizar status
         if parcelas_pagas_count >= pagamento.numero_parcelas:
             pagamento.status = 'Concluído'
-            print(f"   🎉 Pagamento marcado como Concluído")
+            logger.debug(f"   🎉 Pagamento marcado como Concluído")
         
         # Commit final
         db.session.commit()
         
-        print(f"   ✅ SUCESSO: Parcela {parcela_id} marcada como paga")
-        print(f"{'='*80}\n")
+        logger.debug(f"   ✅ SUCESSO: Parcela {parcela_id} marcada como paga")
+        logger.debug(f"{'='*80}\n")
         
         return jsonify({
             "mensagem": "Parcela paga com sucesso",
@@ -8142,12 +8142,12 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"\n{'='*80}")
-        print(f"❌ ERRO FATAL em marcar_parcela_paga:")
-        print(f"   {str(e)}")
-        print(f"\nStack trace completo:")
-        print(error_details)
-        print(f"{'='*80}\n")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"❌ ERRO FATAL em marcar_parcela_paga:")
+        logger.debug(f"   {str(e)}")
+        logger.debug(f"\nStack trace completo:")
+        logger.debug(error_details)
+        logger.debug(f"{'='*80}\n")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -8166,41 +8166,41 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
         return response
 
     try:
-        print(f"\n{'='*80}")
-        print(f"↩️ INÍCIO: desfazer_pagamento_parcela")
-        print(f"   obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id}")
-        print(f"{'='*80}")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"↩️ INÍCIO: desfazer_pagamento_parcela")
+        logger.debug(f"   obra_id={obra_id}, pagamento_id={pagamento_id}, parcela_id={parcela_id}")
+        logger.debug(f"{'='*80}")
         
         # Validações de acesso
         current_user = get_current_user()
-        print(f"   👤 Usuário: {current_user.username} (role: {current_user.role})")
+        logger.debug(f"   👤 Usuário: {current_user.username} (role: {current_user.role})")
         
         if not user_has_access_to_obra(current_user, obra_id):
-            print(f"   ❌ Acesso negado à obra {obra_id}")
+            logger.debug(f"   ❌ Acesso negado à obra {obra_id}")
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         
         # Buscar pagamento parcelado
         pagamento = db.session.get(PagamentoParcelado, pagamento_id)
         if not pagamento or pagamento.obra_id != obra_id:
-            print(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
+            logger.debug(f"   ❌ Pagamento {pagamento_id} não encontrado ou não pertence à obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
-        print(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
-        print(f"      - servico_id: {pagamento.servico_id}")
+        logger.debug(f"   ✅ Pagamento encontrado: '{pagamento.descricao}'")
+        logger.debug(f"      - servico_id: {pagamento.servico_id}")
         
         # Buscar parcela
         parcela = db.session.get(ParcelaIndividual, parcela_id)
         if not parcela or parcela.pagamento_parcelado_id != pagamento_id:
-            print(f"   ❌ Parcela {parcela_id} não encontrada ou não pertence ao pagamento {pagamento_id}")
+            logger.debug(f"   ❌ Parcela {parcela_id} não encontrada ou não pertence ao pagamento {pagamento_id}")
             return jsonify({"erro": "Parcela não encontrada"}), 404
         
         if parcela.status != 'Pago':
-            print(f"   ⚠️ Parcela {parcela_id} não está paga, status atual: {parcela.status}")
+            logger.debug(f"   ⚠️ Parcela {parcela_id} não está paga, status atual: {parcela.status}")
             return jsonify({"erro": "Parcela não está marcada como paga"}), 400
         
-        print(f"   ✅ Parcela encontrada: {parcela.numero_parcela}/{pagamento.numero_parcelas}")
-        print(f"      - valor: R$ {parcela.valor_parcela}")
-        print(f"      - data_pagamento: {parcela.data_pagamento}")
+        logger.debug(f"   ✅ Parcela encontrada: {parcela.numero_parcela}/{pagamento.numero_parcelas}")
+        logger.debug(f"      - valor: R$ {parcela.valor_parcela}")
+        logger.debug(f"      - data_pagamento: {parcela.data_pagamento}")
         
         # Descrição padrão da parcela para buscar registros relacionados
         descricao_parcela = f"{pagamento.descricao} (Parcela {parcela.numero_parcela}/{pagamento.numero_parcelas})"
@@ -8220,15 +8220,15 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
                 # Verificar se é da mesma data ou descrição similar
                 if (pag_serv.data_pagamento and parcela.data_pagamento and 
                     pag_serv.data_pagamento == parcela.data_pagamento):
-                    print(f"   🗑️ Removendo PagamentoServico ID={pag_serv.id} (mesmo valor e data)")
+                    logger.debug(f"   🗑️ Removendo PagamentoServico ID={pag_serv.id} (mesmo valor e data)")
                     db.session.delete(pag_serv)
                     break
                 elif pag_serv.descricao and (descricao_parcela in pag_serv.descricao or descricao_parcela_alt in pag_serv.descricao):
-                    print(f"   🗑️ Removendo PagamentoServico ID={pag_serv.id} (descrição corresponde)")
+                    logger.debug(f"   🗑️ Removendo PagamentoServico ID={pag_serv.id} (descrição corresponde)")
                     db.session.delete(pag_serv)
                     break
             else:
-                print(f"   ℹ️ Nenhum PagamentoServico correspondente encontrado (normal se criado após correção)")
+                logger.debug(f"   ℹ️ Nenhum PagamentoServico correspondente encontrado (normal se criado após correção)")
         else:
             # Se NÃO tem serviço vinculado, tentar remover o lançamento criado
             lancamento_existente = Lancamento.query.filter(
@@ -8240,17 +8240,17 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
             ).first()
             
             if lancamento_existente:
-                print(f"   🗑️ Removendo lançamento ID={lancamento_existente.id}")
+                logger.debug(f"   🗑️ Removendo lançamento ID={lancamento_existente.id}")
                 db.session.delete(lancamento_existente)
             else:
-                print(f"   ℹ️ Nenhum lançamento correspondente encontrado")
+                logger.debug(f"   ℹ️ Nenhum lançamento correspondente encontrado")
         
         # Voltar parcela para status Previsto
         parcela.status = 'Previsto'
         parcela.data_pagamento = None
         parcela.forma_pagamento = None
         
-        print(f"   ✅ Parcela voltou para status 'Previsto'")
+        logger.debug(f"   ✅ Parcela voltou para status 'Previsto'")
         
         # Atualizar contador de parcelas pagas
         todas_parcelas = ParcelaIndividual.query.filter_by(
@@ -8263,15 +8263,15 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
         # Voltar status do pagamento para Ativo se estava Concluído
         if pagamento.status == 'Concluído':
             pagamento.status = 'Ativo'
-            print(f"   ✅ Pagamento voltou para status 'Ativo'")
+            logger.debug(f"   ✅ Pagamento voltou para status 'Ativo'")
         
-        print(f"   📊 Total de parcelas pagas agora: {parcelas_pagas_count}/{pagamento.numero_parcelas}")
+        logger.debug(f"   📊 Total de parcelas pagas agora: {parcelas_pagas_count}/{pagamento.numero_parcelas}")
         
         # Commit final
         db.session.commit()
         
-        print(f"   ✅ SUCESSO: Pagamento da parcela {parcela_id} desfeito")
-        print(f"{'='*80}\n")
+        logger.debug(f"   ✅ SUCESSO: Pagamento da parcela {parcela_id} desfeito")
+        logger.debug(f"{'='*80}\n")
         
         return jsonify({
             "mensagem": "Pagamento desfeito com sucesso",
@@ -8281,12 +8281,12 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"\n{'='*80}")
-        print(f"❌ ERRO FATAL em desfazer_pagamento_parcela:")
-        print(f"   {str(e)}")
-        print(f"\nStack trace completo:")
-        print(error_details)
-        print(f"{'='*80}\n")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"❌ ERRO FATAL em desfazer_pagamento_parcela:")
+        logger.debug(f"   {str(e)}")
+        logger.debug(f"\nStack trace completo:")
+        logger.debug(error_details)
+        logger.debug(f"{'='*80}\n")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -8302,7 +8302,7 @@ def obter_alertas_vencimento(obra_id):
     - Futuros (mais de 7 dias)
     """
     try:
-        print(f"--- [DEBUG] Iniciando obter_alertas_vencimento para obra {obra_id} ---")
+        logger.debug(f"--- [DEBUG] Iniciando obter_alertas_vencimento para obra {obra_id} ---")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -8312,7 +8312,7 @@ def obter_alertas_vencimento(obra_id):
         amanha = hoje + timedelta(days=1)
         em_7_dias = hoje + timedelta(days=7)
         
-        print(f"--- [DEBUG] Hoje: {hoje}, Amanhã: {amanha}, Em 7 dias: {em_7_dias} ---")
+        logger.debug(f"--- [DEBUG] Hoje: {hoje}, Amanhã: {amanha}, Em 7 dias: {em_7_dias} ---")
         
         alertas = {
             "vencidos": {"quantidade": 0, "valor_total": 0, "itens": []},
@@ -8329,10 +8329,10 @@ def obter_alertas_vencimento(obra_id):
             PagamentoFuturo.status == 'Previsto'
         ).all()
         
-        print(f"--- [DEBUG] Encontrados {len(pagamentos_futuros)} PagamentoFuturo com status 'Previsto' ---")
+        logger.debug(f"--- [DEBUG] Encontrados {len(pagamentos_futuros)} PagamentoFuturo com status 'Previsto' ---")
         
         for pag in pagamentos_futuros:
-            print(f"--- [DEBUG] PagamentoFuturo ID {pag.id}: {pag.descricao}, Valor: {pag.valor}, Vencimento: {pag.data_vencimento} ---")
+            logger.debug(f"--- [DEBUG] PagamentoFuturo ID {pag.id}: {pag.descricao}, Valor: {pag.valor}, Vencimento: {pag.data_vencimento} ---")
             
             item = {
                 "tipo": "Pagamento Futuro",
@@ -8344,27 +8344,27 @@ def obter_alertas_vencimento(obra_id):
             }
             
             if pag.data_vencimento < hoje:
-                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCIDO ---")
+                logger.debug(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCIDO ---")
                 alertas["vencidos"]["quantidade"] += 1
                 alertas["vencidos"]["valor_total"] += pag.valor
                 alertas["vencidos"]["itens"].append(item)
             elif pag.data_vencimento == hoje:
-                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE HOJE ---")
+                logger.debug(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE HOJE ---")
                 alertas["vence_hoje"]["quantidade"] += 1
                 alertas["vence_hoje"]["valor_total"] += pag.valor
                 alertas["vence_hoje"]["itens"].append(item)
             elif pag.data_vencimento == amanha:
-                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE AMANHÃ ---")
+                logger.debug(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE AMANHÃ ---")
                 alertas["vence_amanha"]["quantidade"] += 1
                 alertas["vence_amanha"]["valor_total"] += pag.valor
                 alertas["vence_amanha"]["itens"].append(item)
             elif pag.data_vencimento <= em_7_dias:
-                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE EM 7 DIAS ---")
+                logger.debug(f"--- [DEBUG] PagamentoFuturo {pag.id} → VENCE EM 7 DIAS ---")
                 alertas["vence_7_dias"]["quantidade"] += 1
                 alertas["vence_7_dias"]["valor_total"] += pag.valor
                 alertas["vence_7_dias"]["itens"].append(item)
             else:
-                print(f"--- [DEBUG] PagamentoFuturo {pag.id} → FUTURO (>7 dias) ---")
+                logger.debug(f"--- [DEBUG] PagamentoFuturo {pag.id} → FUTURO (>7 dias) ---")
                 alertas["futuros"]["quantidade"] += 1
                 alertas["futuros"]["valor_total"] += pag.valor
                 alertas["futuros"]["itens"].append(item)
@@ -8456,18 +8456,18 @@ def obter_alertas_vencimento(obra_id):
             if 'valor_total' in categoria:
                 categoria['valor_total'] = round(categoria['valor_total'], 2)
         
-        print(f"--- [DEBUG] RESULTADO FINAL DOS ALERTAS ---")
-        print(f"  Vencidos: {alertas['vencidos']['quantidade']} itens, Total: R$ {alertas['vencidos']['valor_total']}")
-        print(f"  Vence Hoje: {alertas['vence_hoje']['quantidade']} itens, Total: R$ {alertas['vence_hoje']['valor_total']}")
-        print(f"  Vence Amanhã: {alertas['vence_amanha']['quantidade']} itens, Total: R$ {alertas['vence_amanha']['valor_total']}")
-        print(f"  Vence em 7 dias: {alertas['vence_7_dias']['quantidade']} itens, Total: R$ {alertas['vence_7_dias']['valor_total']}")
-        print(f"  Futuros (>7 dias): {alertas['futuros']['quantidade']} itens, Total: R$ {alertas['futuros']['valor_total']}")
-        print(f"--- [LOG] Alertas de vencimento calculados para obra {obra_id} ---")
+        logger.debug(f"--- [DEBUG] RESULTADO FINAL DOS ALERTAS ---")
+        logger.debug(f"  Vencidos: {alertas['vencidos']['quantidade']} itens, Total: R$ {alertas['vencidos']['valor_total']}")
+        logger.debug(f"  Vence Hoje: {alertas['vence_hoje']['quantidade']} itens, Total: R$ {alertas['vence_hoje']['valor_total']}")
+        logger.debug(f"  Vence Amanhã: {alertas['vence_amanha']['quantidade']} itens, Total: R$ {alertas['vence_amanha']['valor_total']}")
+        logger.debug(f"  Vence em 7 dias: {alertas['vence_7_dias']['quantidade']} itens, Total: R$ {alertas['vence_7_dias']['valor_total']}")
+        logger.debug(f"  Futuros (>7 dias): {alertas['futuros']['quantidade']} itens, Total: R$ {alertas['futuros']['valor_total']}")
+        logger.debug(f"--- [LOG] Alertas de vencimento calculados para obra {obra_id} ---")
         return jsonify(alertas), 200
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET alertas vencimento: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET alertas vencimento: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 # --- ENDPOINT PARA GERAR RELATÓRIO DO CRONOGRAMA FINANCEIRO (PDF) ---
@@ -8557,7 +8557,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         # Buscar boletos da obra
         try:
             boletos_obra = Boleto.query.filter_by(obra_id=obra_id).order_by(Boleto.data_vencimento.asc()).all()
-        except:
+        except Exception:
             boletos_obra = []
         
         # Criar o PDF
@@ -8811,12 +8811,12 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                     # Obter forma de pagamento e PIX do pagamento parcelado (pai) de forma defensiva
                     try:
                         forma_pag = pag_parcelado.forma_pagamento if hasattr(pag_parcelado, 'forma_pagamento') and pag_parcelado.forma_pagamento else 'PIX'
-                    except:
+                    except Exception:
                         forma_pag = 'PIX'
                     
                     try:
                         pix_raw = pag_parcelado.pix if hasattr(pag_parcelado, 'pix') and pag_parcelado.pix else ''
-                    except:
+                    except Exception:
                         pix_raw = ''
                     
                     for parcela in parcelas:
@@ -8832,7 +8832,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
                         # Priorizar código de barras da parcela (boleto), senão usar PIX do pagamento
                         try:
                             codigo_barras = parcela.codigo_barras if hasattr(parcela, 'codigo_barras') and parcela.codigo_barras else ''
-                        except:
+                        except Exception:
                             codigo_barras = ''
                         if codigo_barras:
                             # Truncar código de barras (mostrar últimos 12 dígitos)
@@ -9077,7 +9077,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
         doc.build(elements)
         buffer.seek(0)
         
-        print(f"--- [LOG] PDF do cronograma gerado para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] PDF do cronograma gerado para obra {obra_id} ---")
         
         return send_file(
             buffer,
@@ -9088,7 +9088,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] ao gerar PDF do cronograma: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] ao gerar PDF do cronograma: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT DE RELATÓRIO DO CRONOGRAMA ---
 
@@ -9144,7 +9144,7 @@ def get_pagamentos_servico_pendentes(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /pagamentos-servico-pendentes: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /pagamentos-servico-pendentes: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9190,7 +9190,7 @@ def listar_lancamentos_pendentes(obra_id):
         
         total_pendente = sum(lanc.valor_total - lanc.valor_pago for lanc in lancamentos)
         
-        print(f"--- [LOG] Encontrados {len(resultado)} lançamentos pendentes na obra {obra_id}. Total: R$ {total_pendente:.2f} ---")
+        logger.debug(f"--- [LOG] Encontrados {len(resultado)} lançamentos pendentes na obra {obra_id}. Total: R$ {total_pendente:.2f} ---")
         
         return jsonify({
             'lancamentos': resultado,
@@ -9200,7 +9200,7 @@ def listar_lancamentos_pendentes(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /lancamentos-pendentes: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /lancamentos-pendentes: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9231,7 +9231,7 @@ def excluir_lancamento_pendente(obra_id, lancamento_id):
         db.session.delete(lancamento)
         db.session.commit()
         
-        print(f"--- [LOG] Lançamento {lancamento_id} excluído. Valor restante era: R$ {valor_restante:.2f} ---")
+        logger.debug(f"--- [LOG] Lançamento {lancamento_id} excluído. Valor restante era: R$ {valor_restante:.2f} ---")
         
         return jsonify({
             "mensagem": "Lançamento excluído com sucesso",
@@ -9243,7 +9243,7 @@ def excluir_lancamento_pendente(obra_id, lancamento_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /excluir-pendente: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /excluir-pendente: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9289,7 +9289,7 @@ def excluir_todos_lancamentos_pendentes(obra_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] {len(excluidos)} lançamentos pendentes excluídos. Total removido: R$ {valor_total_removido:.2f} ---")
+        logger.debug(f"--- [LOG] {len(excluidos)} lançamentos pendentes excluídos. Total removido: R$ {valor_total_removido:.2f} ---")
         
         return jsonify({
             "mensagem": f"{len(excluidos)} lançamentos pendentes excluídos com sucesso",
@@ -9301,7 +9301,7 @@ def excluir_todos_lancamentos_pendentes(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /excluir-todos-pendentes: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /excluir-todos-pendentes: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9370,7 +9370,7 @@ def excluir_todos_lancamentos_pendentes_global():
         
         db.session.commit()
         
-        print(f"--- [LOG] LIMPEZA GLOBAL: {total_geral_excluido} lançamentos excluídos em {len(resultado_por_obra)} obras. Total: R$ {total_geral_removido:.2f} ---")
+        logger.debug(f"--- [LOG] LIMPEZA GLOBAL: {total_geral_excluido} lançamentos excluídos em {len(resultado_por_obra)} obras. Total: R$ {total_geral_removido:.2f} ---")
         
         return jsonify({
             "mensagem": f"Limpeza concluída! {total_geral_excluido} lançamentos excluídos em {len(resultado_por_obra)} obras",
@@ -9384,7 +9384,7 @@ def excluir_todos_lancamentos_pendentes_global():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9439,7 +9439,7 @@ def excluir_pagamentos_servico_pendentes(obra_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] {len(excluidos)} pagamentos de serviço pendentes excluídos da obra {obra_id}. Total: R$ {valor_total_removido:.2f} ---")
+        logger.debug(f"--- [LOG] {len(excluidos)} pagamentos de serviço pendentes excluídos da obra {obra_id}. Total: R$ {valor_total_removido:.2f} ---")
         
         return jsonify({
             "mensagem": f"{len(excluidos)} pagamentos de serviço pendentes excluídos com sucesso",
@@ -9451,7 +9451,7 @@ def excluir_pagamentos_servico_pendentes(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9528,7 +9528,7 @@ def excluir_pagamentos_servico_pendentes_global():
         
         db.session.commit()
         
-        print(f"--- [LOG] LIMPEZA GLOBAL PAGAMENTOS: {total_geral_excluido} pagamentos de serviço excluídos em {len(resultado_por_obra)} obras. Total: R$ {total_geral_removido:.2f} ---")
+        logger.debug(f"--- [LOG] LIMPEZA GLOBAL PAGAMENTOS: {total_geral_excluido} pagamentos de serviço excluídos em {len(resultado_por_obra)} obras. Total: R$ {total_geral_removido:.2f} ---")
         
         return jsonify({
             "mensagem": f"Limpeza de pagamentos concluída! {total_geral_excluido} pagamentos excluídos em {len(resultado_por_obra)} obras",
@@ -9542,7 +9542,7 @@ def excluir_pagamentos_servico_pendentes_global():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9642,7 +9642,7 @@ def limpar_tudo_pendente_global():
         
         db.session.commit()
         
-        print(f"--- [LOG] SUPER LIMPEZA: {total_lancamentos_excluidos} lançamentos + {total_pagamentos_excluidos} pagamentos excluídos. Total: R$ {total_valor_removido:.2f} ---")
+        logger.debug(f"--- [LOG] SUPER LIMPEZA: {total_lancamentos_excluidos} lançamentos + {total_pagamentos_excluidos} pagamentos excluídos. Total: R$ {total_valor_removido:.2f} ---")
         
         return jsonify({
             "mensagem": f"SUPER LIMPEZA concluída! {total_lancamentos_excluidos + total_pagamentos_excluidos} itens excluídos em {len(resultado_por_obra)} obras",
@@ -9658,7 +9658,7 @@ def limpar_tudo_pendente_global():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] /limpar-tudo-pendente-global: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] /limpar-tudo-pendente-global: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT ---
 
@@ -9678,9 +9678,9 @@ def inserir_pagamento(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"\n{'='*80}")
-    print(f"💰 INSERIR PAGAMENTO - Obra {obra_id}")
-    print(f"{'='*80}")
+    logger.debug(f"\n{'='*80}")
+    logger.debug(f"💰 INSERIR PAGAMENTO - Obra {obra_id}")
+    logger.debug(f"{'='*80}")
     
     try:
         user = get_current_user()
@@ -9688,14 +9688,14 @@ def inserir_pagamento(obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
         dados = request.json
-        print(f"📋 Dados recebidos: {dados}")
+        logger.debug(f"📋 Dados recebidos: {dados}")
         
         # DEBUG: Verificar campos de entrada especificamente
-        print(f"🔍 DEBUG ENTRADA:")
-        print(f"   tem_entrada: {dados.get('tem_entrada')}")
-        print(f"   valor_entrada: {dados.get('valor_entrada')}")
-        print(f"   percentual_entrada: {dados.get('percentual_entrada')}")
-        print(f"   data_entrada: {dados.get('data_entrada')}")
+        logger.debug(f"🔍 DEBUG ENTRADA:")
+        logger.debug(f"   tem_entrada: {dados.get('tem_entrada')}")
+        logger.debug(f"   valor_entrada: {dados.get('valor_entrada')}")
+        logger.debug(f"   percentual_entrada: {dados.get('percentual_entrada')}")
+        logger.debug(f"   data_entrada: {dados.get('data_entrada')}")
         
         # Campos obrigatórios
         descricao = dados.get('descricao')
@@ -9717,15 +9717,15 @@ def inserir_pagamento(obra_id):
         periodicidade = dados.get('periodicidade')  # 'Semanal', 'Quinzenal', 'Mensal'
         data_primeira_parcela = dados.get('data_primeira_parcela')
         
-        print(f"   Tipo pagamento: {tipo_forma_pagamento}")
-        print(f"   Status: {status}")
-        print(f"   Serviço vinculado: {servico_id}")
+        logger.debug(f"   Tipo pagamento: {tipo_forma_pagamento}")
+        logger.debug(f"   Status: {status}")
+        logger.debug(f"   Serviço vinculado: {servico_id}")
         
         # ===== FLUXO PARCELADO =====
         if tipo_forma_pagamento == 'parcelado':
-            print(f"   📦 Criando pagamento PARCELADO")
-            print(f"      - Parcelas: {numero_parcelas}")
-            print(f"      - Periodicidade: {periodicidade}")
+            logger.debug(f"   📦 Criando pagamento PARCELADO")
+            logger.debug(f"      - Parcelas: {numero_parcelas}")
+            logger.debug(f"      - Periodicidade: {periodicidade}")
             
             if not numero_parcelas or not periodicidade or not data_primeira_parcela:
                 return jsonify({"erro": "Parcelas, periodicidade e data da primeira parcela são obrigatórios para parcelamento"}), 400
@@ -9746,8 +9746,8 @@ def inserir_pagamento(obra_id):
             # Total de pagamentos = entrada (se houver) + parcelas
             total_pagamentos = numero_parcelas + (1 if tem_entrada and valor_entrada > 0 else 0)
             
-            print(f"   💰 Entrada: R$ {valor_entrada:.2f} ({percentual_entrada:.0f}%)")
-            print(f"   💰 Restante: R$ {valor_restante:.2f} em {numero_parcelas}x R$ {valor_parcela:.2f}")
+            logger.debug(f"   💰 Entrada: R$ {valor_entrada:.2f} ({percentual_entrada:.0f}%)")
+            logger.debug(f"   💰 Restante: R$ {valor_restante:.2f} em {numero_parcelas}x R$ {valor_parcela:.2f}")
             
             # Criar PagamentoParcelado
             novo_parcelado = PagamentoParcelado(
@@ -9769,18 +9769,18 @@ def inserir_pagamento(obra_id):
             
             # 🆕 Salvar orcamento_item_id via SQL direto (coluna pode não estar no model)
             orcamento_item_id = dados.get('orcamento_item_id')
-            print(f"   🔗 orcamento_item_id recebido: {orcamento_item_id}")
+            logger.debug(f"   🔗 orcamento_item_id recebido: {orcamento_item_id}")
             if orcamento_item_id:
                 try:
                     orcamento_item_id_int = int(orcamento_item_id)
                     db.session.execute(db.text(
                         f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id_int} WHERE id = {novo_parcelado.id}"
                     ))
-                    print(f"   ✅ orcamento_item_id {orcamento_item_id_int} salvo no PagamentoParcelado {novo_parcelado.id}")
+                    logger.debug(f"   ✅ orcamento_item_id {orcamento_item_id_int} salvo no PagamentoParcelado {novo_parcelado.id}")
                 except Exception as e:
-                    print(f"   ⚠️ Erro ao salvar orcamento_item_id: {e}")
+                    logger.debug(f"   ⚠️ Erro ao salvar orcamento_item_id: {e}")
             
-            print(f"   ✅ PagamentoParcelado criado: ID={novo_parcelado.id}")
+            logger.debug(f"   ✅ PagamentoParcelado criado: ID={novo_parcelado.id}")
             
             # Gerar parcelas individuais
             from datetime import timedelta
@@ -9801,7 +9801,7 @@ def inserir_pagamento(obra_id):
                     observacao=f'ENTRADA ({percentual_entrada:.0f}%)'
                 )
                 db.session.add(parcela_entrada)
-                print(f"      ✅ ENTRADA: R$ {valor_entrada:.2f} - {data_entrada_parsed}")
+                logger.debug(f"      ✅ ENTRADA: R$ {valor_entrada:.2f} - {data_entrada_parsed}")
             
             for i in range(1, numero_parcelas + 1):
                 # Calcular data de vencimento da parcela
@@ -9834,13 +9834,13 @@ def inserir_pagamento(obra_id):
                     forma_pagamento=pix if status == 'Pago' else None
                 )
                 db.session.add(nova_parcela)
-                print(f"      ✅ Parcela {i}/{numero_parcelas}: R$ {valor_parcela:.2f} - {data_venc} ({parcela_status})")
+                logger.debug(f"      ✅ Parcela {i}/{numero_parcelas}: R$ {valor_parcela:.2f} - {data_venc} ({parcela_status})")
             
             db.session.flush()
             
             # Se STATUS = PAGO, criar PagamentoServico para cada parcela
             if status == 'Pago' and servico_id:
-                print(f"   💰 Status=PAGO com serviço vinculado, criando PagamentoServico...")
+                logger.debug(f"   💰 Status=PAGO com serviço vinculado, criando PagamentoServico...")
                 
                 servico = Servico.query.get(servico_id)
                 if servico:
@@ -9861,7 +9861,7 @@ def inserir_pagamento(obra_id):
                     db.session.add(novo_pag_servico)
                     db.session.flush()
                     
-                    print(f"      ✅ PagamentoServico criado: ID={novo_pag_servico.id}, valor={valor_total}")
+                    logger.debug(f"      ✅ PagamentoServico criado: ID={novo_pag_servico.id}, valor={valor_total}")
                     
                     # Atualizar parcelas_pagas
                     novo_parcelado.parcelas_pagas = numero_parcelas
@@ -9880,18 +9880,18 @@ def inserir_pagamento(obra_id):
                         total_pago = sum(p.valor_pago for p in pagamentos_mat)
                         servico.percentual_conclusao_material = min(100, (total_pago / servico.valor_global_material) * 100)
                     
-                    print(f"      ✅ Serviço atualizado: MO={servico.percentual_conclusao_mao_obra:.1f}%, MAT={servico.percentual_conclusao_material:.1f}%")
+                    logger.debug(f"      ✅ Serviço atualizado: MO={servico.percentual_conclusao_mao_obra:.1f}%, MAT={servico.percentual_conclusao_material:.1f}%")
             
             elif status == 'Pago':
                 # Status=Pago mas sem serviço vinculado
                 novo_parcelado.parcelas_pagas = numero_parcelas
                 novo_parcelado.status = 'Concluído'
-                print(f"   ✅ Todas as parcelas marcadas como pagas (sem vínculo ao serviço)")
+                logger.debug(f"   ✅ Todas as parcelas marcadas como pagas (sem vínculo ao serviço)")
             
             db.session.commit()
-            print(f"{'='*80}")
-            print(f"✅ SUCESSO: Pagamento parcelado criado")
-            print(f"{'='*80}\n")
+            logger.debug(f"{'='*80}")
+            logger.debug(f"✅ SUCESSO: Pagamento parcelado criado")
+            logger.debug(f"{'='*80}\n")
             
             return jsonify({
                 "mensagem": "Pagamento parcelado criado com sucesso",
@@ -9900,7 +9900,7 @@ def inserir_pagamento(obra_id):
         
         # ===== FLUXO À VISTA =====
         else:
-            print(f"   💵 Criando pagamento À VISTA")
+            logger.debug(f"   💵 Criando pagamento À VISTA")
             valor_pago = valor_total if status == 'Pago' else 0.0
             
             # CASO 1: STATUS "PAGO" COM SERVIÇO VINCULADO
@@ -9936,8 +9936,8 @@ def inserir_pagamento(obra_id):
                     servico.percentual_conclusao_material = min(100, (total_pago / servico.valor_global_material) * 100)
                 
                 db.session.commit()
-                print(f"   ✅ PagamentoServico PAGO criado: ID={novo_pagamento.id}")
-                print(f"{'='*80}\n")
+                logger.debug(f"   ✅ PagamentoServico PAGO criado: ID={novo_pagamento.id}")
+                logger.debug(f"{'='*80}\n")
                 return jsonify(novo_pagamento.to_dict()), 201
             
             # CASO 2: STATUS "A PAGAR" COM SERVIÇO VINCULADO
@@ -9967,11 +9967,11 @@ def inserir_pagamento(obra_id):
                             f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_futuro.id}"
                         ))
                     except Exception as e:
-                        print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                        logger.debug(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
                 
                 db.session.commit()
-                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
-                print(f"{'='*80}\n")
+                logger.debug(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
+                logger.debug(f"{'='*80}\n")
                 return jsonify(novo_futuro.to_dict()), 201
             
             # CASO 3: STATUS "A PAGAR" SEM SERVIÇO
@@ -9999,11 +9999,11 @@ def inserir_pagamento(obra_id):
                             f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_futuro.id}"
                         ))
                     except Exception as e:
-                        print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                        logger.debug(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
                 
                 db.session.commit()
-                print(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
-                print(f"{'='*80}\n")
+                logger.debug(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
+                logger.debug(f"{'='*80}\n")
                 return jsonify(novo_futuro.to_dict()), 201
             
             # CASO 4: STATUS "PAGO" SEM SERVIÇO
@@ -10032,22 +10032,22 @@ def inserir_pagamento(obra_id):
                             f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_lancamento.id}"
                         ))
                     except Exception as e:
-                        print(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                        logger.debug(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
                 
                 db.session.commit()
-                print(f"   ✅ Lançamento criado: ID={novo_lancamento.id}, orcamento_item_id={orcamento_item_id}")
-                print(f"{'='*80}\n")
+                logger.debug(f"   ✅ Lançamento criado: ID={novo_lancamento.id}, orcamento_item_id={orcamento_item_id}")
+                logger.debug(f"{'='*80}\n")
                 return jsonify(novo_lancamento.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"\n{'='*80}")
-        print(f"❌ ERRO em inserir_pagamento:")
-        print(f"   {str(e)}")
-        print(f"\nStack trace:")
-        print(error_details)
-        print(f"{'='*80}\n")
+        logger.debug(f"\n{'='*80}")
+        logger.debug(f"❌ ERRO em inserir_pagamento:")
+        logger.debug(f"   {str(e)}")
+        logger.debug(f"\nStack trace:")
+        logger.debug(error_details)
+        logger.debug(f"{'='*80}\n")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DO ENDPOINT INSERIR PAGAMENTO ---
 
@@ -10063,7 +10063,7 @@ def marcar_multiplos_como_pago(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/cronograma/marcar-multiplos-pagos (POST) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/cronograma/marcar-multiplos-pagos (POST) acessada ---")
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
@@ -10073,8 +10073,8 @@ def marcar_multiplos_como_pago(obra_id):
         itens_selecionados = dados.get('itens', [])  # Lista de {tipo: 'futuro'|'parcela'|'servico', id: X}
         data_pagamento = dados.get('data_pagamento')
         
-        print(f"--- [LOG] Total de itens recebidos: {len(itens_selecionados)} ---")
-        print(f"--- [LOG] Itens: {itens_selecionados} ---")
+        logger.debug(f"--- [LOG] Total de itens recebidos: {len(itens_selecionados)} ---")
+        logger.debug(f"--- [LOG] Itens: {itens_selecionados} ---")
         
         if data_pagamento:
             data_pagamento = date.fromisoformat(data_pagamento)
@@ -10087,7 +10087,7 @@ def marcar_multiplos_como_pago(obra_id):
             tipo_item = item.get('tipo')
             item_id = item.get('id')
             
-            print(f"--- [LOG] Processando item: tipo={tipo_item}, id={item_id} ---")
+            logger.debug(f"--- [LOG] Processando item: tipo={tipo_item}, id={item_id} ---")
             
             # CORREÇÃO CRÍTICA: Usar savepoint para isolar cada item
             # Se um item der erro, não afeta os outros
@@ -10101,7 +10101,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if not pagamento:
                         savepoint.rollback()
                         erro_msg = f"Pagamento futuro ID {item_id} não encontrado no banco"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "futuro",
                             "id": item_id,
@@ -10113,7 +10113,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if pagamento.obra_id != obra_id:
                         savepoint.rollback()
                         erro_msg = f"Pagamento futuro ID {item_id} não pertence à obra {obra_id}"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "futuro",
                             "id": item_id,
@@ -10128,7 +10128,7 @@ def marcar_multiplos_como_pago(obra_id):
                         if not servico:
                             savepoint.rollback()
                             erro_msg = f"Serviço ID {pagamento.servico_id} não encontrado"
-                            print(f"--- [ERRO] {erro_msg} ---")
+                            logger.debug(f"--- [ERRO] {erro_msg} ---")
                             resultados.append({
                                 "tipo": "futuro",
                                 "id": item_id,
@@ -10177,7 +10177,7 @@ def marcar_multiplos_como_pago(obra_id):
                         # DELETE o PagamentoFuturo
                         db.session.delete(pagamento)
                         
-                        print(f"--- [LOG] ✅ Pagamento futuro ID {item_id} vinculado ao serviço '{servico.nome}' ---")
+                        logger.debug(f"--- [LOG] ✅ Pagamento futuro ID {item_id} vinculado ao serviço '{servico.nome}' ---")
                         resultados.append({
                             "tipo": "futuro",
                             "id": item_id,
@@ -10209,7 +10209,7 @@ def marcar_multiplos_como_pago(obra_id):
                         # DELETE o PagamentoFuturo
                         db.session.delete(pagamento)
                         
-                        print(f"--- [LOG] ✅ Pagamento futuro ID {item_id} movido para histórico (Lançamento ID {novo_lancamento.id}) ---")
+                        logger.debug(f"--- [LOG] ✅ Pagamento futuro ID {item_id} movido para histórico (Lançamento ID {novo_lancamento.id}) ---")
                         resultados.append({
                             "tipo": "futuro",
                             "id": item_id,
@@ -10225,7 +10225,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if not parcela:
                         savepoint.rollback()
                         erro_msg = f"Parcela ID {item_id} não encontrada no banco"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "parcela",
                             "id": item_id,
@@ -10239,7 +10239,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if not pag_parcelado:
                         savepoint.rollback()
                         erro_msg = f"Pagamento parcelado ID {parcela.pagamento_parcelado_id} não encontrado"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "parcela",
                             "id": item_id,
@@ -10251,7 +10251,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if pag_parcelado.obra_id != obra_id:
                         savepoint.rollback()
                         erro_msg = f"Pagamento parcelado não pertence à obra {obra_id}"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "parcela",
                             "id": item_id,
@@ -10263,7 +10263,7 @@ def marcar_multiplos_como_pago(obra_id):
                     # Verificar se já está paga
                     if parcela.status == 'Pago':
                         savepoint.rollback()
-                        print(f"--- [AVISO] Parcela ID {item_id} já está paga, pulando ---")
+                        logger.debug(f"--- [AVISO] Parcela ID {item_id} já está paga, pulando ---")
                         resultados.append({
                             "tipo": "parcela",
                             "id": item_id,
@@ -10309,7 +10309,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if parcelas_pagas >= pag_parcelado.numero_parcelas:
                         pag_parcelado.status = 'Concluído'
                     
-                    print(f"--- [LOG] ✅ Parcela ID {item_id} marcada como paga ---")
+                    logger.debug(f"--- [LOG] ✅ Parcela ID {item_id} marcada como paga ---")
                     resultados.append({
                         "tipo": "parcela",
                         "id": item_id,
@@ -10324,7 +10324,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if not pagamento_servico:
                         savepoint.rollback()
                         erro_msg = f"Pagamento de serviço ID {item_id} não encontrado"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "servico",
                             "id": item_id,
@@ -10338,7 +10338,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if not servico:
                         savepoint.rollback()
                         erro_msg = f"Serviço ID {pagamento_servico.servico_id} não encontrado"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "servico",
                             "id": item_id,
@@ -10350,7 +10350,7 @@ def marcar_multiplos_como_pago(obra_id):
                     if servico.obra_id != obra_id:
                         savepoint.rollback()
                         erro_msg = f"Serviço não pertence à obra {obra_id}"
-                        print(f"--- [ERRO] {erro_msg} ---")
+                        logger.debug(f"--- [ERRO] {erro_msg} ---")
                         resultados.append({
                             "tipo": "servico",
                             "id": item_id,
@@ -10362,7 +10362,7 @@ def marcar_multiplos_como_pago(obra_id):
                     # Verificar se já está totalmente pago
                     if pagamento_servico.valor_pago >= pagamento_servico.valor_total:
                         savepoint.rollback()
-                        print(f"--- [AVISO] Pagamento de serviço ID {item_id} já está totalmente pago ---")
+                        logger.debug(f"--- [AVISO] Pagamento de serviço ID {item_id} já está totalmente pago ---")
                         resultados.append({
                             "tipo": "servico",
                             "id": item_id,
@@ -10392,7 +10392,7 @@ def marcar_multiplos_como_pago(obra_id):
                         total_pago_mat = sum(p.valor_pago for p in pagamentos_material)
                         servico.percentual_conclusao_material = min(100, (total_pago_mat / servico.valor_global_material) * 100)
                     
-                    print(f"--- [LOG] ✅ Pagamento de serviço ID {item_id} marcado como pago ---")
+                    logger.debug(f"--- [LOG] ✅ Pagamento de serviço ID {item_id} marcado como pago ---")
                     resultados.append({
                         "tipo": "servico",
                         "id": item_id,
@@ -10402,7 +10402,7 @@ def marcar_multiplos_como_pago(obra_id):
                 
                 else:
                     erro_msg = f"Tipo de item inválido: '{tipo_item}'"
-                    print(f"--- [ERRO] {erro_msg} ---")
+                    logger.debug(f"--- [ERRO] {erro_msg} ---")
                     resultados.append({
                         "tipo": tipo_item,
                         "id": item_id,
@@ -10414,15 +10414,15 @@ def marcar_multiplos_como_pago(obra_id):
                 
                 # SUCESSO: Commit do savepoint
                 savepoint.commit()
-                print(f"--- [LOG] ✅ Item processado com sucesso (savepoint committed) ---")
+                logger.debug(f"--- [LOG] ✅ Item processado com sucesso (savepoint committed) ---")
             
             except Exception as e:
                 # ERRO: Rollback do savepoint (isola o erro deste item)
                 savepoint.rollback()
                 error_details = traceback.format_exc()
                 erro_msg = f"Erro ao processar item tipo={tipo_item}, id={item_id}: {str(e)}"
-                print(f"--- [ERRO] {erro_msg} ---")
-                print(error_details)
+                logger.debug(f"--- [ERRO] {erro_msg} ---")
+                logger.debug(error_details)
                 resultados.append({
                     "tipo": tipo_item,
                     "id": item_id,
@@ -10434,14 +10434,14 @@ def marcar_multiplos_como_pago(obra_id):
         
         sucessos = len([r for r in resultados if r['status'] == 'success'])
         erros = len([r for r in resultados if r['status'] == 'error'])
-        print(f"--- [LOG] ✅ {sucessos} item(ns) marcado(s) como pago | ❌ {erros} erro(s) ---")
+        logger.debug(f"--- [LOG] ✅ {sucessos} item(ns) marcado(s) como pago | ❌ {erros} erro(s) ---")
         
         # Listar os erros no log
         if erros > 0:
-            print("--- [LOG] Detalhes dos erros: ---")
+            logger.debug("--- [LOG] Detalhes dos erros: ---")
             for r in resultados:
                 if r['status'] == 'error':
-                    print(f"  - Tipo: {r['tipo']}, ID: {r['id']}, Erro: {r['mensagem']}")
+                    logger.debug(f"  - Tipo: {r['tipo']}, ID: {r['id']}, Erro: {r['mensagem']}")
         
         return jsonify({
             "mensagem": "Processamento concluído",
@@ -10451,7 +10451,7 @@ def marcar_multiplos_como_pago(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO FATAL] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO FATAL] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 # --- FIM DO ENDPOINT MARCAR MÚLTIPLOS COMO PAGO ---
 
@@ -10478,7 +10478,7 @@ def listar_diario_obra(obra_id):
 
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -10528,7 +10528,7 @@ def criar_entrada_diario(obra_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] Entrada de diário criada: ID {entrada.id} na obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Entrada de diário criada: ID {entrada.id} na obra {obra_id} ---")
         return jsonify({
             'mensagem': 'Entrada criada com sucesso',
             'entrada': entrada.to_dict()
@@ -10537,7 +10537,7 @@ def criar_entrada_diario(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] POST /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -10560,7 +10560,7 @@ def obter_entrada_diario(entrada_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET /diario/{entrada_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET /diario/{entrada_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -10605,7 +10605,7 @@ def atualizar_entrada_diario(entrada_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] Entrada {entrada_id} atualizada ---")
+        logger.debug(f"--- [LOG] Entrada {entrada_id} atualizada ---")
         return jsonify({
             'mensagem': 'Entrada atualizada com sucesso',
             'entrada': entrada.to_dict()
@@ -10614,7 +10614,7 @@ def atualizar_entrada_diario(entrada_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] PUT /diario/{entrada_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] PUT /diario/{entrada_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -10636,13 +10636,13 @@ def deletar_entrada_diario(entrada_id):
         db.session.delete(entrada)
         db.session.commit()
         
-        print(f"--- [LOG] Entrada {entrada_id} deletada ---")
+        logger.debug(f"--- [LOG] Entrada {entrada_id} deletada ---")
         return jsonify({'mensagem': 'Entrada deletada com sucesso'}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] DELETE /diario/{entrada_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] DELETE /diario/{entrada_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -10677,7 +10677,7 @@ def adicionar_imagem_diario(entrada_id):
         db.session.add(imagem)
         db.session.commit()
         
-        print(f"--- [LOG] Imagem adicionada à entrada {entrada_id} ---")
+        logger.debug(f"--- [LOG] Imagem adicionada à entrada {entrada_id} ---")
         return jsonify({
             'mensagem': 'Imagem adicionada com sucesso',
             'imagem': imagem.to_dict()
@@ -10686,7 +10686,7 @@ def adicionar_imagem_diario(entrada_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST /diario/{entrada_id}/imagens: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] POST /diario/{entrada_id}/imagens: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -10710,7 +10710,7 @@ def get_imagem_diario(imagem_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -10733,13 +10733,13 @@ def deletar_imagem_diario(imagem_id):
         db.session.delete(imagem)
         db.session.commit()
         
-        print(f"--- [LOG] Imagem {imagem_id} deletada ---")
+        logger.debug(f"--- [LOG] Imagem {imagem_id} deletada ---")
         return jsonify({'mensagem': 'Imagem deletada com sucesso'}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] DELETE /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] DELETE /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 
@@ -10892,7 +10892,7 @@ def gerar_relatorio_diario(obra_id):
                         story.append(Spacer(1, 0.3*cm))
                         
                     except Exception as img_error:
-                        print(f"--- [ERRO] Erro ao processar imagem {img_obj.id}: {str(img_error)} ---")
+                        logger.debug(f"--- [ERRO] Erro ao processar imagem {img_obj.id}: {str(img_error)} ---")
                         story.append(Paragraph(f"<i>[Erro ao carregar imagem: {img_obj.arquivo_nome}]</i>", styles['Normal']))
                         story.append(Spacer(1, 0.3*cm))
 
@@ -10906,7 +10906,7 @@ def gerar_relatorio_diario(obra_id):
         doc.build(story)
         buffer.seek(0)
         
-        print(f"--- [LOG] Relatório do diário gerado para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Relatório do diário gerado para obra {obra_id} ---")
         
         return send_file(
             buffer,
@@ -10917,7 +10917,7 @@ def gerar_relatorio_diario(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] GET /obras/{obra_id}/diario/relatorio: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] GET /obras/{obra_id}/diario/relatorio: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- MIGRAÇÃO DE DADOS ---
@@ -10933,7 +10933,7 @@ def migrar_lancamentos_para_futuros(obra_id):
         if not user_has_access_to_obra(current_user, obra_id):
             return jsonify({"erro": "Acesso negado"}), 403
         
-        print(f"--- [DEBUG MIGRAÇÃO] Buscando Lançamentos com status='A Pagar' na obra {obra_id} ---")
+        logger.debug(f"--- [DEBUG MIGRAÇÃO] Buscando Lançamentos com status='A Pagar' na obra {obra_id} ---")
         
         # Buscar todos os Lançamentos com status='A Pagar'
         lancamentos_a_pagar = Lancamento.query.filter_by(
@@ -10942,14 +10942,14 @@ def migrar_lancamentos_para_futuros(obra_id):
             servico_id=None  # Apenas lançamentos gerais, não vinculados a serviço
         ).all()
         
-        print(f"--- [DEBUG MIGRAÇÃO] Encontrados {len(lancamentos_a_pagar)} lançamentos para migrar ---")
+        logger.debug(f"--- [DEBUG MIGRAÇÃO] Encontrados {len(lancamentos_a_pagar)} lançamentos para migrar ---")
         
         if not lancamentos_a_pagar:
             return jsonify({"mensagem": "Nenhum lançamento 'A Pagar' encontrado"}), 200
         
         migrados = []
         for lanc in lancamentos_a_pagar:
-            print(f"--- [DEBUG MIGRAÇÃO] Migrando: {lanc.descricao}, Valor: R$ {lanc.valor_total:.2f} ---")
+            logger.debug(f"--- [DEBUG MIGRAÇÃO] Migrando: {lanc.descricao}, Valor: R$ {lanc.valor_total:.2f} ---")
             
             # Criar PagamentoFuturo com TODOS os campos
             novo_futuro = PagamentoFuturo(
@@ -10965,7 +10965,7 @@ def migrar_lancamentos_para_futuros(obra_id):
             db.session.add(novo_futuro)
             db.session.flush()  # Para obter o ID
             
-            print(f"--- [DEBUG MIGRAÇÃO] ✅ Criado PagamentoFuturo ID {novo_futuro.id} ---")
+            logger.debug(f"--- [DEBUG MIGRAÇÃO] ✅ Criado PagamentoFuturo ID {novo_futuro.id} ---")
             
             # Deletar o Lançamento antigo
             db.session.delete(lanc)
@@ -10979,7 +10979,7 @@ def migrar_lancamentos_para_futuros(obra_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] ✅ {len(migrados)} lançamentos migrados para PagamentoFuturo na obra {obra_id} ---")
+        logger.debug(f"--- [LOG] ✅ {len(migrados)} lançamentos migrados para PagamentoFuturo na obra {obra_id} ---")
         return jsonify({
             "mensagem": f"{len(migrados)} lançamentos migrados com sucesso",
             "migrados": migrados
@@ -10988,7 +10988,7 @@ def migrar_lancamentos_para_futuros(obra_id):
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] POST /admin/migrar-lancamentos-para-futuros/{obra_id}: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] POST /admin/migrar-lancamentos-para-futuros/{obra_id}: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e), "details": error_details}), 500
 
 # --- FIM DAS ROTAS DO DIÁRIO DE OBRAS ---
@@ -11025,9 +11025,9 @@ def migrar_pagamentos_antigos():
         if current_user.nivel_acesso != 'administrador':
             return jsonify({"erro": "Acesso negado. Apenas administradores podem executar esta migração."}), 403
         
-        print("=" * 80)
-        print("🔄 INICIANDO MIGRAÇÃO DE PAGAMENTOS ANTIGOS")
-        print("=" * 80)
+        logger.debug("=" * 80)
+        logger.debug("🔄 INICIANDO MIGRAÇÃO DE PAGAMENTOS ANTIGOS")
+        logger.debug("=" * 80)
         
         # 1. Buscar todos os pagamentos com status "Pago"
         pagamentos_pagos = PagamentoFuturo.query.filter(
@@ -11035,7 +11035,7 @@ def migrar_pagamentos_antigos():
         ).all()
         
         total = len(pagamentos_pagos)
-        print(f"📊 Total de pagamentos encontrados com status 'Pago': {total}")
+        logger.debug(f"📊 Total de pagamentos encontrados com status 'Pago': {total}")
         
         if total == 0:
             return jsonify({
@@ -11056,9 +11056,9 @@ def migrar_pagamentos_antigos():
                 "fornecedor": p.fornecedor
             })
         
-        print(f"📋 Pagamentos a serem migrados:")
+        logger.debug(f"📋 Pagamentos a serem migrados:")
         for p in lista_pagamentos:
-            print(f"  • ID: {p['id']} | Obra: {p['obra_id']} | {p['descricao']} | R$ {p['valor']:,.2f}")
+            logger.debug(f"  • ID: {p['id']} | Obra: {p['obra_id']} | {p['descricao']} | R$ {p['valor']:,.2f}")
         
         # 3. Executar migração
         migrados = 0
@@ -11097,12 +11097,12 @@ def migrar_pagamentos_antigos():
                 db.session.delete(pagamento)
                 
                 migrados += 1
-                print(f"  ✅ Migrado: {pagamento.descricao} (Pagamento ID: {pagamento.id} → Lançamento ID: {novo_lancamento.id})")
+                logger.debug(f"  ✅ Migrado: {pagamento.descricao} (Pagamento ID: {pagamento.id} → Lançamento ID: {novo_lancamento.id})")
                 
             except Exception as e:
                 db.session.rollback()
                 erro_msg = f"Erro ao migrar ID {pagamento.id}: {str(e)}"
-                print(f"  ❌ {erro_msg}")
+                logger.debug(f"  ❌ {erro_msg}")
                 erros.append({
                     "pagamento_id": pagamento.id,
                     "descricao": pagamento.descricao,
@@ -11113,16 +11113,16 @@ def migrar_pagamentos_antigos():
         # 4. Commit final
         if migrados > 0:
             db.session.commit()
-            print(f"\n✅ Commit realizado: {migrados} pagamentos migrados com sucesso!")
+            logger.debug(f"\n✅ Commit realizado: {migrados} pagamentos migrados com sucesso!")
         
         # 5. Relatório
-        print("\n" + "=" * 80)
-        print("📊 RELATÓRIO DA MIGRAÇÃO")
-        print("=" * 80)
-        print(f"✅ Pagamentos migrados com sucesso: {migrados}")
-        print(f"❌ Erros durante a migração: {len(erros)}")
-        print(f"📈 Total processado: {migrados + len(erros)}/{total}")
-        print("=" * 80)
+        logger.debug("\n" + "=" * 80)
+        logger.debug("📊 RELATÓRIO DA MIGRAÇÃO")
+        logger.debug("=" * 80)
+        logger.debug(f"✅ Pagamentos migrados com sucesso: {migrados}")
+        logger.debug(f"❌ Erros durante a migração: {len(erros)}")
+        logger.debug(f"📈 Total processado: {migrados + len(erros)}/{total}")
+        logger.debug("=" * 80)
         
         return jsonify({
             "mensagem": "Migração concluída!",
@@ -11136,7 +11136,7 @@ def migrar_pagamentos_antigos():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"❌ ERRO CRÍTICO na migração: {str(e)}\n{error_details}")
+        logger.debug(f"❌ ERRO CRÍTICO na migração: {str(e)}\n{error_details}")
         return jsonify({
             "erro": str(e),
             "details": error_details
@@ -11208,7 +11208,7 @@ class CronogramaObra(db.Model):
             
             return round(soma_ponderada / total_dias, 2)
         except Exception as e:
-            print(f"[AVISO] Erro ao calcular percentual por etapas: {str(e)}")
+            logger.debug(f"[AVISO] Erro ao calcular percentual por etapas: {str(e)}")
             return 0.0
 
     def atualizar_datas_por_etapas(self):
@@ -11224,7 +11224,7 @@ class CronogramaObra(db.Model):
                 # Data fim = última etapa
                 self.data_fim_prevista = etapas_list[-1].data_fim
         except Exception as e:
-            print(f"[AVISO] Erro ao atualizar datas por etapas: {str(e)}")
+            logger.debug(f"[AVISO] Erro ao atualizar datas por etapas: {str(e)}")
 
     def to_dict(self):
         # Se tipo_medicao for 'etapas', calcular percentual automaticamente
@@ -11253,8 +11253,8 @@ class CronogramaObra(db.Model):
                     etapas_list = [etapa.to_dict() for etapa in etapas_query]
                     if self.tipo_medicao == 'etapas':
                         percentual = self.calcular_percentual_por_etapas()
-            except:
-                print(f"[AVISO] Não foi possível carregar etapas: {str(e)}")
+            except Exception:
+                logger.debug(f"[AVISO] Não foi possível carregar etapas: {str(e)}")
                 etapas_list = []
         
         # Tentar obter orcamento_etapa_id de forma segura (coluna pode não existir)
@@ -11272,7 +11272,7 @@ class CronogramaObra(db.Model):
                 if etapa:
                     orcamento_etapa_nome = etapa.nome
                     orcamento_etapa_codigo = etapa.codigo
-        except:
+        except Exception:
             pass  # Coluna não existe ainda, ignorar
         
         return {
@@ -11368,7 +11368,7 @@ class CronogramaEtapa(db.Model):
                     self.data_inicio = min(datas_inicio)
                 if datas_fim:
                     self.data_fim = max(datas_fim)
-        except:
+        except Exception:
             pass
 
     def calcular_percentual_das_subetapas(self):
@@ -11390,7 +11390,7 @@ class CronogramaEtapa(db.Model):
                 return 0.0
             
             return round(soma_ponderada / total_dias, 2)
-        except:
+        except Exception:
             return self.percentual_conclusao or 0.0
 
     def total_dias_subetapas(self):
@@ -11398,7 +11398,7 @@ class CronogramaEtapa(db.Model):
         try:
             subs = self.subetapas.all()
             return sum(s.duracao_dias or 0 for s in subs)
-        except:
+        except Exception:
             return self.duracao_dias or 0
 
     def to_dict(self):
@@ -11412,7 +11412,7 @@ class CronogramaEtapa(db.Model):
                 subetapas_list = [s.to_dict() for s in self.subetapas.order_by(CronogramaEtapa.ordem).all()]
                 total_dias = self.total_dias_subetapas()
                 percentual = self.calcular_percentual_das_subetapas()
-            except:
+            except Exception:
                 pass
         
         return {
@@ -11528,7 +11528,7 @@ def get_servicos_obra(obra_id):
             'valor_global_material': s.valor_global_material
         } for s in servicos]), 200
     except Exception as e:
-        print(f"[ERRO] get_servicos_obra: {str(e)}")
+        logger.debug(f"[ERRO] get_servicos_obra: {str(e)}")
         return jsonify({'error': 'Erro ao buscar serviços'}), 500
 
 
@@ -11550,14 +11550,14 @@ def get_servico_financeiro(obra_id):
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     
-    print(f"--- [LOG] Rota /obras/{obra_id}/servico-financeiro (GET) acessada ---")
+    logger.debug(f"--- [LOG] Rota /obras/{obra_id}/servico-financeiro (GET) acessada ---")
     
     try:
         # Obter servico_nome da query string
         servico_nome = request.args.get('servico_nome')
         
         if not servico_nome:
-            print("[ERRO] servico_nome não fornecido")
+            logger.debug("[ERRO] servico_nome não fornecido")
             return jsonify({'erro': 'servico_nome é obrigatório'}), 400
         
         # Verificar acesso à obra
@@ -11572,7 +11572,7 @@ def get_servico_financeiro(obra_id):
         if not obra:
             return jsonify({'erro': 'Obra não encontrada'}), 404
         
-        print(f"[LOG] Buscando dados financeiros para serviço: '{servico_nome}' na obra {obra_id}")
+        logger.debug(f"[LOG] Buscando dados financeiros para serviço: '{servico_nome}' na obra {obra_id}")
         
         # 1. Buscar o serviço na planilha de custos
         servico = Servico.query.filter_by(
@@ -11581,7 +11581,7 @@ def get_servico_financeiro(obra_id):
         ).first()
         
         if not servico:
-            print(f"[INFO] Serviço '{servico_nome}' não encontrado na planilha de custos — buscando no Orçamento de Engenharia")
+            logger.debug(f"[INFO] Serviço '{servico_nome}' não encontrado na planilha de custos — buscando no Orçamento de Engenharia")
             
             # Tentar buscar pelo vínculo cronograma_obra → orcamento_etapa_id
             try:
@@ -11674,7 +11674,7 @@ def get_servico_financeiro(obra_id):
                         'fonte': 'orcamento_engenharia'
                     }), 200
             except Exception as e_orc:
-                print(f"[AVISO] Erro ao buscar do orçamento de engenharia: {e_orc}")
+                logger.debug(f"[AVISO] Erro ao buscar do orçamento de engenharia: {e_orc}")
 
             # Nada encontrado — retornar vazio
             return jsonify({
@@ -11689,7 +11689,7 @@ def get_servico_financeiro(obra_id):
         
         # 2. Calcular valor total orçado (MO + Material)
         valor_total = float(servico.valor_global_mao_de_obra or 0.0) + float(servico.valor_global_material or 0.0)
-        print(f"[LOG] Valor total orçado (Servico): R$ {valor_total:.2f}")
+        logger.debug(f"[LOG] Valor total orçado (Servico): R$ {valor_total:.2f}")
 
         # CORREÇÃO BUG #3: Se Servico tem valor zero (caso típico quando o usuário
         # mantém o orçamento no módulo Orçamento de Engenharia), buscar o valor
@@ -11713,9 +11713,9 @@ def get_servico_financeiro(obra_id):
                     valor_total_orc_eng = float((totais_orc[0] or 0) + (totais_orc[1] or 0))
                     if valor_total_orc_eng > 0:
                         valor_total = valor_total_orc_eng
-                        print(f"[LOG] Valor total recalculado via orcamento_eng_item: R$ {valor_total:.2f}")
+                        logger.debug(f"[LOG] Valor total recalculado via orcamento_eng_item: R$ {valor_total:.2f}")
             except Exception as e_fallback:
-                print(f"[AVISO] Falha ao calcular valor_total via orcamento_eng_item: {e_fallback}")
+                logger.debug(f"[AVISO] Falha ao calcular valor_total via orcamento_eng_item: {e_fallback}")
 
         # 3. Calcular valor já pago
         # Opção A: Pagamentos vinculados diretamente ao servico_id via PagamentoServico
@@ -11754,7 +11754,7 @@ def get_servico_financeiro(obra_id):
             """), {"obra_id": obra_id, "sid": servico.id}).scalar()
             valor_pago_orc_item = float(res_orc_item or 0.0)
         except Exception as e_oc:
-            print(f"[AVISO] Falha em Opção C (orcamento_item_id): {e_oc}")
+            logger.debug(f"[AVISO] Falha em Opção C (orcamento_item_id): {e_oc}")
 
         # NOTA: Não somamos parcelas pagas aqui porque quando uma parcela é marcada como paga,
         # já é criado um PagamentoServico (contabilizado na Opção A acima).
@@ -11762,10 +11762,10 @@ def get_servico_financeiro(obra_id):
 
         # Somar todos os pagamentos (sem duplicidade)
         valor_pago = valor_pago_servico + valor_pago_lancamentos + valor_pago_orc_item
-        print(f"[LOG] Valor já pago (PagamentoServico): R$ {valor_pago_servico:.2f}")
-        print(f"[LOG] Valor já pago (Lancamentos servico_id): R$ {valor_pago_lancamentos:.2f}")
-        print(f"[LOG] Valor já pago (Lancamentos orcamento_item_id): R$ {valor_pago_orc_item:.2f}")
-        print(f"[LOG] Valor total pago: R$ {valor_pago:.2f}")
+        logger.debug(f"[LOG] Valor já pago (PagamentoServico): R$ {valor_pago_servico:.2f}")
+        logger.debug(f"[LOG] Valor já pago (Lancamentos servico_id): R$ {valor_pago_lancamentos:.2f}")
+        logger.debug(f"[LOG] Valor já pago (Lancamentos orcamento_item_id): R$ {valor_pago_orc_item:.2f}")
+        logger.debug(f"[LOG] Valor total pago: R$ {valor_pago:.2f}")
         
         # 4. Buscar dados do cronograma
         etapa_cronograma = CronogramaObra.query.filter_by(
@@ -11781,9 +11781,9 @@ def get_servico_financeiro(obra_id):
             area_total = float(etapa_cronograma.area_total) if etapa_cronograma.area_total else None
             area_executada = float(etapa_cronograma.area_executada) if etapa_cronograma.area_executada else None
             percentual_executado = float(etapa_cronograma.percentual_conclusao or 0.0)
-            print(f"[LOG] Cronograma encontrado - % Executado: {percentual_executado:.1f}%")
+            logger.debug(f"[LOG] Cronograma encontrado - % Executado: {percentual_executado:.1f}%")
         else:
-            print(f"[INFO] Cronograma não encontrado para este serviço")
+            logger.debug(f"[INFO] Cronograma não encontrado para este serviço")
         
         # 5. Calcular percentual pago
         percentual_pago = (valor_pago / valor_total * 100.0) if valor_total > 0 else 0.0
@@ -11799,11 +11799,11 @@ def get_servico_financeiro(obra_id):
             'percentual_executado': round(percentual_executado, 2)
         }
         
-        print(f"[LOG] Resposta: {resposta}")
+        logger.debug(f"[LOG] Resposta: {resposta}")
         return jsonify(resposta), 200
         
     except Exception as e:
-        print(f"[ERRO] get_servico_financeiro: {str(e)}")
+        logger.debug(f"[ERRO] get_servico_financeiro: {str(e)}")
         traceback.print_exc()
         return jsonify({'erro': 'Erro ao buscar dados financeiros do serviço'}), 500
 
@@ -11820,7 +11820,7 @@ def get_cronograma_obra_by_obra(obra_id):
         cronograma_items = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
         return jsonify([item.to_dict() for item in cronograma_items]), 200
     except Exception as e:
-        print(f"[ERRO] get_cronograma_obra_by_obra: {str(e)}")
+        logger.debug(f"[ERRO] get_cronograma_obra_by_obra: {str(e)}")
         return jsonify({'error': 'Erro ao buscar cronograma'}), 500
 
 
@@ -11836,7 +11836,7 @@ def get_cronograma_obra(obra_id):
         cronograma_items = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
         return jsonify([item.to_dict() for item in cronograma_items]), 200
     except Exception as e:
-        print(f"[ERRO] get_cronograma_obra: {str(e)}")
+        logger.debug(f"[ERRO] get_cronograma_obra: {str(e)}")
         return jsonify({'error': 'Erro ao buscar cronograma'}), 500
 
 
@@ -11852,7 +11852,7 @@ def sincronizar_etapa_orcamento_para_cronograma(etapa_id, obra_id):
     try:
         etapa = OrcamentoEngEtapa.query.get(etapa_id)
         if not etapa:
-            print(f"[SYNC] Etapa {etapa_id} não encontrada")
+            logger.debug(f"[SYNC] Etapa {etapa_id} não encontrada")
             return None
         
         # Verificar se já existe no cronograma (evitar duplicatas)
@@ -11860,7 +11860,7 @@ def sincronizar_etapa_orcamento_para_cronograma(etapa_id, obra_id):
         nomes_cronograma = [c.servico_nome.lower().strip() for c in cronograma_existente]
         
         if etapa.nome.lower().strip() in nomes_cronograma:
-            print(f"[SYNC] Etapa '{etapa.nome}' já existe no cronograma da obra {obra_id}")
+            logger.debug(f"[SYNC] Etapa '{etapa.nome}' já existe no cronograma da obra {obra_id}")
             return None
         
         # Calcular ordem e datas
@@ -11889,7 +11889,7 @@ def sincronizar_etapa_orcamento_para_cronograma(etapa_id, obra_id):
             db.session.execute(db.text(
                 f"UPDATE cronograma_obra SET orcamento_etapa_id = {etapa.id} WHERE id = {novo_servico.id}"
             ))
-        except:
+        except Exception:
             pass
         
         # Criar etapa pai no cronograma
@@ -11905,11 +11905,11 @@ def sincronizar_etapa_orcamento_para_cronograma(etapa_id, obra_id):
         )
         db.session.add(etapa_cronograma)
         
-        print(f"[SYNC] ✅ Etapa '{etapa.nome}' adicionada ao cronograma da obra {obra_id}")
+        logger.debug(f"[SYNC] ✅ Etapa '{etapa.nome}' adicionada ao cronograma da obra {obra_id}")
         return novo_servico
         
     except Exception as e:
-        print(f"[SYNC] ❌ Erro ao sincronizar etapa {etapa_id}: {str(e)}")
+        logger.debug(f"[SYNC] ❌ Erro ao sincronizar etapa {etapa_id}: {str(e)}")
         return None
 
 
@@ -12202,7 +12202,7 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
                     ]))
                     elements.append(etapas_table)
             except Exception as e:
-                print(f"[AVISO] Erro ao carregar etapas para PDF: {str(e)}")
+                logger.debug(f"[AVISO] Erro ao carregar etapas para PDF: {str(e)}")
             
             # ANÁLISE EVM
             try:
@@ -12255,7 +12255,7 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
                         ]))
                         elements.append(evm_table)
             except Exception as e:
-                print(f"[AVISO] Erro ao calcular EVM para PDF: {str(e)}")
+                logger.debug(f"[AVISO] Erro ao calcular EVM para PDF: {str(e)}")
             
             # Observações
             if servico.observacoes:
@@ -12315,7 +12315,7 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"[ERRO] gerar_relatorio_cronograma_obra_pdf: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] gerar_relatorio_cronograma_obra_pdf: {str(e)}\n{error_details}")
         return jsonify({'error': f'Erro ao gerar PDF: {str(e)}'}), 500
 
 
@@ -12397,12 +12397,12 @@ def create_cronograma():
         db.session.add(novo_item)
         db.session.commit()
         
-        print(f"[LOG] Cronograma criado: ID={novo_item.id}, Serviço={novo_item.servico_nome}")
+        logger.debug(f"[LOG] Cronograma criado: ID={novo_item.id}, Serviço={novo_item.servico_nome}")
         return jsonify(novo_item.to_dict()), 201
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] create_cronograma: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] create_cronograma: {str(e)}\n{error_details}")
         return jsonify({'error': 'Erro ao criar etapa do cronograma'}), 500
 
 
@@ -12502,12 +12502,12 @@ def update_cronograma(cronograma_id):
         item.updated_at = datetime.utcnow()
         db.session.commit()
         
-        print(f"[LOG] Cronograma atualizado: ID={item.id}, %={item.percentual_conclusao}")
+        logger.debug(f"[LOG] Cronograma atualizado: ID={item.id}, %={item.percentual_conclusao}")
         return jsonify(item.to_dict()), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] update_cronograma: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] update_cronograma: {str(e)}\n{error_details}")
         return jsonify({'error': 'Erro ao atualizar cronograma'}), 500
 
 
@@ -12543,11 +12543,11 @@ def delete_cronograma(cronograma_id):
         db.session.delete(item)
         db.session.commit()
         
-        print(f"[LOG] Cronograma excluído: ID={cronograma_id}, Serviço={servico_nome}")
+        logger.debug(f"[LOG] Cronograma excluído: ID={cronograma_id}, Serviço={servico_nome}")
         return jsonify({'message': 'Etapa excluída com sucesso'}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] delete_cronograma: {str(e)}")
+        logger.debug(f"[ERRO] delete_cronograma: {str(e)}")
         return jsonify({'error': 'Erro ao excluir etapa'}), 500
 
 
@@ -12647,7 +12647,7 @@ def recalcular_datas_etapas(cronograma_id):
                 cronograma.percentual_conclusao = cronograma.calcular_percentual_por_etapas()
                 
     except Exception as e:
-        print(f"[AVISO] Erro ao recalcular datas das etapas: {str(e)}")
+        logger.debug(f"[AVISO] Erro ao recalcular datas das etapas: {str(e)}")
 
 
 @app.route('/cronograma/<int:cronograma_id>/etapas', methods=['GET'])
@@ -12670,13 +12670,13 @@ def get_etapas_cronograma(cronograma_id):
                 cronograma_id=cronograma_id,
                 etapa_pai_id=None
             ).order_by(CronogramaEtapa.ordem).all()
-        except:
+        except Exception:
             # Fallback para compatibilidade (se coluna etapa_pai_id não existir)
             etapas = CronogramaEtapa.query.filter_by(cronograma_id=cronograma_id).order_by(CronogramaEtapa.ordem).all()
         
         return jsonify([etapa.to_dict() for etapa in etapas]), 200
     except Exception as e:
-        print(f"[ERRO] get_etapas_cronograma: {str(e)}")
+        logger.debug(f"[ERRO] get_etapas_cronograma: {str(e)}")
         return jsonify({'error': 'Erro ao buscar etapas'}), 500
 
 
@@ -12837,12 +12837,12 @@ def create_etapa_cronograma(cronograma_id):
         db.session.commit()
         
         tipo = "Subetapa" if is_subetapa else "Etapa"
-        print(f"[LOG] {tipo} criada: ID={nova_etapa.id}, Nome={nova_etapa.nome}, Cronograma={cronograma_id}")
+        logger.debug(f"[LOG] {tipo} criada: ID={nova_etapa.id}, Nome={nova_etapa.nome}, Cronograma={cronograma_id}")
         return jsonify(nova_etapa.to_dict()), 201
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] create_etapa_cronograma: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] create_etapa_cronograma: {str(e)}\n{error_details}")
         return jsonify({'error': f'Erro ao criar etapa: {str(e)}'}), 500
 
 
@@ -12867,7 +12867,7 @@ def recalcular_subetapas_cascata(etapa_pai_id):
         
         db.session.commit()
     except Exception as e:
-        print(f"[AVISO] Erro ao recalcular subetapas: {str(e)}")
+        logger.debug(f"[AVISO] Erro ao recalcular subetapas: {str(e)}")
 
 
 @app.route('/cronograma/<int:cronograma_id>/etapas/<int:etapa_id>', methods=['PUT', 'OPTIONS'])
@@ -12931,12 +12931,12 @@ def update_etapa_cronograma(cronograma_id, etapa_id):
         # Recarregar etapa atualizada
         etapa = CronogramaEtapa.query.get(etapa_id)
         
-        print(f"[LOG] Etapa atualizada: ID={etapa_id}, Nome={etapa.nome}")
+        logger.debug(f"[LOG] Etapa atualizada: ID={etapa_id}, Nome={etapa.nome}")
         return jsonify(etapa.to_dict()), 200
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] update_etapa_cronograma: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] update_etapa_cronograma: {str(e)}\n{error_details}")
         return jsonify({'error': 'Erro ao atualizar etapa'}), 500
 
 
@@ -12974,11 +12974,11 @@ def delete_etapa_cronograma(cronograma_id, etapa_id):
         recalcular_datas_etapas(cronograma_id)
         db.session.commit()
         
-        print(f"[LOG] Etapa excluída: ID={etapa_id}, Nome={nome_etapa}")
+        logger.debug(f"[LOG] Etapa excluída: ID={etapa_id}, Nome={nome_etapa}")
         return jsonify({'message': 'Etapa excluída com sucesso'}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] delete_etapa_cronograma: {str(e)}")
+        logger.debug(f"[ERRO] delete_etapa_cronograma: {str(e)}")
         return jsonify({'error': 'Erro ao excluir etapa'}), 500
 
 
@@ -13030,7 +13030,7 @@ def reordenar_etapas_cronograma(cronograma_id):
         return jsonify({'message': 'Etapas reordenadas com sucesso'}), 200
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] reordenar_etapas_cronograma: {str(e)}")
+        logger.debug(f"[ERRO] reordenar_etapas_cronograma: {str(e)}")
         return jsonify({'error': 'Erro ao reordenar etapas'}), 500
 
 
@@ -13096,7 +13096,7 @@ def listar_etapas_orcamento_para_cronograma(obra_id):
         })
         
     except Exception as e:
-        print(f"[ERRO] listar_etapas_orcamento_para_cronograma: {e}")
+        logger.debug(f"[ERRO] listar_etapas_orcamento_para_cronograma: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -13187,7 +13187,7 @@ def importar_orcamento_para_cronograma(obra_id):
                 db.session.execute(db.text(
                     f"UPDATE cronograma_obra SET orcamento_etapa_id = {etapa.id} WHERE id = {novo_servico.id}"
                 ))
-            except:
+            except Exception:
                 pass  # Coluna não existe, ignorar
             
             # Criar etapa pai no cronograma correspondente
@@ -13227,7 +13227,7 @@ def importar_orcamento_para_cronograma(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] importar_orcamento_para_cronograma: {e}")
+        logger.debug(f"[ERRO] importar_orcamento_para_cronograma: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -13696,7 +13696,7 @@ def sincronizar_cronograma_orcamento(cronograma_id):
                 f"SELECT orcamento_etapa_id FROM cronograma_obra WHERE id = {cronograma_id}"
             )).fetchone()
             orcamento_etapa_id = result[0] if result else None
-        except:
+        except Exception:
             orcamento_etapa_id = None
         
         if not orcamento_etapa_id:
@@ -13734,7 +13734,7 @@ def sincronizar_cronograma_orcamento(cronograma_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] sincronizar_cronograma_orcamento: {e}")
+        logger.debug(f"[ERRO] sincronizar_cronograma_orcamento: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -13798,7 +13798,7 @@ def vincular_cronograma_orcamento(cronograma_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] vincular_cronograma_orcamento: {e}")
+        logger.debug(f"[ERRO] vincular_cronograma_orcamento: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -14184,7 +14184,7 @@ def migrate_add_servico_id():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] migrate_add_servico_id: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] migrate_add_servico_id: {str(e)}\n{error_details}")
         return jsonify({
             'success': False,
             'error': str(e),
@@ -14426,7 +14426,7 @@ def recuperar_parcelas_pagas():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] recuperar_parcelas_pagas: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] recuperar_parcelas_pagas: {str(e)}\n{error_details} ---")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -14535,7 +14535,7 @@ def exportar_servicos_csv(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] exportar_servicos_csv: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] exportar_servicos_csv: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -14620,7 +14620,7 @@ def exportar_cronograma_csv(obra_id):
             try:
                 if hasattr(pag, 'segmento') and pag.segmento:
                     segmento = pag.segmento
-            except:
+            except Exception:
                 pass
             
             writer.writerow([
@@ -14691,7 +14691,7 @@ def exportar_cronograma_csv(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] exportar_cronograma_csv: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] exportar_cronograma_csv: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 # ==============================================================================
@@ -14714,7 +14714,7 @@ def deletar_pagamento_futuro_servico(obra_id, pagamento_id):
         if request.method == 'OPTIONS':
             return '', 200
         
-        print(f"[LOG] DELETE pagamento futuro: obra_id={obra_id}, pagamento_id={pagamento_id}")
+        logger.debug(f"[LOG] DELETE pagamento futuro: obra_id={obra_id}, pagamento_id={pagamento_id}")
         
         # Buscar pagamento usando servico_id como filtro adicional
         pagamento = PagamentoFuturo.query.filter_by(
@@ -14723,7 +14723,7 @@ def deletar_pagamento_futuro_servico(obra_id, pagamento_id):
         ).first()
         
         if not pagamento:
-            print(f"[ERRO] Pagamento {pagamento_id} não encontrado na obra {obra_id}")
+            logger.debug(f"[ERRO] Pagamento {pagamento_id} não encontrado na obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         current_user = get_current_user()
@@ -14734,13 +14734,13 @@ def deletar_pagamento_futuro_servico(obra_id, pagamento_id):
         db.session.delete(pagamento)
         db.session.commit()
         
-        print(f"[LOG] ✅ Pagamento futuro {pagamento_id} deletado com sucesso")
+        logger.debug(f"[LOG] ✅ Pagamento futuro {pagamento_id} deletado com sucesso")
         return jsonify({"mensagem": "Pagamento deletado com sucesso", "id": pagamento_id}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] deletar_pagamento_futuro_servico: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] deletar_pagamento_futuro_servico: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -14756,7 +14756,7 @@ def editar_pagamento_futuro_servico(obra_id, pagamento_id):
         if request.method == 'OPTIONS':
             return '', 200
         
-        print(f"[LOG] PUT pagamento futuro: obra_id={obra_id}, pagamento_id={pagamento_id}")
+        logger.debug(f"[LOG] PUT pagamento futuro: obra_id={obra_id}, pagamento_id={pagamento_id}")
         
         pagamento = PagamentoFuturo.query.filter_by(
             id=pagamento_id,
@@ -14764,7 +14764,7 @@ def editar_pagamento_futuro_servico(obra_id, pagamento_id):
         ).first()
         
         if not pagamento:
-            print(f"[ERRO] Pagamento {pagamento_id} não encontrado na obra {obra_id}")
+            logger.debug(f"[ERRO] Pagamento {pagamento_id} não encontrado na obra {obra_id}")
             return jsonify({"erro": "Pagamento não encontrado"}), 404
         
         current_user = get_current_user()
@@ -14788,13 +14788,13 @@ def editar_pagamento_futuro_servico(obra_id, pagamento_id):
         
         db.session.commit()
         
-        print(f"[LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso")
+        logger.debug(f"[LOG] ✅ Pagamento futuro {pagamento_id} editado com sucesso")
         return jsonify({"mensagem": "Pagamento atualizado com sucesso", "id": pagamento_id}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] editar_pagamento_futuro_servico: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] editar_pagamento_futuro_servico: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -14831,7 +14831,7 @@ def get_agenda_demandas(obra_id):
         return jsonify([d.to_dict() for d in demandas]), 200
         
     except Exception as e:
-        print(f"[ERRO] get_agenda_demandas: {str(e)}")
+        logger.debug(f"[ERRO] get_agenda_demandas: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -14876,13 +14876,13 @@ def criar_agenda_demanda(obra_id):
         db.session.add(demanda)
         db.session.commit()
         
-        print(f"[LOG] Demanda criada: {demanda.descricao} (origem: {demanda.origem})")
+        logger.debug(f"[LOG] Demanda criada: {demanda.descricao} (origem: {demanda.origem})")
         
         return jsonify(demanda.to_dict()), 201
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] criar_agenda_demanda: {str(e)}")
+        logger.debug(f"[ERRO] criar_agenda_demanda: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -14928,7 +14928,7 @@ def atualizar_agenda_demanda(obra_id, demanda_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] atualizar_agenda_demanda: {str(e)}")
+        logger.debug(f"[ERRO] atualizar_agenda_demanda: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -14959,13 +14959,13 @@ def concluir_agenda_demanda(obra_id, demanda_id):
         
         db.session.commit()
         
-        print(f"[LOG] Demanda concluída: {demanda.descricao}")
+        logger.debug(f"[LOG] Demanda concluída: {demanda.descricao}")
         
         return jsonify(demanda.to_dict()), 200
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] concluir_agenda_demanda: {str(e)}")
+        logger.debug(f"[ERRO] concluir_agenda_demanda: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15000,7 +15000,7 @@ def reabrir_agenda_demanda(obra_id, demanda_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] reabrir_agenda_demanda: {str(e)}")
+        logger.debug(f"[ERRO] reabrir_agenda_demanda: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15024,13 +15024,13 @@ def excluir_agenda_demanda(obra_id, demanda_id):
         db.session.delete(demanda)
         db.session.commit()
         
-        print(f"[LOG] Demanda excluída: {descricao}")
+        logger.debug(f"[LOG] Demanda excluída: {descricao}")
         
         return jsonify({"mensagem": "Demanda excluída com sucesso"}), 200
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] excluir_agenda_demanda: {str(e)}")
+        logger.debug(f"[ERRO] excluir_agenda_demanda: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15126,7 +15126,7 @@ def listar_pagamentos_para_importar(obra_id):
         return jsonify(resultado), 200
         
     except Exception as e:
-        print(f"[ERRO] listar_pagamentos_para_importar: {str(e)}")
+        logger.debug(f"[ERRO] listar_pagamentos_para_importar: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15172,7 +15172,7 @@ def listar_orcamento_para_importar(obra_id):
         return jsonify(resultado), 200
         
     except Exception as e:
-        print(f"[ERRO] listar_orcamento_para_importar: {str(e)}")
+        logger.debug(f"[ERRO] listar_orcamento_para_importar: {str(e)}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15194,7 +15194,7 @@ def listar_servicos_para_importar(obra_id):
             CronogramaObra.data_inicio > hoje  # Só futuros
         ).order_by(CronogramaObra.data_inicio.asc()).all()
         
-        print(f"[LOG] Encontrados {len(servicos)} serviços FUTUROS no cronograma para obra {obra_id}")
+        logger.debug(f"[LOG] Encontrados {len(servicos)} serviços FUTUROS no cronograma para obra {obra_id}")
         
         # IDs já importados
         demandas_existentes = AgendaDemanda.query.filter_by(obra_id=obra_id, origem='cronograma').all()
@@ -15220,11 +15220,11 @@ def listar_servicos_para_importar(obra_id):
                 'percentual': 0
             })
         
-        print(f"[LOG] {len(resultado)} serviços futuros disponíveis para importar")
+        logger.debug(f"[LOG] {len(resultado)} serviços futuros disponíveis para importar")
         return jsonify(resultado), 200
         
     except Exception as e:
-        print(f"[ERRO] listar_servicos_para_importar: {str(e)}")
+        logger.debug(f"[ERRO] listar_servicos_para_importar: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -15283,7 +15283,7 @@ def sincronizar_cronograma_agenda(obra_id):
             importados += 1
         
         db.session.commit()
-        print(f"[LOG] Sincronização automática: {importados} serviços importados para agenda da obra {obra_id}")
+        logger.debug(f"[LOG] Sincronização automática: {importados} serviços importados para agenda da obra {obra_id}")
         
         return jsonify({
             "sucesso": True,
@@ -15293,7 +15293,7 @@ def sincronizar_cronograma_agenda(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ERRO] sincronizar_cronograma_agenda: {str(e)}")
+        logger.debug(f"[ERRO] sincronizar_cronograma_agenda: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -15433,7 +15433,7 @@ def exportar_servicos_pdf(obra_id):
         doc.build(elements)
         buffer.seek(0)
         
-        print(f"--- [LOG] PDF de serviços gerado para obra {obra_id} ---")
+        logger.debug(f"--- [LOG] PDF de serviços gerado para obra {obra_id} ---")
         
         return send_file(
             buffer,
@@ -15444,7 +15444,7 @@ def exportar_servicos_pdf(obra_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] ao gerar PDF de serviços: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] ao gerar PDF de serviços: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15524,13 +15524,13 @@ def gerenciar_caixa_obra(obra_id):
             db.session.add(caixa)
             db.session.commit()
             
-            print(f"[LOG] ✅ Caixa criado para obra {obra_id}")
+            logger.debug(f"[LOG] ✅ Caixa criado para obra {obra_id}")
             return jsonify(caixa.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] gerenciar_caixa_obra: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] gerenciar_caixa_obra: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15588,7 +15588,7 @@ def gerenciar_movimentacoes_caixa(obra_id):
             if 'data' in data and data['data']:
                 try:
                     data_movimentacao = datetime.fromisoformat(data['data'].replace('Z', '+00:00'))
-                except:
+                except Exception:
                     pass
             
             # Criar movimentação
@@ -15613,13 +15613,13 @@ def gerenciar_movimentacoes_caixa(obra_id):
             
             db.session.commit()
             
-            print(f"[LOG] ✅ Movimentação {data['tipo']} de R$ {data['valor']} registrada no caixa {caixa.id}")
+            logger.debug(f"[LOG] ✅ Movimentação {data['tipo']} de R$ {data['valor']} registrada no caixa {caixa.id}")
             return jsonify(movimentacao.to_dict()), 201
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] gerenciar_movimentacoes_caixa: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] gerenciar_movimentacoes_caixa: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15665,7 +15665,7 @@ def editar_deletar_movimentacao(obra_id, mov_id):
             if 'data' in data:
                 try:
                     movimentacao.data = datetime.fromisoformat(data['data'].replace('Z', '+00:00'))
-                except:
+                except Exception:
                     pass
             
             if 'comprovante_url' in data:
@@ -15682,7 +15682,7 @@ def editar_deletar_movimentacao(obra_id, mov_id):
             
             db.session.commit()
             
-            print(f"[LOG] ✅ Movimentação {mov_id} atualizada")
+            logger.debug(f"[LOG] ✅ Movimentação {mov_id} atualizada")
             return jsonify(movimentacao.to_dict()), 200
         
         elif request.method == 'DELETE':
@@ -15695,13 +15695,13 @@ def editar_deletar_movimentacao(obra_id, mov_id):
             db.session.delete(movimentacao)
             db.session.commit()
             
-            print(f"[LOG] ✅ Movimentação {mov_id} deletada")
+            logger.debug(f"[LOG] ✅ Movimentação {mov_id} deletada")
             return jsonify({"mensagem": "Movimentação deletada com sucesso"}), 200
     
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"[ERRO] editar_deletar_movimentacao: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] editar_deletar_movimentacao: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15727,12 +15727,12 @@ def upload_comprovante_caixa(obra_id):
             imagem_base64 = f"data:image/jpeg;base64,{imagem_base64}"
         
         # Retornar o base64 completo para ser salvo na movimentação
-        print(f"[LOG] ✅ Comprovante base64 recebido para obra {obra_id} ({len(imagem_base64)} chars)")
+        logger.debug(f"[LOG] ✅ Comprovante base64 recebido para obra {obra_id} ({len(imagem_base64)} chars)")
         return jsonify({"comprovante_url": imagem_base64}), 200
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"[ERRO] upload_comprovante_caixa: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] upload_comprovante_caixa: {str(e)}\n{error_details}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -15741,7 +15741,7 @@ def upload_comprovante_caixa(obra_id):
 def gerar_relatorio_caixa_pdf(obra_id):
     """Gera relatorio PDF de prestacao de contas do caixa"""
     try:
-        print(f"[LOG] Iniciando geracao de PDF do caixa para obra {obra_id}")
+        logger.debug(f"[LOG] Iniciando geracao de PDF do caixa para obra {obra_id}")
         
         current_user = get_current_user()
         if not user_has_access_to_obra(current_user, obra_id):
@@ -15759,7 +15759,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
         mes = int(req_data.get('mes', date.today().month))
         ano = int(req_data.get('ano', date.today().year))
         
-        print(f"[LOG] Buscando movimentacoes para mes={mes}, ano={ano}")
+        logger.debug(f"[LOG] Buscando movimentacoes para mes={mes}, ano={ano}")
         
         # Buscar movimentacoes do periodo - data é DateTime
         todas_movs = MovimentacaoCaixa.query.filter_by(caixa_id=caixa.id).order_by(MovimentacaoCaixa.data).all()
@@ -15774,9 +15774,9 @@ def gerar_relatorio_caixa_pdf(obra_id):
                     if mov_mes == mes and mov_ano == ano:
                         movimentacoes.append(m)
                 except Exception as e:
-                    print(f"[WARN] Erro ao processar data da movimentacao {m.id}: {e}")
+                    logger.debug(f"[WARN] Erro ao processar data da movimentacao {m.id}: {e}")
         
-        print(f"[LOG] Encontradas {len(movimentacoes)} movimentacoes")
+        logger.debug(f"[LOG] Encontradas {len(movimentacoes)} movimentacoes")
         
         # Calcular totais - verificar tipo com lowercase para evitar problemas
         saldo_inicial = float(caixa.saldo_inicial or 0)
@@ -15796,13 +15796,13 @@ def gerar_relatorio_caixa_pdf(obra_id):
         
         saldo_final = saldo_inicial + total_entradas - total_saidas
         
-        print(f"[LOG] Totais: entradas={total_entradas}, saidas={total_saidas}")
+        logger.debug(f"[LOG] Totais: entradas={total_entradas}, saidas={total_saidas}")
         
         # Funcoes auxiliares
         def formatar_real(valor):
             try:
                 return f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-            except:
+            except Exception:
                 return "R$ 0,00"
         
         def limpar_texto(texto):
@@ -15834,7 +15834,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
                     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
         nome_mes = nomes_meses[mes] if 1 <= mes <= 12 else 'Mes'
         
-        print(f"[LOG] Criando documento PDF...")
+        logger.debug(f"[LOG] Criando documento PDF...")
         
         # Criar PDF
         buffer = io.BytesIO()
@@ -15883,7 +15883,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
             for m in entradas:
                 try:
                     data_str = m.data.strftime('%d/%m') if m.data else '-'
-                except:
+                except Exception:
                     data_str = '-'
                 data_entradas.append([
                     data_str,
@@ -15916,7 +15916,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
             for m in saidas:
                 try:
                     data_str = m.data.strftime('%d/%m') if m.data else '-'
-                except:
+                except Exception:
                     data_str = '-'
                 data_saidas.append([
                     data_str,
@@ -15976,7 +15976,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
                         # Formatar data
                         try:
                             data_str = m.data.strftime('%d/%m/%Y') if m.data else '-'
-                        except:
+                        except Exception:
                             data_str = '-'
                         
                         # Título do comprovante
@@ -15995,7 +15995,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
                                 base64_data = m.comprovante_url.split(',')[1]
                                 img_data = io.BytesIO(base64.b64decode(base64_data))
                             except Exception as e:
-                                print(f"[WARN] Erro ao decodificar base64 do comprovante {comprovante_num}: {e}")
+                                logger.debug(f"[WARN] Erro ao decodificar base64 do comprovante {comprovante_num}: {e}")
                         
                         # Se for caminho de arquivo local
                         elif m.comprovante_url.startswith('/uploads/') or m.comprovante_url.startswith('uploads/'):
@@ -16006,7 +16006,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
                                     with open(file_path, 'rb') as f:
                                         img_data = io.BytesIO(f.read())
                             except Exception as e:
-                                print(f"[WARN] Erro ao carregar arquivo do comprovante {comprovante_num}: {e}")
+                                logger.debug(f"[WARN] Erro ao carregar arquivo do comprovante {comprovante_num}: {e}")
                         
                         # Se for URL HTTP
                         elif m.comprovante_url.startswith('http'):
@@ -16015,7 +16015,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
                                 with urllib.request.urlopen(m.comprovante_url, timeout=10) as response:
                                     img_data = io.BytesIO(response.read())
                             except Exception as e:
-                                print(f"[WARN] Erro ao baixar comprovante {comprovante_num}: {e}")
+                                logger.debug(f"[WARN] Erro ao baixar comprovante {comprovante_num}: {e}")
                         
                         # Adicionar imagem ao PDF se conseguiu carregar
                         if img_data:
@@ -16036,7 +16036,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
                                 elements.append(img)
                                 elements.append(Spacer(1, 0.5*cm))
                             except Exception as e:
-                                print(f"[WARN] Erro ao adicionar imagem do comprovante {comprovante_num}: {e}")
+                                logger.debug(f"[WARN] Erro ao adicionar imagem do comprovante {comprovante_num}: {e}")
                                 elements.append(Paragraph(f"<i>(Erro ao carregar imagem)</i>", styles['Normal']))
                         else:
                             elements.append(Paragraph(f"<i>(Comprovante disponivel em: {m.comprovante_url[:60]}...)</i>", styles['Normal']))
@@ -16044,15 +16044,15 @@ def gerar_relatorio_caixa_pdf(obra_id):
                         elements.append(Spacer(1, 0.5*cm))
                         
                     except Exception as e:
-                        print(f"[WARN] Erro ao processar comprovante {comprovante_num}: {e}")
+                        logger.debug(f"[WARN] Erro ao processar comprovante {comprovante_num}: {e}")
                         elements.append(Paragraph(f"<i>(Erro ao processar comprovante)</i>", styles['Normal']))
         
         # Construir PDF
-        print(f"[LOG] Construindo PDF...")
+        logger.debug(f"[LOG] Construindo PDF...")
         doc.build(elements)
         buffer.seek(0)
         
-        print(f"[LOG] PDF do caixa gerado com sucesso")
+        logger.debug(f"[LOG] PDF do caixa gerado com sucesso")
         
         nome_arquivo = f"Caixa_{obra_nome_limpo.replace(' ', '_')}_{nome_mes}_{ano}.pdf"
         
@@ -16065,7 +16065,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
     
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
+        logger.debug(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
         return jsonify({
             "erro": "Erro ao gerar relatorio PDF",
             "mensagem": str(e),
@@ -16116,7 +16116,7 @@ def listar_boletos(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] listar_boletos: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] listar_boletos: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16147,7 +16147,7 @@ def criar_boleto(obra_id):
                 codigo_barras=codigo_barras
             ).first()
             if boleto_existente:
-                print(f"--- [LOG] Boleto duplicado ignorado: código {codigo_barras[:20]}... já existe ---")
+                logger.debug(f"--- [LOG] Boleto duplicado ignorado: código {codigo_barras[:20]}... já existe ---")
                 return jsonify({"erro": "Boleto com este código de barras já existe", "duplicado": True}), 409
         
         novo_boleto = Boleto(
@@ -16167,13 +16167,13 @@ def criar_boleto(obra_id):
         db.session.add(novo_boleto)
         db.session.commit()
         
-        print(f"--- [LOG] Boleto criado: ID {novo_boleto.id} na obra {obra_id} ---")
+        logger.debug(f"--- [LOG] Boleto criado: ID {novo_boleto.id} na obra {obra_id} ---")
         return jsonify(novo_boleto.to_dict()), 201
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] criar_boleto: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] criar_boleto: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16202,7 +16202,7 @@ def extrair_pdf_boleto(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] extrair_pdf_boleto: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] extrair_pdf_boleto: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16244,17 +16244,17 @@ def editar_boleto(obra_id, boleto_id):
                     f"UPDATE boleto SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {boleto_id}"
                 ))
             except Exception as e:
-                print(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+                logger.debug(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
         
         db.session.commit()
         
-        print(f"--- [LOG] Boleto {boleto_id} editado ---")
+        logger.debug(f"--- [LOG] Boleto {boleto_id} editado ---")
         return jsonify(boleto.to_dict()), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] editar_boleto: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] editar_boleto: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16278,13 +16278,13 @@ def pagar_boleto(obra_id, boleto_id):
         
         db.session.commit()
         
-        print(f"--- [LOG] Boleto {boleto_id} marcado como pago ---")
+        logger.debug(f"--- [LOG] Boleto {boleto_id} marcado como pago ---")
         return jsonify(boleto.to_dict()), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] pagar_boleto: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] pagar_boleto: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16304,13 +16304,13 @@ def deletar_boleto(obra_id, boleto_id):
         db.session.delete(boleto)
         db.session.commit()
         
-        print(f"--- [LOG] Boleto {boleto_id} deletado ---")
+        logger.debug(f"--- [LOG] Boleto {boleto_id} deletado ---")
         return jsonify({"sucesso": True}), 200
         
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] deletar_boleto: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] deletar_boleto: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16337,7 +16337,7 @@ def obter_arquivo_boleto(obra_id, boleto_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] obter_arquivo_boleto: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] obter_arquivo_boleto: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16423,7 +16423,7 @@ def verificar_alertas_boletos():
     except Exception as e:
         db.session.rollback()
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] verificar_alertas_boletos: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] verificar_alertas_boletos: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16460,7 +16460,7 @@ def resumo_boletos(obra_id):
         
     except Exception as e:
         error_details = traceback.format_exc()
-        print(f"--- [ERRO] resumo_boletos: {str(e)}\n{error_details} ---")
+        logger.debug(f"--- [ERRO] resumo_boletos: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16598,7 +16598,7 @@ def limpar_lancamentos_duplicados():
             Lancamento.descricao.like('%(Parcela %')
         ).all()
         
-        print(f"--- [LIMPEZA] Encontrados {len(lancamentos)} lançamentos com padrão de parcela ---")
+        logger.debug(f"--- [LIMPEZA] Encontrados {len(lancamentos)} lançamentos com padrão de parcela ---")
         
         lancamentos_para_deletar = []
         
@@ -16652,7 +16652,7 @@ def limpar_lancamentos_duplicados():
                 db.session.delete(lanc)
             db.session.commit()
             resultado["total_deletados"] = len(lancamentos_para_deletar)
-            print(f"--- [LIMPEZA] ✅ {len(lancamentos_para_deletar)} lançamentos duplicados removidos ---")
+            logger.debug(f"--- [LIMPEZA] ✅ {len(lancamentos_para_deletar)} lançamentos duplicados removidos ---")
         
         return jsonify(resultado)
         
@@ -16754,7 +16754,7 @@ def bi_vencimentos():
         })
         
     except Exception as e:
-        print(f"[BI] Erro ao buscar vencimentos: {e}")
+        logger.debug(f"[BI] Erro ao buscar vencimentos: {e}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16773,14 +16773,14 @@ def bi_historico_mensal():
         else:
             obras_ids = [o.id for o in user.obras]
         
-        print(f"[BI HISTORICO] Buscando para {len(obras_ids)} obras")
+        logger.debug(f"[BI HISTORICO] Buscando para {len(obras_ids)} obras")
         
         # Buscar todos os lançamentos pagos
         lancamentos = Lancamento.query.filter(
             Lancamento.obra_id.in_(obras_ids),
             Lancamento.status == 'Pago'
         ).all()
-        print(f"[BI HISTORICO] Lançamentos pagos: {len(lancamentos)}")
+        logger.debug(f"[BI HISTORICO] Lançamentos pagos: {len(lancamentos)}")
 
         # ALERTA #2 (correção 207%): Buscar APENAS parcelas pagas COM serviço vinculado.
         # Parcelas SEM serviço já criam um Lancamento em marcar_parcela_paga(),
@@ -16791,7 +16791,7 @@ def bi_historico_mensal():
             ParcelaIndividual.status == 'Pago',
             PagamentoParcelado.servico_id.isnot(None)
         ).all()
-        print(f"[BI HISTORICO] Parcelas pagas (apenas com servico, sem duplicar Lancamento): {len(parcelas)}")
+        logger.debug(f"[BI HISTORICO] Parcelas pagas (apenas com servico, sem duplicar Lancamento): {len(parcelas)}")
 
         # Buscar pagamentos de serviço.
         # ALERTA #2: usar valor_pago > 0 evita registros zerados/duplicados.
@@ -16799,7 +16799,7 @@ def bi_historico_mensal():
             Servico.obra_id.in_(obras_ids),
             PagamentoServico.valor_pago > 0
         ).all()
-        print(f"[BI HISTORICO] Pagamentos de serviço (valor_pago>0): {len(pagamentos_servico)}")
+        logger.debug(f"[BI HISTORICO] Pagamentos de serviço (valor_pago>0): {len(pagamentos_servico)}")
         
         # Agrupar por mês
         meses = {}
@@ -16840,7 +16840,7 @@ def bi_historico_mensal():
                 else:
                     meses[mes_key]['material'] += ps.valor_pago or 0
         
-        print(f"[BI HISTORICO] Total de meses encontrados: {len(meses)}")
+        logger.debug(f"[BI HISTORICO] Total de meses encontrados: {len(meses)}")
         
         # Converter para lista ordenada
         historico = sorted(meses.values(), key=lambda x: x['mes'])
@@ -16873,7 +16873,7 @@ def bi_historico_mensal():
         })
         
     except Exception as e:
-        print(f"[BI] Erro ao buscar histórico mensal: {e}")
+        logger.debug(f"[BI] Erro ao buscar histórico mensal: {e}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -16927,7 +16927,7 @@ def bi_projecao():
         })
         
     except Exception as e:
-        print(f"[BI] Erro ao buscar projeção: {e}")
+        logger.debug(f"[BI] Erro ao buscar projeção: {e}")
         return jsonify({"erro": str(e)}), 500
 
 
@@ -17065,7 +17065,7 @@ def autocomplete_servicos():
             ServicoBase.descricao.ilike(f'%{q}%')
         ).order_by(ServicoBase.descricao).limit(15).all()
         
-        print(f"[AUTOCOMPLETE] Busca: '{q}' -> Usuario: {len(servicos_usuario)}, Base: {len(servicos_base)}")
+        logger.debug(f"[AUTOCOMPLETE] Busca: '{q}' -> Usuario: {len(servicos_usuario)}, Base: {len(servicos_base)}")
         
         return jsonify({
             'servicos_usuario': [s.to_dict() for s in servicos_usuario],
@@ -17073,7 +17073,7 @@ def autocomplete_servicos():
         })
         
     except Exception as e:
-        print(f"[AUTOCOMPLETE] Erro: {e}")
+        logger.debug(f"[AUTOCOMPLETE] Erro: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -17300,7 +17300,7 @@ def obter_orcamento_eng(obra_id):
         })
         
     except Exception as e:
-        print(f"[ORCAMENTO-ENG] Erro: {e}")
+        logger.debug(f"[ORCAMENTO-ENG] Erro: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -17329,7 +17329,7 @@ def criar_etapa_orcamento(obra_id):
                 try:
                     ultimo_num = int(ultima_etapa.codigo)
                     dados['codigo'] = f"{ultimo_num + 1:02d}"
-                except:
+                except Exception:
                     dados['codigo'] = "01"
             else:
                 dados['codigo'] = "01"
@@ -17453,7 +17453,7 @@ def deletar_etapa_orcamento(obra_id, etapa_id):
                     if servico:
                         db.session.delete(servico)
             except Exception as e:
-                print(f"[AVISO] Erro ao deletar serviço {item.servico_id}: {e}")
+                logger.debug(f"[AVISO] Erro ao deletar serviço {item.servico_id}: {e}")
                 # Continuar mesmo se falhar
         
         db.session.delete(etapa)
@@ -17498,7 +17498,7 @@ def criar_item_orcamento(obra_id):
                     partes = ultimo_item.codigo.split('.')
                     ultimo_num = int(partes[-1])
                     dados['codigo'] = f"{etapa.codigo}.{ultimo_num + 1:02d}"
-                except:
+                except Exception:
                     dados['codigo'] = f"{etapa.codigo}.01"
             else:
                 dados['codigo'] = f"{etapa.codigo}.01"
@@ -17596,7 +17596,7 @@ def criar_item_orcamento(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ORCAMENTO-ENG] Erro ao criar item: {e}")
+        logger.debug(f"[ORCAMENTO-ENG] Erro ao criar item: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -17658,7 +17658,7 @@ def editar_item_orcamento(obra_id, item_id):
                 if 'descricao' in dados:
                     servico.nome = dados['descricao']
                 
-                print(f"--- [LOG] Serviço {servico.id} atualizado: MO={totais_novos['total_mao_obra']}, MAT={totais_novos['total_material']} ---")
+                logger.debug(f"--- [LOG] Serviço {servico.id} atualizado: MO={totais_novos['total_mao_obra']}, MAT={totais_novos['total_material']} ---")
         
         db.session.commit()
         
@@ -17704,7 +17704,7 @@ def deletar_item_orcamento(obra_id, item_id):
                         # Nenhum outro item usa, deletar serviço
                         db.session.delete(servico)
         except Exception as e:
-            print(f"[AVISO] Erro ao processar serviço vinculado: {e}")
+            logger.debug(f"[AVISO] Erro ao processar serviço vinculado: {e}")
             # Continuar com a exclusão do item mesmo se falhar a exclusão do serviço
         
         db.session.delete(item)
@@ -17853,7 +17853,7 @@ def apagar_orcamento_completo(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"Erro ao apagar orçamento: {e}")
+        logger.debug(f"Erro ao apagar orçamento: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -18183,7 +18183,7 @@ def gerar_orcamento_por_planta(obra_id):
         if not anthropic_api_key:
             return jsonify({"erro": "API Key da Anthropic não configurada"}), 500
         
-        print(f"[PLANTA-IA] Analisando planta para obra {obra_id}...")
+        logger.debug(f"[PLANTA-IA] Analisando planta para obra {obra_id}...")
         
         # Montar prompt para análise
         prompt = f"""Analise esta planta baixa de uma construção e gere um orçamento detalhado.
@@ -18519,7 +18519,7 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
             ]
         }
         
-        print(f"[PLANTA-IA] Enviando para Claude Vision... (tipo: {'PDF' if is_pdf else 'imagem'})")
+        logger.debug(f"[PLANTA-IA] Enviando para Claude Vision... (tipo: {'PDF' if is_pdf else 'imagem'})")
         
         # Usar urllib (nativo do Python) para chamar API
         req = urllib.request.Request(
@@ -18535,7 +18535,7 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
                 result = json.loads(response_data)
         except urllib.error.HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else str(e)
-            print(f"[PLANTA-IA] Erro da API: {e.code} - {error_body}")
+            logger.debug(f"[PLANTA-IA] Erro da API: {e.code} - {error_body}")
             
             # Mensagens de erro mais claras
             erro_msg = f"Erro na API de IA: {e.code}"
@@ -18559,12 +18559,12 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
                     erro_msg = "Erro interno da API Anthropic. Tente novamente."
                 else:
                     erro_msg = f"Erro {e.code}: {error_message or error_body[:200]}"
-            except:
+            except Exception:
                 pass
             
             return jsonify({"erro": erro_msg}), 500
         
-        print("[PLANTA-IA] Resposta recebida, processando...")
+        logger.debug("[PLANTA-IA] Resposta recebida, processando...")
         
         # Extrair texto da resposta
         texto_resposta = result.get('content', [{}])[0].get('text', '')
@@ -18583,8 +18583,8 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
             
             orcamento_gerado = json.loads(texto_limpo)
         except json.JSONDecodeError as e:
-            print(f"[PLANTA-IA] Erro ao parsear JSON: {e}")
-            print(f"[PLANTA-IA] Texto recebido: {texto_resposta[:500]}...")
+            logger.debug(f"[PLANTA-IA] Erro ao parsear JSON: {e}")
+            logger.debug(f"[PLANTA-IA] Texto recebido: {texto_resposta[:500]}...")
             return jsonify({
                 "erro": "Erro ao processar resposta da IA",
                 "detalhes": str(e),
@@ -18592,7 +18592,7 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
             }), 500
         
         # Enriquecer com preços da base de serviços
-        print("[PLANTA-IA] Enriquecendo com preços da base...")
+        logger.debug("[PLANTA-IA] Enriquecendo com preços da base...")
         for etapa in orcamento_gerado.get('etapas', []):
             for item in etapa.get('itens', []):
                 # Buscar serviço similar na base
@@ -18654,17 +18654,17 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
             'total_itens': total_itens
         }
         
-        print(f"[PLANTA-IA] Orçamento gerado: {total_itens} itens, total R$ {total_geral:,.2f}")
+        logger.debug(f"[PLANTA-IA] Orçamento gerado: {total_itens} itens, total R$ {total_geral:,.2f}")
         
         return jsonify(orcamento_gerado)
         
     except urllib.error.URLError as e:
-        print(f"[PLANTA-IA] Erro de conexão: {e}")
+        logger.debug(f"[PLANTA-IA] Erro de conexão: {e}")
         if hasattr(e, 'reason') and 'timed out' in str(e.reason).lower():
             return jsonify({"erro": "Timeout ao processar imagem. Tente novamente."}), 504
         return jsonify({"erro": f"Erro de conexão: {e.reason}"}), 500
     except Exception as e:
-        print(f"[PLANTA-IA] Erro: {e}")
+        logger.debug(f"[PLANTA-IA] Erro: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -18765,7 +18765,7 @@ def importar_orcamento_gerado(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[IMPORTAR-ORC] Erro: {e}")
+        logger.debug(f"[IMPORTAR-ORC] Erro: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"erro": str(e)}), 500
@@ -19522,5 +19522,5 @@ def limpar_dados_teste(obra_id):
 # ==============================================================================
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
+    logger.debug(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
     app.run(host='0.0.0.0', port=port, debug=True)
