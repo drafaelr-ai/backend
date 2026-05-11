@@ -798,6 +798,7 @@ class Boleto(db.Model):
                 servico = db.session.get(Servico, self.vinculado_servico_id)
                 servico_nome = servico.nome if servico else None
             except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
         
         # Buscar orcamento_item_id de forma segura (coluna pode não existir)
@@ -813,6 +814,7 @@ class Boleto(db.Model):
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         return {
@@ -1172,6 +1174,7 @@ class Lancamento(db.Model):
             if hasattr(self, 'segmento') and self.segmento:
                 segmento_value = self.segmento
         except Exception:
+            logger.warning("Excecao suprimida em to_dict", exc_info=True)
             pass
         
         # Buscar orcamento_item_id de forma segura (coluna pode não existir)
@@ -1187,6 +1190,7 @@ class Lancamento(db.Model):
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         return {
@@ -1378,6 +1382,7 @@ class PagamentoFuturo(db.Model):
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         return {
@@ -1474,6 +1479,7 @@ class PagamentoParcelado(db.Model):
                         proxima_data = add_months_safe(self.data_primeira_parcela, (proxima_parcela_numero - 1))
                         proxima_parcela_vencimento = proxima_data.isoformat()
                 except Exception:
+                    logger.warning("Excecao suprimida em ", exc_info=True)
                     pass
         
         # Buscar nome do serviço de forma segura
@@ -1499,6 +1505,7 @@ class PagamentoParcelado(db.Model):
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         # Tratar segmento de forma defensiva
@@ -1528,12 +1535,14 @@ class PagamentoParcelado(db.Model):
             if hasattr(self, 'pix'):
                 pix_value = self.pix
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         try:
             if hasattr(self, 'forma_pagamento'):
                 forma_pagamento_value = self.forma_pagamento or 'PIX'
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         return {
@@ -1593,6 +1602,7 @@ class ParcelaIndividual(db.Model):
             if hasattr(self, 'codigo_barras'):
                 codigo_barras_value = self.codigo_barras
         except Exception:
+            logger.warning("Excecao suprimida em to_dict", exc_info=True)
             pass
         
         return {
@@ -4211,6 +4221,7 @@ def add_orcamento(obra_id):
             try:
                 data_vencimento = datetime.strptime(dados['data_vencimento'], '%Y-%m-%d').date()
             except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
         
         novo_orcamento = Orcamento(
@@ -7386,11 +7397,13 @@ def criar_pagamento_parcelado(obra_id):
         try:
             novo_pagamento.pix = data.get('pix') or None
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         try:
             novo_pagamento.forma_pagamento = forma_pagamento
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         db.session.add(novo_pagamento)
@@ -7461,6 +7474,7 @@ def criar_pagamento_parcelado(obra_id):
                 try:
                     nova_parcela.codigo_barras = codigo_barras
                 except Exception:
+                    logger.warning("Excecao suprimida em ", exc_info=True)
                     pass
                 
                 db.session.add(nova_parcela)
@@ -7544,11 +7558,13 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
             try:
                 pagamento.pix = data['pix']
             except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
         if 'forma_pagamento' in data:
             try:
                 pagamento.forma_pagamento = data['forma_pagamento']
             except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
         
         # CORREÇÃO: Atualizar servico_id quando vinculado a um serviço
@@ -7971,6 +7987,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
             try:
                 parcela.codigo_barras = data['codigo_barras'] or None
             except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
         
         if 'status' in data:
@@ -11273,8 +11290,9 @@ class CronogramaObra(db.Model):
                     orcamento_etapa_nome = etapa.nome
                     orcamento_etapa_codigo = etapa.codigo
         except Exception:
+            logger.debug("Coluna orcamento_etapa_id nao existe ainda, ignorando", exc_info=True)
             pass  # Coluna não existe ainda, ignorar
-        
+
         return {
             'id': self.id,
             'obra_id': self.obra_id,
@@ -11369,6 +11387,7 @@ class CronogramaEtapa(db.Model):
                 if datas_fim:
                     self.data_fim = max(datas_fim)
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
 
     def calcular_percentual_das_subetapas(self):
@@ -11391,6 +11410,7 @@ class CronogramaEtapa(db.Model):
             
             return round(soma_ponderada / total_dias, 2)
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             return self.percentual_conclusao or 0.0
 
     def total_dias_subetapas(self):
@@ -11399,6 +11419,7 @@ class CronogramaEtapa(db.Model):
             subs = self.subetapas.all()
             return sum(s.duracao_dias or 0 for s in subs)
         except Exception:
+            logger.warning("Excecao suprimida em total_dias_subetapas", exc_info=True)
             return self.duracao_dias or 0
 
     def to_dict(self):
@@ -11413,6 +11434,7 @@ class CronogramaEtapa(db.Model):
                 total_dias = self.total_dias_subetapas()
                 percentual = self.calcular_percentual_das_subetapas()
             except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
         
         return {
@@ -11890,6 +11912,7 @@ def sincronizar_etapa_orcamento_para_cronograma(etapa_id, obra_id):
                 f"UPDATE cronograma_obra SET orcamento_etapa_id = {etapa.id} WHERE id = {novo_servico.id}"
             ))
         except Exception:
+            logger.warning("Excecao suprimida em ", exc_info=True)
             pass
         
         # Criar etapa pai no cronograma
@@ -13188,8 +13211,9 @@ def importar_orcamento_para_cronograma(obra_id):
                     f"UPDATE cronograma_obra SET orcamento_etapa_id = {etapa.id} WHERE id = {novo_servico.id}"
                 ))
             except Exception:
+                logger.debug("Coluna orcamento_etapa_id nao existe, ignorando", exc_info=True)
                 pass  # Coluna não existe, ignorar
-            
+
             # Criar etapa pai no cronograma correspondente
             etapa_cronograma = CronogramaEtapa(
                 cronograma_id=novo_servico.id,
@@ -13304,8 +13328,9 @@ def setup_migrate_cronograma_orcamento():
             'mensagem': 'Migração executada',
             'resultados': resultados
         })
-        
+
     except Exception as e:
+        logger.exception("Erro na rota de migracao vinculacao automatica")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -13655,8 +13680,9 @@ def setup_migrate_pagamentos_orcamento():
             'mensagem': 'Migração de pagamentos concluída',
             'resultados': resultados
         })
-        
+
     except Exception as e:
+        logger.exception("Erro na rota de migracao pagamentos")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -13967,8 +13993,9 @@ def setup_migrate_etapas_hierarquia():
             "status": "Migration de Hierarquia de Etapas executada!",
             "resultados": resultados
         }), 200
-        
+
     except Exception as e:
+        logger.exception("Erro na rota de migracao hierarquia etapas")
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
@@ -14029,6 +14056,7 @@ def setup_create_cronograma_etapa():
             "aviso": "REMOVA esta rota do código após usar!"
         }), 200
     except Exception as e:
+        logger.exception("Erro em rota admin de migration")
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
@@ -14089,6 +14117,7 @@ def migrate_create_cronograma_etapa():
             "resultados": resultados
         }), 200
     except Exception as e:
+        logger.exception("Erro em rota admin de migration cronograma-etapa")
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
@@ -14216,6 +14245,7 @@ def check_pagamento_info():
             'recomendacao': 'LIMPAR TABELA' if count < 50 else 'MIGRATION DIRETA'
         }), 200
     except Exception as e:
+        logger.exception("Erro em rota admin de diagnostico pagamento-parcelado")
         return jsonify({'error': str(e)}), 500
 
 
@@ -14246,8 +14276,9 @@ def limpar_e_adicionar_coluna():
             resultados.append("🎉 MIGRATION CONCLUÍDA!")
         
         return jsonify({'success': True, 'detalhes': resultados}), 200
-        
+
     except Exception as e:
+        logger.exception("Erro em rota admin limpar-pagamento-parcelado")
         db.session.rollback()
         return jsonify({'error': str(e), 'success': False}), 500
 
@@ -14621,6 +14652,7 @@ def exportar_cronograma_csv(obra_id):
                 if hasattr(pag, 'segmento') and pag.segmento:
                     segmento = pag.segmento
             except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
             
             writer.writerow([
@@ -15589,6 +15621,7 @@ def gerenciar_movimentacoes_caixa(obra_id):
                 try:
                     data_movimentacao = datetime.fromisoformat(data['data'].replace('Z', '+00:00'))
                 except Exception:
+                    logger.warning("Excecao suprimida em ", exc_info=True)
                     pass
             
             # Criar movimentação
@@ -15666,6 +15699,7 @@ def editar_deletar_movimentacao(obra_id, mov_id):
                 try:
                     movimentacao.data = datetime.fromisoformat(data['data'].replace('Z', '+00:00'))
                 except Exception:
+                    logger.warning("Excecao suprimida em ", exc_info=True)
                     pass
             
             if 'comprovante_url' in data:
@@ -15803,6 +15837,7 @@ def gerar_relatorio_caixa_pdf(obra_id):
             try:
                 return f"R$ {float(valor):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
             except Exception:
+                logger.warning("Excecao suprimida em formatar_real", exc_info=True)
                 return "R$ 0,00"
         
         def limpar_texto(texto):
@@ -18560,8 +18595,9 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
                 else:
                     erro_msg = f"Erro {e.code}: {error_message or error_body[:200]}"
             except Exception:
+                logger.warning("Excecao ao parsear erro da API Anthropic", exc_info=True)
                 pass
-            
+
             return jsonify({"erro": erro_msg}), 500
         
         logger.info("[PLANTA-IA] Resposta recebida, processando...")
