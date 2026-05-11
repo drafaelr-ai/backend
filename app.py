@@ -28,10 +28,14 @@ from sqlalchemy.orm import joinedload
 from datetime import datetime, date, timedelta
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager, verify_jwt_in_request, get_jwt
+from flask_jwt_extended import (create_access_token, create_refresh_token,
+                                jwt_required, get_jwt_identity, JWTManager,
+                                verify_jwt_in_request, get_jwt)
 from functools import wraps
 import logging
 from logging_setup import setup_logging
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 logger.info("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
 def run_auto_migration():
@@ -504,6 +508,14 @@ app = Flask(__name__)
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# --- Rate limiter (in-memory; troque por Redis em multi-instance) ---
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
 # --- CORS --- origens permitidas explicitamente
 ALLOWED_ORIGINS = [
     'https://obraly.uk',
@@ -550,10 +562,10 @@ if not JWT_SECRET:
         "Defina-a no .env (dev) ou no provedor de deploy (prod)."
     )
 app.config["JWT_SECRET_KEY"] = JWT_SECRET
-# CORREÇÃO: Aumentar tempo de expiração do token de 15min (padrão) para 24 horas
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
+app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=30)
 jwt = JWTManager(app)
-logger.info("--- [LOG] JWT Manager inicializado com expiração de 24 horas ---")
+logger.info("JWT configurado: access=1h, refresh=30d")
 # ------------------------------------------------
 
 
@@ -2119,9 +2131,9 @@ def register():
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
+@limiter.limit("10 per minute", methods=["POST"])
 def login():
-    # ... (código inalterado) ...
-    logger.info("--- [LOG] Rota /login (POST) acessada ---")
+    logger.info("Rota /login (POST) acessada")
     if request.method == 'OPTIONS':
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
@@ -2135,15 +2147,28 @@ def login():
             identity = str(user.id)
             additional_claims = {"username": user.username, "role": user.role}
             access_token = create_access_token(identity=identity, additional_claims=additional_claims)
-            logger.info(f"--- [LOG] Login bem-sucedido para '{username}' ---")
-            return jsonify(access_token=access_token, user=user.to_dict())
+            refresh_token = create_refresh_token(identity=identity, additional_claims=additional_claims)
+            logger.info(f"Login bem-sucedido para '{username}'")
+            return jsonify(access_token=access_token, refresh_token=refresh_token, user=user.to_dict())
         else:
-            logger.error(f"--- [LOG] Falha no login para '{username}' (usuário ou senha incorretos) ---")
+            logger.warning(f"Falha no login para '{username}'")
             return jsonify({"erro": "Credenciais inválidas"}), 401
     except Exception as e:
-        error_details = traceback.format_exc()
-        logger.error(f"--- [ERRO] /login (POST): {str(e)}\n{error_details} ---")
+        logger.exception("Erro em /login")
         return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/refresh', methods=['POST', 'OPTIONS'])
+@jwt_required(refresh=True)
+def refresh_token():
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    identity = get_jwt_identity()
+    claims = get_jwt()
+    additional_claims = {k: claims[k] for k in ('username', 'role') if k in claims}
+    new_access = create_access_token(identity=identity, additional_claims=additional_claims)
+    logger.info(f"Token renovado para user_id={identity}")
+    return jsonify(access_token=new_access)
 # ------------------------------------
 
 # --- ROTAS DE API (PROTEGIDAS) ---
@@ -5188,7 +5213,11 @@ def delete_user(user_id):
             ("nota_fiscal", "criado_por"),
         ]
         
+        _allowed = {(t, c) for t, c in tabelas_para_limpar}
         for tabela, coluna in tabelas_para_limpar:
+            # table/column names cannot be SQL bind-params; list is hardcoded above (safe)
+            if (tabela, coluna) not in _allowed:
+                continue
             try:
                 result = db.session.execute(
                     db.text(f"UPDATE {tabela} SET {coluna} = NULL WHERE {coluna} = :uid"),
@@ -11612,30 +11641,30 @@ def get_servico_financeiro(obra_id):
             
             # Tentar buscar pelo vínculo cronograma_obra → orcamento_etapa_id
             try:
-                cron_result = db.session.execute(db.text(f"""
+                cron_result = db.session.execute(db.text("""
                     SELECT co.id, co.percentual_conclusao, co.area_total, co.area_executada, co.tipo_medicao,
                            co.orcamento_etapa_id
                     FROM cronograma_obra co
-                    WHERE co.obra_id = {obra_id}
+                    WHERE co.obra_id = :obra_id
                       AND LOWER(co.servico_nome) = LOWER(:nome)
                     LIMIT 1
-                """), {"nome": servico_nome}).fetchone()
+                """), {"obra_id": obra_id, "nome": servico_nome}).fetchone()
 
                 # Se não tem orcamento_etapa_id, tentar encontrar a etapa pelo nome
                 etapa_id_fallback = None
                 if cron_result and not cron_result[5]:
-                    etapa_by_name = db.session.execute(db.text(f"""
+                    etapa_by_name = db.session.execute(db.text("""
                         SELECT id FROM orcamento_eng_etapa
-                        WHERE obra_id = {obra_id} AND LOWER(nome) = LOWER(:nome)
+                        WHERE obra_id = :obra_id AND LOWER(nome) = LOWER(:nome)
                         LIMIT 1
-                    """), {"nome": servico_nome}).fetchone()
+                    """), {"obra_id": obra_id, "nome": servico_nome}).fetchone()
                     if etapa_by_name:
                         etapa_id_fallback = etapa_by_name[0]
 
                 if cron_result and (cron_result[5] or etapa_id_fallback):
                     etapa_id = cron_result[5] or etapa_id_fallback
                     # Calcular total da etapa somando itens
-                    totais = db.session.execute(db.text(f"""
+                    totais = db.session.execute(db.text("""
                         SELECT
                             COALESCE(SUM(CASE
                                 WHEN tipo_composicao = 'separado' THEN quantidade * COALESCE(preco_mao_obra, 0)
@@ -11646,44 +11675,44 @@ def get_servico_financeiro(obra_id):
                                 ELSE quantidade * COALESCE(preco_unitario, 0) * COALESCE(rateio_mat, 50) / 100
                             END), 0) as total_mat
                         FROM orcamento_eng_item
-                        WHERE etapa_id = {etapa_id}
-                    """)).fetchone()
+                        WHERE etapa_id = :etapa_id
+                    """), {"etapa_id": etapa_id}).fetchone()
 
                     valor_total_orc = float((totais[0] or 0) + (totais[1] or 0))
 
                     # Calcular valor pago: mesma lógica do orçamento (4 fontes de pagamento)
                     # 1. Lançamentos pagos vinculados aos itens da etapa
-                    vp_lanc = db.session.execute(db.text(f"""
+                    vp_lanc = db.session.execute(db.text("""
                         SELECT COALESCE(SUM(l.valor_pago), 0)
                         FROM lancamento l
                         JOIN orcamento_eng_item oi ON l.orcamento_item_id = oi.id
-                        WHERE oi.etapa_id = {etapa_id} AND l.status = 'Pago'
-                    """)).scalar() or 0
+                        WHERE oi.etapa_id = :etapa_id AND l.status = 'Pago'
+                    """), {"etapa_id": etapa_id}).scalar() or 0
 
                     # 2. Pagamentos futuros pagos
-                    vp_futuro = db.session.execute(db.text(f"""
+                    vp_futuro = db.session.execute(db.text("""
                         SELECT COALESCE(SUM(pf.valor), 0)
                         FROM pagamento_futuro pf
                         JOIN orcamento_eng_item oi ON pf.orcamento_item_id = oi.id
-                        WHERE oi.etapa_id = {etapa_id} AND pf.status = 'Pago'
-                    """)).scalar() or 0
+                        WHERE oi.etapa_id = :etapa_id AND pf.status = 'Pago'
+                    """), {"etapa_id": etapa_id}).scalar() or 0
 
                     # 3. Parcelas pagas de pagamentos parcelados
-                    vp_parcelas = db.session.execute(db.text(f"""
+                    vp_parcelas = db.session.execute(db.text("""
                         SELECT COALESCE(SUM(pi.valor_parcela), 0)
                         FROM parcela_individual pi
                         JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
                         JOIN orcamento_eng_item oi ON pp.orcamento_item_id = oi.id
-                        WHERE oi.etapa_id = {etapa_id} AND pi.status = 'Pago'
-                    """)).scalar() or 0
+                        WHERE oi.etapa_id = :etapa_id AND pi.status = 'Pago'
+                    """), {"etapa_id": etapa_id}).scalar() or 0
 
                     # 4. Boletos pagos
-                    vp_boletos = db.session.execute(db.text(f"""
+                    vp_boletos = db.session.execute(db.text("""
                         SELECT COALESCE(SUM(b.valor), 0)
                         FROM boleto b
                         JOIN orcamento_eng_item oi ON b.orcamento_item_id = oi.id
-                        WHERE oi.etapa_id = {etapa_id} AND b.status = 'Pago'
-                    """)).scalar() or 0
+                        WHERE oi.etapa_id = :etapa_id AND b.status = 'Pago'
+                    """), {"etapa_id": etapa_id}).scalar() or 0
 
                     valor_pago_orc = float(vp_lanc) + float(vp_futuro) + float(vp_parcelas) + float(vp_boletos)
 
@@ -13646,32 +13675,32 @@ def setup_migrate_pagamentos_orcamento():
             
             for item_id, servico_id in itens_vinculados:
                 # Atualizar pagamento_futuro
-                db.session.execute(db.text(f"""
+                db.session.execute(db.text("""
                     UPDATE pagamento_futuro 
-                    SET orcamento_item_id = {item_id} 
-                    WHERE servico_id = {servico_id} AND orcamento_item_id IS NULL
-                """))
+                    SET orcamento_item_id = :item_id 
+                    WHERE servico_id = :servico_id AND orcamento_item_id IS NULL
+                """), {"item_id": item_id, "servico_id": servico_id})
                 
                 # Atualizar pagamento_parcelado_v2
-                db.session.execute(db.text(f"""
+                db.session.execute(db.text("""
                     UPDATE pagamento_parcelado_v2 
-                    SET orcamento_item_id = {item_id} 
-                    WHERE servico_id = {servico_id} AND orcamento_item_id IS NULL
-                """))
+                    SET orcamento_item_id = :item_id 
+                    WHERE servico_id = :servico_id AND orcamento_item_id IS NULL
+                """), {"item_id": item_id, "servico_id": servico_id})
                 
                 # Atualizar boleto
-                db.session.execute(db.text(f"""
+                db.session.execute(db.text("""
                     UPDATE boleto 
-                    SET orcamento_item_id = {item_id} 
-                    WHERE vinculado_servico_id = {servico_id} AND orcamento_item_id IS NULL
-                """))
+                    SET orcamento_item_id = :item_id 
+                    WHERE vinculado_servico_id = :servico_id AND orcamento_item_id IS NULL
+                """), {"item_id": item_id, "servico_id": servico_id})
                 
                 # Atualizar lancamento
-                db.session.execute(db.text(f"""
+                db.session.execute(db.text("""
                     UPDATE lancamento 
-                    SET orcamento_item_id = {item_id} 
-                    WHERE servico_id = {servico_id} AND orcamento_item_id IS NULL
-                """))
+                    SET orcamento_item_id = :item_id 
+                    WHERE servico_id = :servico_id AND orcamento_item_id IS NULL
+                """), {"item_id": item_id, "servico_id": servico_id})
                 
                 migrados += 1
             
@@ -17197,13 +17226,12 @@ def obter_orcamento_eng(obra_id):
         pago_por_item = {}  # {item_id: {'mo': float, 'mat': float}}
 
         if todos_item_ids:
-            ids_str = ','.join(str(i) for i in todos_item_ids)
 
             # 1. Lançamentos pagos
-            for item_id, tipo, valor in db.session.execute(db.text(f"""
+            for item_id, tipo, valor in db.session.execute(db.text("""
                 SELECT orcamento_item_id, tipo, COALESCE(SUM(valor_pago), 0)
                 FROM lancamento
-                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
+                WHERE orcamento_item_id = ANY(:ids) AND status = 'Pago'
                 GROUP BY orcamento_item_id, tipo
             """)).fetchall():
                 d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
@@ -17211,10 +17239,10 @@ def obter_orcamento_eng(obra_id):
                 else: d['mat'] += float(valor or 0)
 
             # 2. Pagamentos Futuros pagos
-            for item_id, tipo, valor in db.session.execute(db.text(f"""
+            for item_id, tipo, valor in db.session.execute(db.text("""
                 SELECT orcamento_item_id, tipo, COALESCE(SUM(valor), 0)
                 FROM pagamento_futuro
-                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
+                WHERE orcamento_item_id = ANY(:ids) AND status = 'Pago'
                 GROUP BY orcamento_item_id, tipo
             """)).fetchall():
                 d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
@@ -17222,11 +17250,11 @@ def obter_orcamento_eng(obra_id):
                 else: d['mat'] += float(valor or 0)
 
             # 3. Parcelas pagas
-            for item_id, segmento, valor in db.session.execute(db.text(f"""
+            for item_id, segmento, valor in db.session.execute(db.text("""
                 SELECT pp.orcamento_item_id, pp.segmento, COALESCE(SUM(pi.valor_parcela), 0)
                 FROM parcela_individual pi
                 JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
-                WHERE pp.orcamento_item_id IN ({ids_str}) AND pi.status = 'Pago'
+                WHERE pp.orcamento_item_id = ANY(:ids) AND pi.status = 'Pago'
                 GROUP BY pp.orcamento_item_id, pp.segmento
             """)).fetchall():
                 d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
@@ -17234,10 +17262,10 @@ def obter_orcamento_eng(obra_id):
                 else: d['mat'] += float(valor or 0)
 
             # 4. Boletos pagos (sem tipo → Material)
-            for item_id, valor in db.session.execute(db.text(f"""
+            for item_id, valor in db.session.execute(db.text("""
                 SELECT orcamento_item_id, COALESCE(SUM(valor), 0)
                 FROM boleto
-                WHERE orcamento_item_id IN ({ids_str}) AND status = 'Pago'
+                WHERE orcamento_item_id = ANY(:ids) AND status = 'Pago'
                 GROUP BY orcamento_item_id
             """)).fetchall():
                 pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})['mat'] += float(valor or 0)
@@ -18888,13 +18916,13 @@ def validar_sistema_completo(obra_id):
         # TESTE 3: Verificar endpoint itens-lista
         # ===========================================
         try:
-            itens_lista = db.session.execute(db.text(f"""
+            itens_lista = db.session.execute(db.text("""
                 SELECT i.id, i.descricao, e.nome as etapa_nome
                 FROM orcamento_eng_item i
                 JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
-                WHERE e.obra_id = {obra_id}
+                WHERE e.obra_id = :obra_id
                 ORDER BY e.ordem, i.id
-            """)).fetchall()
+            """), {"obra_id": obra_id}).fetchall()
             
             add_teste(
                 "4. Endpoint itens-lista funcional",
@@ -18910,10 +18938,10 @@ def validar_sistema_completo(obra_id):
         tabelas_pagamento = ['lancamento', 'pagamento_futuro', 'pagamento_parcelado_v2', 'boleto']
         for tabela in tabelas_pagamento:
             try:
-                result = db.session.execute(db.text(f"""
+                result = db.session.execute(db.text("""
                     SELECT column_name FROM information_schema.columns 
-                    WHERE table_name = '{tabela}' AND column_name = 'orcamento_item_id'
-                """)).fetchone()
+                    WHERE table_name = ':tabela' AND column_name = 'orcamento_item_id'
+                """), {"tabela": tabela}).fetchone()
                 add_teste(
                     f"5. Coluna orcamento_item_id em {tabela}",
                     result is not None,
@@ -18927,14 +18955,14 @@ def validar_sistema_completo(obra_id):
         # ===========================================
         # Lançamentos
         try:
-            lanc_vinculados = db.session.execute(db.text(f"""
+            lanc_vinculados = db.session.execute(db.text("""
                 SELECT COUNT(*) FROM lancamento l
                 JOIN obra o ON l.obra_id = o.id
-                WHERE o.id = {obra_id} AND l.orcamento_item_id IS NOT NULL
-            """)).scalar()
-            lanc_total = db.session.execute(db.text(f"""
-                SELECT COUNT(*) FROM lancamento WHERE obra_id = {obra_id}
-            """)).scalar()
+                WHERE o.id = :obra_id AND l.orcamento_item_id IS NOT NULL
+            """), {"obra_id": obra_id}).scalar()
+            lanc_total = db.session.execute(db.text("""
+                SELECT COUNT(*) FROM lancamento WHERE obra_id = :obra_id
+            """), {"obra_id": obra_id}).scalar()
             add_teste(
                 "6. Lançamentos vinculados a itens",
                 True,
@@ -18946,13 +18974,13 @@ def validar_sistema_completo(obra_id):
         
         # Pagamentos Futuros
         try:
-            pf_vinculados = db.session.execute(db.text(f"""
+            pf_vinculados = db.session.execute(db.text("""
                 SELECT COUNT(*) FROM pagamento_futuro 
-                WHERE obra_id = {obra_id} AND orcamento_item_id IS NOT NULL
-            """)).scalar()
-            pf_total = db.session.execute(db.text(f"""
-                SELECT COUNT(*) FROM pagamento_futuro WHERE obra_id = {obra_id}
-            """)).scalar()
+                WHERE obra_id = :obra_id AND orcamento_item_id IS NOT NULL
+            """), {"obra_id": obra_id}).scalar()
+            pf_total = db.session.execute(db.text("""
+                SELECT COUNT(*) FROM pagamento_futuro WHERE obra_id = :obra_id
+            """), {"obra_id": obra_id}).scalar()
             add_teste(
                 "7. Pagamentos Futuros vinculados",
                 True,
@@ -18964,13 +18992,13 @@ def validar_sistema_completo(obra_id):
         
         # Pagamentos Parcelados
         try:
-            pp_vinculados = db.session.execute(db.text(f"""
+            pp_vinculados = db.session.execute(db.text("""
                 SELECT COUNT(*) FROM pagamento_parcelado_v2 
-                WHERE obra_id = {obra_id} AND orcamento_item_id IS NOT NULL
-            """)).scalar()
-            pp_total = db.session.execute(db.text(f"""
-                SELECT COUNT(*) FROM pagamento_parcelado_v2 WHERE obra_id = {obra_id}
-            """)).scalar()
+                WHERE obra_id = :obra_id AND orcamento_item_id IS NOT NULL
+            """), {"obra_id": obra_id}).scalar()
+            pp_total = db.session.execute(db.text("""
+                SELECT COUNT(*) FROM pagamento_parcelado_v2 WHERE obra_id = :obra_id
+            """), {"obra_id": obra_id}).scalar()
             add_teste(
                 "8. Pagamentos Parcelados vinculados",
                 True,
@@ -18982,13 +19010,13 @@ def validar_sistema_completo(obra_id):
         
         # Boletos
         try:
-            bol_vinculados = db.session.execute(db.text(f"""
+            bol_vinculados = db.session.execute(db.text("""
                 SELECT COUNT(*) FROM boleto 
-                WHERE obra_id = {obra_id} AND orcamento_item_id IS NOT NULL
-            """)).scalar()
-            bol_total = db.session.execute(db.text(f"""
-                SELECT COUNT(*) FROM boleto WHERE obra_id = {obra_id}
-            """)).scalar()
+                WHERE obra_id = :obra_id AND orcamento_item_id IS NOT NULL
+            """), {"obra_id": obra_id}).scalar()
+            bol_total = db.session.execute(db.text("""
+                SELECT COUNT(*) FROM boleto WHERE obra_id = :obra_id
+            """), {"obra_id": obra_id}).scalar()
             add_teste(
                 "9. Boletos vinculados",
                 True,
@@ -19008,28 +19036,28 @@ def validar_sistema_completo(obra_id):
                 previsto = item.valor_total or 0
                 
                 # Valor Executado (soma de pagamentos vinculados e pagos)
-                executado_lanc = db.session.execute(db.text(f"""
+                executado_lanc = db.session.execute(db.text("""
                     SELECT COALESCE(SUM(valor_pago), 0) FROM lancamento 
-                    WHERE orcamento_item_id = {item.id} AND status = 'Pago'
-                """)).scalar() or 0
+                    WHERE orcamento_item_id = :item_id AND status = 'Pago'
+                """), {"item_id": item.id}).scalar() or 0
                 
-                executado_pf = db.session.execute(db.text(f"""
+                executado_pf = db.session.execute(db.text("""
                     SELECT COALESCE(SUM(valor), 0) FROM pagamento_futuro 
-                    WHERE orcamento_item_id = {item.id} AND status = 'Pago'
-                """)).scalar() or 0
+                    WHERE orcamento_item_id = :item_id AND status = 'Pago'
+                """), {"item_id": item.id}).scalar() or 0
                 
                 # Parcelas pagas de pagamentos parcelados
-                executado_pp = db.session.execute(db.text(f"""
+                executado_pp = db.session.execute(db.text("""
                     SELECT COALESCE(SUM(pi.valor_parcela), 0) 
                     FROM parcela_individual pi
                     JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
-                    WHERE pp.orcamento_item_id = {item.id} AND pi.status = 'Pago'
-                """)).scalar() or 0
+                    WHERE pp.orcamento_item_id = :item_id AND pi.status = 'Pago'
+                """), {"item_id": item.id}).scalar() or 0
                 
-                executado_bol = db.session.execute(db.text(f"""
+                executado_bol = db.session.execute(db.text("""
                     SELECT COALESCE(SUM(valor), 0) FROM boleto 
-                    WHERE orcamento_item_id = {item.id} AND status = 'Pago'
-                """)).scalar() or 0
+                    WHERE orcamento_item_id = :item_id AND status = 'Pago'
+                """), {"item_id": item.id}).scalar() or 0
                 
                 executado_total = executado_lanc + executado_pf + executado_pp + executado_bol
                 
@@ -19064,38 +19092,38 @@ def validar_sistema_completo(obra_id):
         try:
             total_previsto = sum(item.valor_total or 0 for item in itens)
             
-            total_executado = db.session.execute(db.text(f"""
+            total_executado = db.session.execute(db.text("""
                 SELECT COALESCE(SUM(l.valor_pago), 0)
                 FROM lancamento l
                 JOIN orcamento_eng_item i ON l.orcamento_item_id = i.id
                 JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
-                WHERE e.obra_id = {obra_id} AND l.status = 'Pago'
-            """)).scalar() or 0
+                WHERE e.obra_id = :obra_id AND l.status = 'Pago'
+            """), {"obra_id": obra_id}).scalar() or 0
             
-            total_executado += db.session.execute(db.text(f"""
+            total_executado += db.session.execute(db.text("""
                 SELECT COALESCE(SUM(pf.valor), 0)
                 FROM pagamento_futuro pf
                 JOIN orcamento_eng_item i ON pf.orcamento_item_id = i.id
                 JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
-                WHERE e.obra_id = {obra_id} AND pf.status = 'Pago'
-            """)).scalar() or 0
+                WHERE e.obra_id = :obra_id AND pf.status = 'Pago'
+            """), {"obra_id": obra_id}).scalar() or 0
             
-            total_executado += db.session.execute(db.text(f"""
+            total_executado += db.session.execute(db.text("""
                 SELECT COALESCE(SUM(pi.valor_parcela), 0)
                 FROM parcela_individual pi
                 JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
                 JOIN orcamento_eng_item i ON pp.orcamento_item_id = i.id
                 JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
-                WHERE e.obra_id = {obra_id} AND pi.status = 'Pago'
-            """)).scalar() or 0
+                WHERE e.obra_id = :obra_id AND pi.status = 'Pago'
+            """), {"obra_id": obra_id}).scalar() or 0
             
-            total_executado += db.session.execute(db.text(f"""
+            total_executado += db.session.execute(db.text("""
                 SELECT COALESCE(SUM(b.valor), 0)
                 FROM boleto b
                 JOIN orcamento_eng_item i ON b.orcamento_item_id = i.id
                 JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
-                WHERE e.obra_id = {obra_id} AND b.status = 'Pago'
-            """)).scalar() or 0
+                WHERE e.obra_id = :obra_id AND b.status = 'Pago'
+            """), {"obra_id": obra_id}).scalar() or 0
             
             percentual_geral = round((total_executado / total_previsto * 100), 1) if total_previsto > 0 else 0
             
