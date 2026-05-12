@@ -5,3 +5,4 @@ from .servico import Servico  # noqa: F401
 from .notificacao import Notificacao  # noqa: F401
 from .pagamento_servico import PagamentoServico  # noqa: F401
 from .lancamento import Lancamento  # noqa: F401
+from .orcamento import Orcamento  # noqa: F401
