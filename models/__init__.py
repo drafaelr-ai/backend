@@ -17,3 +17,4 @@ from .orcamento_eng_item import OrcamentoEngItem  # noqa: F401
 from .movimentacao_caixa import MovimentacaoCaixa  # noqa: F401
 from .fechamento_caixa import FechamentoCaixa  # noqa: F401
 from .pagamento_futuro import PagamentoFuturo  # noqa: F401
+from .boleto import Boleto  # noqa: F401
