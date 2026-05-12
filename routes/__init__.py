@@ -6,3 +6,4 @@ from routes.admin import admin_bp  # noqa: F401
 from routes.sid import sid_bp  # noqa: F401
 from routes.caixa import caixa_bp  # noqa: F401
 from routes.servicos import servicos_bp  # noqa: F401
+from routes.boletos import boletos_bp  # noqa: F401
