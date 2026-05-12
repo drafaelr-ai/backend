@@ -15809,7 +15809,7 @@ def obter_orcamento_eng(obra_id):
                 FROM lancamento
                 WHERE orcamento_item_id = ANY(:ids) AND status = 'Pago'
                 GROUP BY orcamento_item_id, tipo
-            """)).fetchall():
+            """), {"ids": todos_item_ids}).fetchall():
                 d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
                 if tipo and 'obra' in tipo.lower(): d['mo'] += float(valor or 0)
                 else: d['mat'] += float(valor or 0)
@@ -15820,7 +15820,7 @@ def obter_orcamento_eng(obra_id):
                 FROM pagamento_futuro
                 WHERE orcamento_item_id = ANY(:ids) AND status = 'Pago'
                 GROUP BY orcamento_item_id, tipo
-            """)).fetchall():
+            """), {"ids": todos_item_ids}).fetchall():
                 d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
                 if tipo and 'obra' in tipo.lower(): d['mo'] += float(valor or 0)
                 else: d['mat'] += float(valor or 0)
@@ -15832,7 +15832,7 @@ def obter_orcamento_eng(obra_id):
                 JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
                 WHERE pp.orcamento_item_id = ANY(:ids) AND pi.status = 'Pago'
                 GROUP BY pp.orcamento_item_id, pp.segmento
-            """)).fetchall():
+            """), {"ids": todos_item_ids}).fetchall():
                 d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
                 if segmento and 'obra' in segmento.lower(): d['mo'] += float(valor or 0)
                 else: d['mat'] += float(valor or 0)
@@ -15843,7 +15843,7 @@ def obter_orcamento_eng(obra_id):
                 FROM boleto
                 WHERE orcamento_item_id = ANY(:ids) AND status = 'Pago'
                 GROUP BY orcamento_item_id
-            """)).fetchall():
+            """), {"ids": todos_item_ids}).fetchall():
                 pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})['mat'] += float(valor or 0)
 
         # Calcular totais
