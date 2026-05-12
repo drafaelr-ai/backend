@@ -41,6 +41,7 @@ from models.user import User, user_obra_association  # noqa: F401
 from models.obra import Obra  # noqa: F401
 from models.servico import Servico  # noqa: F401
 from models.notificacao import Notificacao  # noqa: F401
+from models.pagamento_servico import PagamentoServico  # noqa: F401
 logger = logging.getLogger(__name__)
 
 logger.info("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
@@ -1156,37 +1157,7 @@ class Lancamento(db.Model):
 
 
 
-class PagamentoServico(db.Model):
-    __tablename__ = 'pagamento_servico'
-    id = db.Column(db.Integer, primary_key=True)
-    servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=False)
-    data = db.Column(db.Date, nullable=False)
-    data_vencimento = db.Column(db.Date, nullable=True)
-    
-    valor_total = db.Column(db.Float, nullable=False)
-    valor_pago = db.Column(db.Float, nullable=False, default=0.0)
-    
-    status = db.Column(db.String(20), nullable=False, default='Pago')
-    tipo_pagamento = db.Column(db.String(20), nullable=False)
-    forma_pagamento = db.Column(db.String(20), nullable=True)
-    pix = db.Column(db.String(100), nullable=True)  # Chave PIX do pagamento
-    prioridade = db.Column(db.Integer, nullable=False, default=0)
-    fornecedor = db.Column(db.String(150), nullable=True)
 
-    def to_dict(self):
-        return {
-            "id": self.id, "data": self.data.isoformat(),
-            "data_vencimento": self.data_vencimento.isoformat() if self.data_vencimento else None,
-            "valor_total": self.valor_total, 
-            "valor_pago": self.valor_pago, 
-            "status": self.status,
-            "tipo_pagamento": self.tipo_pagamento,
-            "forma_pagamento": self.forma_pagamento,
-            "pix": self.pix,
-            "prioridade": self.prioridade,
-            "fornecedor": self.fornecedor, 
-            "pagamento_id": self.id 
-        }
 
 class Orcamento(db.Model):
     __tablename__ = 'orcamento'
