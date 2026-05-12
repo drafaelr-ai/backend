@@ -18,3 +18,8 @@ from .movimentacao_caixa import MovimentacaoCaixa  # noqa: F401
 from .fechamento_caixa import FechamentoCaixa  # noqa: F401
 from .pagamento_futuro import PagamentoFuturo  # noqa: F401
 from .boleto import Boleto  # noqa: F401
+from .parcela_individual import ParcelaIndividual  # noqa: F401
+from .pagamento_parcelado import PagamentoParcelado  # noqa: F401
+from .cronograma_etapa import CronogramaEtapa  # noqa: F401
+from .cronograma_obra import CronogramaObra  # noqa: F401
+from .agenda_demanda import AgendaDemanda  # noqa: F401
