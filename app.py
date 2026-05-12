@@ -62,6 +62,7 @@ from models.agenda_demanda import AgendaDemanda  # noqa: F401
 
 from extensions import db, jwt, cors
 from config import Config
+from utils import formatar_real
 from services import (
     criar_notificacao,
     notificar_masters,
@@ -839,8 +840,6 @@ def extrair_dados_boleto_pdf(pdf_base64):
         traceback.print_exc()
         return {'sucesso': False, 'multiplos': False, 'quantidade': 0, 'boletos': [], 'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
 
-def formatar_real(valor):
-    return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 # --- ROTAS DA API ---
 
 # --- ROTA DE ADMINISTRAÇÃO (Existente) ---
