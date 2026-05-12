@@ -63,6 +63,7 @@ from models.agenda_demanda import AgendaDemanda  # noqa: F401
 from extensions import db, jwt, cors
 from config import Config
 from utils import formatar_real
+from routes import notificacoes_bp
 from services import (
     criar_notificacao,
     notificar_masters,
@@ -151,6 +152,9 @@ def create_app(config_class=Config):
     def shutdown_session(exception=None):
         db.session.remove()
     logger.info("--- [LOG] Teardown de sessão configurado ---")
+
+    # --- Blueprints ---
+    app.register_blueprint(notificacoes_bp)
 
     return app
 
@@ -4015,176 +4019,6 @@ def delete_user(user_id):
         return jsonify({"erro": str(e)}), 500
 # --- FIM DA NOVA ROTA ---
 # ---------------------------------------------------
-
-# --- ROTAS DE NOTIFICAÇÕES ---
-@app.route('/notificacoes', methods=['GET', 'OPTIONS'])
-@jwt_required()
-def listar_notificacoes():
-    """Lista notificações do usuário logado"""
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        current_user_id = int(get_jwt_identity())
-        
-        # Parâmetros opcionais
-        apenas_nao_lidas = request.args.get('apenas_nao_lidas', 'false').lower() == 'true'
-        limite = request.args.get('limite', 50, type=int)
-        
-        query = Notificacao.query.filter_by(usuario_destino_id=current_user_id)
-        
-        if apenas_nao_lidas:
-            query = query.filter_by(lida=False)
-        
-        notificacoes = query.order_by(Notificacao.created_at.desc()).limit(limite).all()
-        
-        return jsonify([n.to_dict() for n in notificacoes]), 200
-    except Exception as e:
-        logger.exception(f"--- [ERRO] GET /notificacoes: {e} ---")
-        return jsonify({"erro": str(e)}), 500
-
-@app.route('/notificacoes/count', methods=['GET', 'OPTIONS'])
-@jwt_required()
-def contar_notificacoes():
-    """Retorna apenas o contador de notificações não lidas"""
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        current_user_id = int(get_jwt_identity())
-        count = Notificacao.query.filter_by(
-            usuario_destino_id=current_user_id,
-            lida=False
-        ).count()
-        
-        return jsonify({"count": count}), 200
-    except Exception as e:
-        logger.exception(f"--- [ERRO] GET /notificacoes/count: {e} ---")
-        return jsonify({"erro": str(e)}), 500
-
-@app.route('/notificacoes/<int:notificacao_id>/lida', methods=['PATCH', 'OPTIONS'])
-@jwt_required()
-def marcar_notificacao_lida(notificacao_id):
-    """Marca uma notificação como lida ou não lida"""
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        current_user_id = int(get_jwt_identity())
-        
-        notificacao = Notificacao.query.get_or_404(notificacao_id)
-        
-        # Verificar se pertence ao usuário
-        if notificacao.usuario_destino_id != current_user_id:
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        data = request.get_json() or {}
-        lida = data.get('lida', True)  # Por padrão marca como lida
-        
-        notificacao.lida = lida
-        db.session.commit()
-        
-        return jsonify(notificacao.to_dict()), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"--- [ERRO] PATCH /notificacoes/{notificacao_id}/lida: {e} ---")
-        return jsonify({"erro": str(e)}), 500
-
-@app.route('/notificacoes/marcar-todas-lidas', methods=['POST', 'OPTIONS'])
-@jwt_required()
-def marcar_todas_lidas():
-    """Marca todas as notificações do usuário como lidas"""
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        current_user_id = int(get_jwt_identity())
-        
-        Notificacao.query.filter_by(
-            usuario_destino_id=current_user_id,
-            lida=False
-        ).update({'lida': True})
-        
-        db.session.commit()
-        
-        return jsonify({"sucesso": "Todas as notificações foram marcadas como lidas"}), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"--- [ERRO] POST /notificacoes/marcar-todas-lidas: {e} ---")
-        return jsonify({"erro": str(e)}), 500
-
-@app.route('/notificacoes/limpar-lidas', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-def limpar_notificacoes_lidas():
-    """Remove todas as notificações lidas do usuário"""
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        current_user_id = int(get_jwt_identity())
-        
-        deleted = Notificacao.query.filter_by(
-            usuario_destino_id=current_user_id,
-            lida=True
-        ).delete()
-        
-        db.session.commit()
-        
-        return jsonify({"sucesso": f"{deleted} notificações removidas"}), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"--- [ERRO] DELETE /notificacoes/limpar-lidas: {e} ---")
-        return jsonify({"erro": str(e)}), 500
-
-
-@app.route('/notificacoes/limpar-todas', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-def limpar_todas_notificacoes():
-    """Remove TODAS as notificações do usuário (lidas e não lidas)"""
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        current_user_id = int(get_jwt_identity())
-        
-        deleted = Notificacao.query.filter_by(
-            usuario_destino_id=current_user_id
-        ).delete()
-        
-        db.session.commit()
-        
-        return jsonify({"sucesso": f"{deleted} notificações removidas"}), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"--- [ERRO] DELETE /notificacoes/limpar-todas: {e} ---")
-        return jsonify({"erro": str(e)}), 500
-
-
-@app.route('/notificacoes/<int:notificacao_id>', methods=['DELETE', 'OPTIONS'])
-@jwt_required()
-def deletar_notificacao(notificacao_id):
-    """Remove uma notificação específica"""
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
-    
-    try:
-        current_user_id = int(get_jwt_identity())
-        
-        notificacao = Notificacao.query.get_or_404(notificacao_id)
-        
-        # Verificar se pertence ao usuário
-        if notificacao.usuario_destino_id != current_user_id:
-            return jsonify({"erro": "Acesso negado"}), 403
-        
-        db.session.delete(notificacao)
-        db.session.commit()
-        
-        return jsonify({"sucesso": "Notificação removida"}), 200
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"--- [ERRO] DELETE /notificacoes/{notificacao_id}: {e} ---")
-        return jsonify({"erro": str(e)}), 500
-
 # --- ROTA PARA ALTERAR ROLE DE USUÁRIO ---
 @app.route('/admin/users/<int:user_id>/role', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['master'])
