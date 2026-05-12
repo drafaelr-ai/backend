@@ -11,8 +11,6 @@ import json  # Para parsing de JSON
 import urllib.request  # Para chamar API externa (nativo do Python)
 import urllib.error  # Para tratamento de erros HTTP
 from flask import Flask, jsonify, request, make_response, send_file
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
 from urllib.parse import quote_plus
 from sqlalchemy import func, case
 import io
@@ -29,7 +27,7 @@ from datetime import datetime, date, timedelta
 # Imports de Autenticação
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import (create_access_token,
-                                jwt_required, get_jwt_identity, JWTManager,
+                                jwt_required, get_jwt_identity,
                                 verify_jwt_in_request, get_jwt)
 from functools import wraps
 import logging
@@ -61,9 +59,92 @@ from models.pagamento_parcelado import PagamentoParcelado  # noqa: F401
 from models.cronograma_etapa import CronogramaEtapa  # noqa: F401
 from models.cronograma_obra import CronogramaObra  # noqa: F401
 from models.agenda_demanda import AgendaDemanda  # noqa: F401
-logger = logging.getLogger(__name__)
 
+from extensions import db, jwt, cors
+from config import Config
+
+setup_logging()
+logger = logging.getLogger(__name__)
 logger.info("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
+
+# Constante de módulo — usada por apply_cors_headers e por create_app
+ALLOWED_ORIGINS = [
+    'https://obraly.uk',
+    'https://www.obraly.uk',
+    'http://localhost:3000',
+    'http://localhost:3001',
+]
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
+
+def apply_cors_headers(response):
+    """Camada 2 CORS — garante headers em toda resposta, independente do flask-cors."""
+    origin = request.headers.get('Origin', '')
+    if origin in ALLOWED_ORIGINS:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+    return response
+
+
+def create_app(config_class=Config):
+    app = Flask(__name__)
+    app.config.from_object(config_class)
+
+    # JWT secret (lido do env — não é atributo estático de Config)
+    jwt_secret = os.environ.get('JWT_SECRET_KEY')
+    if not jwt_secret:
+        raise RuntimeError(
+            "JWT_SECRET_KEY environment variable is required. "
+            "Defina-a no .env (dev) ou no provedor de deploy (prod)."
+        )
+    app.config['JWT_SECRET_KEY'] = jwt_secret
+    logger.info("JWT configurado: access=7d")
+
+    # DB password (lido do env)
+    logger.info("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
+    db_password = os.environ.get('DB_PASSWORD')
+    if not db_password:
+        logger.error("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
+        raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
+    logger.info("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
+
+    encoded_password = quote_plus(db_password)
+    _DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
+    _DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
+    _DB_PORT = "6543"
+    _DB_NAME = "postgres"
+    database_url = f"postgresql://{_DB_USER}:{encoded_password}@{_DB_HOST}:{_DB_PORT}/{_DB_NAME}?sslmode=require"
+    logger.info(f"--- [LOG] String de conexão criada para usuário {_DB_USER} (com sslmode=require) ---")
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+
+    # Init extensions
+    db.init_app(app)
+    logger.info("--- [LOG] SQLAlchemy inicializado ---")
+    jwt.init_app(app)
+    limiter.init_app(app)
+
+    # === CAMADA 1 — flask-cors ===
+    cors.init_app(app, resources={r'/*': {'origins': ALLOWED_ORIGINS}}, supports_credentials=False)
+    logger.info(f"CORS configurado para origens: {ALLOWED_ORIGINS}")
+
+    # === CAMADA 2 — after_request ===
+    app.after_request(apply_cors_headers)
+
+    # Teardown de sessão do banco
+    @app.teardown_appcontext
+    def shutdown_session(exception=None):
+        db.session.remove()
+    logger.info("--- [LOG] Teardown de sessão configurado ---")
+
+    return app
+
+
 def run_auto_migration():
     """Executa migration automaticamente no startup"""
     logger.info("=" * 70)
@@ -530,122 +611,18 @@ logger.info("\n--- [LOG] Executando auto-migration antes de iniciar o app ---")
 run_auto_migration()
 logger.info("--- [LOG] Auto-migration concluída, iniciando app.py ---\n")
 
-app = Flask(__name__)
-setup_logging()
-logger = logging.getLogger(__name__)
-
-# --- Rate limiter (in-memory; troque por Redis em multi-instance) ---
-limiter = Limiter(
-    key_func=get_remote_address,
-    app=app,
-    default_limits=[],
-    storage_uri="memory://",
-)
-
-# --- CORS --- origens permitidas explicitamente
-ALLOWED_ORIGINS = [
-    'https://obraly.uk',
-    'https://www.obraly.uk',
-    'http://localhost:3000',
-    'http://localhost:3001',
-]
-
-CORS(app, resources={r'/*': {'origins': ALLOWED_ORIGINS}}, supports_credentials=False)
-
-# --- Reforço de cabeçalhos CORS: ecoa a origem apenas se estiver na lista ---
-@app.after_request
-def apply_cors_headers(response):
-    origin = request.headers.get('Origin', '')
-    if origin in ALLOWED_ORIGINS:
-        response.headers['Access-Control-Allow-Origin'] = origin
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-    return response
+app = create_app()
 
 
-
-# --- OPTIONS catch-all para QUALQUER rota (evita 404 em preflight) ---
+# === CAMADA 3 — OPTIONS routes (evita 404 em preflights; migra pra blueprints no sub-lote E) ===
 @app.route('/<path:any_path>', methods=['OPTIONS'])
 def global_options(any_path):
     return ('', 200)
 
 
-
-# --- OPTIONS dedicado para /sid/... (compat) ---
 @app.route('/sid/<path:any_path>', methods=['OPTIONS'])
 def sid_options(any_path):
     return ('', 200)
-
-# --- CONFIGURAÇÃO DE CORS (Cross-Origin Resource Sharing) ---  
-logger.info(f"CORS configurado para origens: {ALLOWED_ORIGINS}")
-# -----------------------------------------------------------------
-
-# --- CONFIGURAÇÃO DO JWT (JSON Web Token) ---
-JWT_SECRET = os.environ.get('JWT_SECRET_KEY')
-if not JWT_SECRET:
-    raise RuntimeError(
-        "JWT_SECRET_KEY environment variable is required. "
-        "Defina-a no .env (dev) ou no provedor de deploy (prod)."
-    )
-app.config["JWT_SECRET_KEY"] = JWT_SECRET
-# JWT expira em 7 dias por decisão deliberada — uso interno (3 pessoas no escritório).
-# REVISAR quando: ampliar para usuários externos, adicionar 2FA, ou implementar refresh token.
-# Trade-off documentado: token roubado dá 7d de acesso até expirar.
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(days=7)
-jwt = JWTManager(app)
-logger.info("JWT configurado: access=7d")
-# ------------------------------------------------
-
-
-# --- CONFIGURAÇÃO DA CONEXÃO (COM VARIÁVEIS DE AMBIENTE) ---
-DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
-DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
-DB_PORT = "6543"  # Porta 6543 = Transaction mode (mais conexões permitidas)
-DB_NAME = "postgres"
-
-logger.info("--- [LOG] Lendo variável de ambiente DB_PASSWORD... ---")
-DB_PASSWORD = os.environ.get('DB_PASSWORD')
-
-if not DB_PASSWORD:
-    logger.error("--- [ERRO CRÍTICO] Variável de ambiente DB_PASSWORD não foi encontrada! ---")
-    raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
-else:
-    logger.info("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
-
-encoded_password = quote_plus(DB_PASSWORD)
-
-DATABASE_URL = f"postgresql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
-logger.info(f"--- [LOG] String de conexão criada para usuário {DB_USER} (com sslmode=require) ---")
-
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_pre_ping': True,
-    'pool_recycle': 280,  # Recicla conexões a cada 280 segundos (antes dos 300s do Supabase)
-    'pool_timeout': 20,    # Timeout reduzido
-    'pool_size': 2,        # Reduzido para 2 conexões permanentes
-    'max_overflow': 3,     # Máximo de 3 conexões extras (total: 5)
-    'connect_args': {
-        'connect_timeout': 10,
-        'keepalives': 1,
-        'keepalives_idle': 30,
-        'keepalives_interval': 10,
-        'keepalives_count': 5
-    }
-}
-# --------------------------------------------------------------
-
-from extensions import db
-db.init_app(app)
-logger.info("--- [LOG] SQLAlchemy inicializado ---")
-
-# --- GERENCIAMENTO AUTOMÁTICO DE CONEXÕES ---
-@app.teardown_appcontext
-def shutdown_session(exception=None):
-    """Fecha a sessão do banco após cada requisição para liberar conexões"""
-    db.session.remove()
-logger.info("--- [LOG] Teardown de sessão configurado ---")
-# ------------------------------------------------
 
 
 
