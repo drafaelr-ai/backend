@@ -67,6 +67,9 @@ from services import (
     notificar_masters,
     notificar_operadores_obra,
     notificar_administradores,
+    get_current_user,
+    user_has_access_to_obra,
+    check_permission,
 )
 
 setup_logging()
@@ -838,32 +841,6 @@ def extrair_dados_boleto_pdf(pdf_base64):
 
 def formatar_real(valor):
     return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
-def get_current_user():
-    user_id_str = get_jwt_identity()
-    if not user_id_str: return None
-    user = db.session.get(User, int(user_id_str))
-    return user
-def user_has_access_to_obra(user, obra_id):
-    if not user: return False
-    if user.role == 'master': return True  # Master tem acesso a todas as obras
-    if user.role == 'administrador': return True  # Admin também tem acesso a todas
-    obra_ids_permitidas = [obra.id for obra in user.obras_permitidas]
-    return obra_id in obra_ids_permitidas
-def check_permission(roles):
-    def decorator(fn):
-        @wraps(fn)
-        @jwt_required()
-        def wrapper(*args, **kwargs):
-            if request.method == 'OPTIONS':
-                return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-            claims = get_jwt()
-            user_role = claims.get('role')
-            if user_role not in roles:
-                return jsonify({"erro": "Acesso negado: permissão insuficiente."}), 403
-            return fn(*args, **kwargs)
-        return wrapper
-    return decorator
-
 # --- ROTAS DA API ---
 
 # --- ROTA DE ADMINISTRAÇÃO (Existente) ---
