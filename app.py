@@ -32,8 +32,6 @@ from flask_jwt_extended import (create_access_token,
 from functools import wraps
 import logging
 from logging_setup import setup_logging
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from models.servico_base import ServicoBase  # noqa: F401
 from models.user import User, user_obra_association  # noqa: F401
 from models.obra import Obra  # noqa: F401
@@ -60,10 +58,10 @@ from models.cronograma_etapa import CronogramaEtapa  # noqa: F401
 from models.cronograma_obra import CronogramaObra  # noqa: F401
 from models.agenda_demanda import AgendaDemanda  # noqa: F401
 
-from extensions import db, jwt, cors
+from extensions import db, jwt, cors, limiter
 from config import Config
 from utils import formatar_real
-from routes import notificacoes_bp, bi_bp, diario_bp
+from routes import notificacoes_bp, bi_bp, diario_bp, auth_bp
 from services import (
     criar_notificacao,
     notificar_masters,
@@ -85,13 +83,6 @@ ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'http://localhost:3001',
 ]
-
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=[],
-    storage_uri="memory://",
-)
-
 
 def apply_cors_headers(response):
     """Camada 2 CORS — garante headers em toda resposta, independente do flask-cors."""
@@ -157,6 +148,7 @@ def create_app(config_class=Config):
     app.register_blueprint(notificacoes_bp)
     app.register_blueprint(bi_bp)
     app.register_blueprint(diario_bp)
+    app.register_blueprint(auth_bp)
 
     return app
 
@@ -863,69 +855,6 @@ def create_tables():
         logger.error(f"--- [ERRO] /admin/create_tables: {str(e)}\n{error_details} ---")
         return jsonify({"erro": "Falha ao criar tabelas."}), 500
 # ------------------------------------
-
-
-# --- ROTAS DE AUTENTICAÇÃO (Públicas) ---
-@app.route('/register', methods=['POST', 'OPTIONS'])
-def register():
-    # ... (código inalterado) ...
-    logger.info("--- [LOG] Rota /register (POST) acessada ---")
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    try:
-        dados = request.json
-        username = dados.get('username')
-        password = dados.get('password')
-        role = dados.get('role', 'comum') 
-        if not username or not password:
-            return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-        if User.query.filter_by(username=username).first():
-            return jsonify({"erro": "Nome de usuário já existe"}), 409
-        novo_usuario = User(username=username, role=role)
-        novo_usuario.set_password(password)
-        db.session.add(novo_usuario)
-        db.session.commit()
-        logger.info(f"--- [LOG] Usuário '{username}' criado com role '{role}' ---")
-        return jsonify(novo_usuario.to_dict()), 201
-    except Exception as e:
-        db.session.rollback()
-        error_details = traceback.format_exc()
-        logger.error(f"--- [ERRO] /register (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
-
-@app.route('/login', methods=['POST', 'OPTIONS'])
-@limiter.limit("10 per minute", methods=["POST"])
-def login():
-    logger.info("Rota /login (POST) acessada")
-    if request.method == 'OPTIONS':
-        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
-    try:
-        dados = request.json
-        username = dados.get('username')
-        password = dados.get('password')
-        if not username or not password:
-            return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-        user = User.query.filter_by(username=username).first()
-        if user and user.check_password(password):
-            identity = str(user.id)
-            additional_claims = {"username": user.username, "role": user.role}
-            access_token = create_access_token(identity=identity, additional_claims=additional_claims)
-            logger.info(f"Login bem-sucedido para '{username}'")
-            return jsonify(access_token=access_token, user=user.to_dict())
-        else:
-            logger.warning(f"Falha no login para '{username}'")
-            return jsonify({"erro": "Credenciais inválidas"}), 401
-    except Exception as e:
-        logger.exception("Erro em /login")
-        return jsonify({"erro": str(e)}), 500
-
-
-# --- ROTAS DE API (PROTEGIDAS) ---
-
-@app.route('/', methods=['GET'])
-def home():
-    logger.info("--- [LOG] Rota / (home) acessada ---")
-    return jsonify({"message": "Backend rodando com sucesso!", "status": "OK"}), 200
 
 # --- ROTA /obras (Tela inicial) ---
 @app.route('/obras', methods=['GET', 'OPTIONS'])
