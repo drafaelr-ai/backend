@@ -9,3 +9,4 @@ from .orcamento import Orcamento  # noqa: F401
 from .nota_fiscal import NotaFiscal  # noqa: F401
 from .diario_obra import DiarioObra  # noqa: F401
 from .diario_imagem import DiarioImagem  # noqa: F401
+from .anexo_orcamento import AnexoOrcamento  # noqa: F401

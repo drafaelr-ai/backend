@@ -47,6 +47,7 @@ from models.orcamento import Orcamento  # noqa: F401
 from models.nota_fiscal import NotaFiscal  # noqa: F401
 from models.diario_obra import DiarioObra  # noqa: F401
 from models.diario_imagem import DiarioImagem  # noqa: F401
+from models.anexo_orcamento import AnexoOrcamento  # noqa: F401
 logger = logging.getLogger(__name__)
 
 logger.info("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
@@ -1104,21 +1105,7 @@ def verificar_alertas_boletos():
 
 
 
-class AnexoOrcamento(db.Model):
-    __tablename__ = 'anexo_orcamento'
-    id = db.Column(db.Integer, primary_key=True)
-    orcamento_id = db.Column(db.Integer, db.ForeignKey('orcamento.id'), nullable=False)
-    filename = db.Column(db.String(255), nullable=False)
-    mimetype = db.Column(db.String(100), nullable=False)
-    data = db.Column(db.LargeBinary, nullable=False) 
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "orcamento_id": self.orcamento_id,
-            "filename": self.filename,
-            "mimetype": self.mimetype
-        }
 
 
 
