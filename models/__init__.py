@@ -13,3 +13,4 @@ from .anexo_orcamento import AnexoOrcamento  # noqa: F401
 from .caixa_obra import CaixaObra  # noqa: F401
 from .servico_usuario import ServicoUsuario  # noqa: F401
 from .orcamento_eng_etapa import OrcamentoEngEtapa  # noqa: F401
+from .orcamento_eng_item import OrcamentoEngItem  # noqa: F401
