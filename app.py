@@ -44,6 +44,7 @@ from models.notificacao import Notificacao  # noqa: F401
 from models.pagamento_servico import PagamentoServico  # noqa: F401
 from models.lancamento import Lancamento  # noqa: F401
 from models.orcamento import Orcamento  # noqa: F401
+from models.nota_fiscal import NotaFiscal  # noqa: F401
 logger = logging.getLogger(__name__)
 
 logger.info("--- [LOG] Iniciando app.py (VERSÃO COM DEBUG COMPLETO - KPIs v4) ---")
@@ -1117,27 +1118,7 @@ class AnexoOrcamento(db.Model):
             "mimetype": self.mimetype
         }
 
-class NotaFiscal(db.Model):
-    __tablename__ = 'nota_fiscal'
-    id = db.Column(db.Integer, primary_key=True)
-    obra_id = db.Column(db.Integer, db.ForeignKey('obra.id'), nullable=False)
-    
-    filename = db.Column(db.String(255), nullable=False)
-    mimetype = db.Column(db.String(100), nullable=False)
-    data = db.Column(db.LargeBinary, nullable=False)
-    
-    item_id = db.Column(db.Integer, nullable=False)
-    item_type = db.Column(db.String(50), nullable=False)
-    
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "obra_id": self.obra_id,
-            "filename": self.filename,
-            "mimetype": self.mimetype,
-            "item_id": self.item_id,
-            "item_type": self.item_type
-        }
+
 
 # --- MODELOS DO CRONOGRAMA FINANCEIRO ---
 class PagamentoFuturo(db.Model):
