@@ -71,6 +71,12 @@ def run_auto_migration():
             cur.execute("ALTER TABLE obra ADD COLUMN concluida BOOLEAN DEFAULT FALSE;")
             logger.info("✅ Coluna concluida adicionada em obra")
 
+        # 2.7 Adicionar coluna arquivada na tabela obra
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'obra' AND column_name = 'arquivada';")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE obra ADD COLUMN arquivada BOOLEAN NOT NULL DEFAULT FALSE;")
+            logger.info("✅ Coluna arquivada adicionada em obra")
+
         # =================================================================
         # 3. CORREÇÃO DO ERRO DE FOREIGN KEY (CRÍTICO)
         # Verificar se a tabela parcela_individual existe E se a FK está correta

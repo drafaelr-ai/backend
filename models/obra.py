@@ -6,6 +6,7 @@ class Obra(db.Model):
     nome = db.Column(db.String(150), nullable=False)
     cliente = db.Column(db.String(150))
     concluida = db.Column(db.Boolean, default=False, nullable=False)  # NOVO: Marca obra como concluída
+    arquivada = db.Column(db.Boolean, nullable=False, default=False)
     bdi = db.Column(db.Float, default=0)  # BDI do orçamento de engenharia (%)
     area = db.Column(db.Float, nullable=True)  # Área da obra em m²
     lancamentos = db.relationship('Lancamento', backref='obra', lazy=True, cascade="all, delete-orphan")
@@ -31,6 +32,7 @@ class Obra(db.Model):
             "nome": self.nome,
             "cliente": self.cliente,
             "concluida": self.concluida if hasattr(self, 'concluida') else False,
+            "arquivada": self.arquivada if hasattr(self, 'arquivada') else False,
             "bdi": bdi_val,
             "area": area_val
         }

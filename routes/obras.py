@@ -232,9 +232,15 @@ def get_obras():
             servicos_orcamento_sum, Obra.id == servicos_orcamento_sum.c.obra_id
         )
 
-        # 7. Filtra permissões E status de conclusão
+        # 7. Filtra permissões E status de conclusão/arquivamento
         mostrar_concluidas = request.args.get('mostrar_concluidas', 'false').lower() == 'true'
-        
+        incluir_arquivadas = request.args.get('incluir_arquivadas', 'false').lower() == 'true'
+
+        if not incluir_arquivadas:
+            obras_query = obras_query.filter(
+                db.or_(Obra.arquivada == False, Obra.arquivada.is_(None))
+            )
+
         if user.role == 'administrador':
             if mostrar_concluidas:
                 obras_com_totais = obras_query.order_by(Obra.nome).all()
@@ -291,6 +297,7 @@ def get_obras():
                 "nome": obra.nome,
                 "cliente": obra.cliente,
                 "concluida": obra.concluida or False,
+                "arquivada": obra.arquivada or False,
                 "orcamento_total": orcamento_total,
                 "total_pago": total_pago,
                 "liberado_pagamento": liberado_pagamento,
@@ -962,6 +969,78 @@ def concluir_obra(obra_id):
         logger.error(f"--- [ERRO] /obras/{obra_id}/concluir: {str(e)}\n{error_details} ---")
         return jsonify({"erro": str(e)}), 500
 
+
+
+@obras_bp.route('/obras/<int:obra_id>/arquivar', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def arquivar_obra(obra_id):
+    """Arquiva uma obra (arquivada=True)."""
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    logger.info(f"--- [LOG] Rota /obras/{obra_id}/arquivar (PATCH) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+
+        if obra.arquivada:
+            return jsonify({"erro": "Obra já está arquivada"}), 400
+
+        obra.arquivada = True
+        db.session.commit()
+
+        logger.info(f"Obra {obra_id} arquivada pelo usuário {user.id}")
+        return jsonify({
+            "mensagem": "Obra arquivada com sucesso",
+            "obra_id": obra_id,
+            "arquivada": True
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"--- [ERRO] /obras/{obra_id}/arquivar: {str(e)} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
+@obras_bp.route('/obras/<int:obra_id>/desarquivar', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def desarquivar_obra(obra_id):
+    """Desarquiva uma obra (arquivada=False)."""
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    logger.info(f"--- [LOG] Rota /obras/{obra_id}/desarquivar (PATCH) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+
+        if not obra.arquivada:
+            return jsonify({"erro": "Obra não está arquivada"}), 400
+
+        obra.arquivada = False
+        db.session.commit()
+
+        logger.info(f"Obra {obra_id} desarquivada pelo usuário {user.id}")
+        return jsonify({
+            "mensagem": "Obra desarquivada com sucesso",
+            "obra_id": obra_id,
+            "arquivada": False
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"--- [ERRO] /obras/{obra_id}/desarquivar: {str(e)} ---")
+        return jsonify({"erro": str(e)}), 500
 
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
