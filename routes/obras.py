@@ -307,9 +307,8 @@ def get_obras():
         return jsonify(resultados)
 
     except Exception as e:
-        error_details = traceback.format_exc()
-        logger.error(f"--- [ERRO] /obras (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        logger.exception("--- [ERRO] /obras (GET): falha ao listar obras ---")
+        return jsonify({"erro": "Erro ao listar obras", "detalhe": str(e)}), 500
 # --- FIM DA ROTA ---
 
 
