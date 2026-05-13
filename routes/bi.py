@@ -154,8 +154,8 @@ def bi_historico_mensal():
                 meses[mes_key]['qtd'] += 1
 
         for ps in pagamentos_servico:
-            if ps.data_pagamento:
-                mes_key = ps.data_pagamento.strftime('%Y-%m')
+            if ps.data:
+                mes_key = ps.data.strftime('%Y-%m')
                 if mes_key not in meses:
                     meses[mes_key] = {'mes': mes_key, 'total': 0, 'qtd': 0, 'mao_obra': 0, 'material': 0}
                 meses[mes_key]['total'] += ps.valor_pago or 0
