@@ -14,9 +14,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar o app
-COPY app.py .
-COPY fonts/ ./fonts/
+# Copiar o app e todos os módulos Python
+COPY . .
 
 EXPOSE 8080
 

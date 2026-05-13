@@ -12,28 +12,9 @@ Write-Host "=============================================" -ForegroundColor Cyan
 # PARTE 1 — OBRALY PRINCIPAL (obraly-api)
 # -------------------------------------------------------
 Write-Host ""
-Write-Host "--- [1/2] Preparando Obraly Principal ---" -ForegroundColor Yellow
+Write-Host "--- [1/2] Deployando Obraly Principal ---" -ForegroundColor Yellow
 
-# Criar pasta de deploy
-New-Item -ItemType Directory -Force -Path ".\fly-deploy\obraly-api" | Out-Null
-
-# Copiar arquivos necessários
-Copy-Item ".\app.py"          ".\fly-deploy\obraly-api\app.py" -Force
-Copy-Item ".\requirements.txt" ".\fly-deploy\obraly-api\requirements.txt" -Force
-Copy-Item ".\Dockerfile.obraly" ".\fly-deploy\obraly-api\Dockerfile" -Force
-Copy-Item ".\fly.obraly.toml"   ".\fly-deploy\obraly-api\fly.toml" -Force
-
-# Copiar pasta fonts (necessária para PDF)
-if (Test-Path ".\fonts") {
-    Copy-Item ".\fonts" ".\fly-deploy\obraly-api\fonts" -Recurse -Force
-}
-
-Write-Host "✓ Arquivos copiados" -ForegroundColor Green
-
-# Entrar na pasta e fazer deploy
-Set-Location ".\fly-deploy\obraly-api"
-
-Write-Host "Criando app no Fly.io..." -ForegroundColor Yellow
+Write-Host "Criando app no Fly.io (se não existir)..." -ForegroundColor Yellow
 fly apps create obraly-api --org personal 2>$null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "App já existe, continuando..." -ForegroundColor DarkYellow
@@ -59,7 +40,7 @@ if ($ANTHROPIC -ne "") {
 }
 
 Write-Host "Fazendo deploy do Obraly principal..." -ForegroundColor Yellow
-fly deploy --app obraly-api --wait-timeout 120
+fly deploy --app obraly-api --config fly.obraly.toml --dockerfile Dockerfile.obraly --wait-timeout 120
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
@@ -68,8 +49,6 @@ if ($LASTEXITCODE -eq 0) {
 } else {
     Write-Host "❌ Erro no deploy. Veja os logs: fly logs --app obraly-api" -ForegroundColor Red
 }
-
-Set-Location "..\..\"
 
 # -------------------------------------------------------
 # PARTE 2 — OBRALY ADMIN (obraly-admin-api)
