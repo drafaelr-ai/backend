@@ -24,7 +24,7 @@ def bi_vencimentos():
         if user.role == 'master':
             obras_ids = [o.id for o in Obra.query.all()]
         else:
-            obras_ids = [o.id for o in user.obras]
+            obras_ids = [o.id for o in user.obras_permitidas]
 
         hoje = date.today()
 
@@ -106,7 +106,7 @@ def bi_historico_mensal():
         if user.role == 'master':
             obras_ids = [o.id for o in Obra.query.all()]
         else:
-            obras_ids = [o.id for o in user.obras]
+            obras_ids = [o.id for o in user.obras_permitidas]
 
         logger.info(f"[BI HISTORICO] Buscando para {len(obras_ids)} obras")
 
@@ -204,7 +204,7 @@ def bi_projecao():
         if user.role == 'master':
             obras_ids = [o.id for o in Obra.query.all()]
         else:
-            obras_ids = [o.id for o in user.obras]
+            obras_ids = [o.id for o in user.obras_permitidas]
 
         hoje = date.today()
 
