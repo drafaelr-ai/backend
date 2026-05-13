@@ -16,6 +16,7 @@ from sqlalchemy.orm import joinedload
 
 from extensions import db
 from models.obra import Obra
+from models.user import user_obra_association
 from models.servico import Servico
 from models.servico_usuario import ServicoUsuario
 from models.servico_base import ServicoBase
