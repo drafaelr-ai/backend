@@ -10,10 +10,12 @@ Data: 2026
 ===================================================================================
 """
 
+import logging
 import os
-import traceback
 from datetime import datetime, date, timedelta
 from functools import wraps
+
+from logging_setup import setup_logging
 
 from flask import Flask, request, jsonify, make_response
 from flask_sqlalchemy import SQLAlchemy
@@ -56,6 +58,9 @@ jwt = JWTManager(app)
 # CORS - Permitir todas as origens
 CORS(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
 
+setup_logging()
+logger = logging.getLogger('app_admin')
+
 @app.after_request
 def apply_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
@@ -63,8 +68,8 @@ def apply_cors_headers(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
     return response
 
-print(f"--- [ADMIN] Backend iniciado ---")
-print(f"--- [ADMIN] Database: {DATABASE_URL[:50]}... ---")
+logger.info("Backend iniciado")
+logger.info(f"Database: {DATABASE_URL[:50]}...")
 
 # ===================================================================================
 # MODELOS DE DADOS
@@ -259,7 +264,7 @@ def get_current_user():
         user_id = get_jwt_identity()
         if user_id:
             return Usuario.query.get(int(user_id))
-    except:
+    except Exception:
         pass
     return None
 
@@ -298,7 +303,7 @@ def criar_categorias_padrao():
             db.session.add(categoria)
     
     db.session.commit()
-    print("--- [ADMIN] Categorias padrão criadas/verificadas ---")
+    logger.info("Categorias padrão criadas/verificadas")
 
 
 # ===================================================================================
@@ -341,7 +346,7 @@ def init_db():
             admin.set_password('admin123')
             db.session.add(admin)
             db.session.commit()
-            print("--- [ADMIN] Usuário admin criado (senha: admin123) ---")
+            logger.info("Usuário admin criado (senha: admin123)")
         
         return jsonify({
             'status': 'success',
@@ -350,8 +355,7 @@ def init_db():
             'usuarios': Usuario.query.count()
         })
     except Exception as e:
-        print(f"[ADMIN] Erro ao inicializar DB: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro ao inicializar DB: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
@@ -367,9 +371,11 @@ def login():
     
     try:
         dados = request.get_json()
+        if not dados:
+            return jsonify({'erro': 'JSON inválido'}), 400
         username = dados.get('username', '').strip()
         password = dados.get('password', '')
-        
+
         if not username or not password:
             return jsonify({'erro': 'Usuário e senha são obrigatórios'}), 400
         
@@ -384,16 +390,15 @@ def login():
         # Gerar token
         access_token = create_access_token(identity=str(usuario.id))
         
-        print(f"--- [ADMIN] Login: {username} ---")
-        
+        logger.info(f"Login: {username}")
+
         return jsonify({
             'access_token': access_token,
             'user': usuario.to_dict()
         })
-        
+
     except Exception as e:
-        print(f"[ADMIN] Erro no login: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro no login: {e}")
         return jsonify({'erro': 'Erro interno no servidor'}), 500
 
 
@@ -436,7 +441,7 @@ def register():
         db.session.add(usuario)
         db.session.commit()
         
-        print(f"--- [ADMIN] Novo usuário registrado: {username} ---")
+        logger.info(f"Novo usuário registrado: {username}")
         
         return jsonify({
             'message': 'Usuário criado com sucesso',
@@ -445,8 +450,7 @@ def register():
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ADMIN] Erro no registro: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro no registro: {e}")
         return jsonify({'erro': 'Erro interno no servidor'}), 500
 
 
@@ -509,7 +513,7 @@ def criar_usuario():
         db.session.add(usuario)
         db.session.commit()
         
-        print(f"--- [ADMIN] Usuário criado por {user.username}: {username} ({role}) ---")
+        logger.info(f"Usuário criado por {user.username}: {username} ({role})")
         
         return jsonify({
             'message': 'Usuário criado com sucesso',
@@ -518,7 +522,7 @@ def criar_usuario():
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ADMIN] Erro ao criar usuário: {e}")
+        logger.exception(f"Erro ao criar usuário: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -583,7 +587,7 @@ def deletar_usuario(usuario_id):
         usuario.ativo = False
         db.session.commit()
         
-        print(f"--- [ADMIN] Usuário desativado: {usuario.username} ---")
+        logger.info(f"Usuário desativado: {usuario.username}")
         
         return jsonify({'message': 'Usuário desativado com sucesso'})
         
@@ -612,7 +616,7 @@ def reset_senha_usuario(usuario_id):
         usuario.set_password(nova_senha)
         db.session.commit()
         
-        print(f"--- [ADMIN] Senha resetada para usuário: {usuario.username} ---")
+        logger.info(f"Senha resetada para usuário: {usuario.username}")
         
         return jsonify({'message': 'Senha alterada com sucesso'})
         
@@ -726,14 +730,13 @@ def criar_imovel():
         db.session.add(imovel)
         db.session.commit()
         
-        print(f"--- [ADMIN] Imóvel criado: {imovel.nome} (user: {user.username}) ---")
+        logger.info(f"Imóvel criado: {imovel.nome} (user: {user.username})")
         
         return jsonify(imovel.to_dict()), 201
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ADMIN] Erro ao criar imóvel: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro ao criar imóvel: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -779,13 +782,13 @@ def atualizar_imovel(imovel_id):
         
         db.session.commit()
         
-        print(f"--- [ADMIN] Imóvel atualizado: {imovel.nome} ---")
+        logger.info(f"Imóvel atualizado: {imovel.nome}")
         
         return jsonify(imovel.to_dict())
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ADMIN] Erro ao atualizar imóvel: {e}")
+        logger.exception(f"Erro ao atualizar imóvel: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -804,7 +807,7 @@ def deletar_imovel(imovel_id):
         imovel.ativo = False
         db.session.commit()
         
-        print(f"--- [ADMIN] Imóvel desativado: {imovel.nome} ---")
+        logger.info(f"Imóvel desativado: {imovel.nome}")
         
         return jsonify({'message': 'Imóvel removido com sucesso'})
         
@@ -957,7 +960,7 @@ def criar_lancamento():
         
         db.session.commit()
         
-        print(f"--- [ADMIN] {len(lancamentos_criados)} lançamento(s) criado(s): {dados.get('descricao')} ---")
+        logger.info(f"{len(lancamentos_criados)} lançamento(s) criado(s): {dados.get('descricao')}")
         
         if len(lancamentos_criados) == 1:
             return jsonify(lancamentos_criados[0].to_dict()), 201
@@ -969,8 +972,7 @@ def criar_lancamento():
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ADMIN] Erro ao criar lançamento: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro ao criar lançamento: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1036,8 +1038,7 @@ def alertas_vencimento():
         })
         
     except Exception as e:
-        print(f"[ADMIN] Erro ao buscar alertas: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro ao buscar alertas: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1085,7 +1086,7 @@ def atualizar_lancamento(lancamento_id):
         
         db.session.commit()
         
-        print(f"--- [ADMIN] Lançamento {lancamento_id} atualizado ---")
+        logger.info(f"Lançamento {lancamento_id} atualizado")
         
         return jsonify(lancamento.to_dict())
         
@@ -1174,7 +1175,7 @@ def upload_comprovante(lancamento_id):
         lancamento.comprovante_url = comprovante_base64
         db.session.commit()
         
-        print(f"--- [ADMIN] Comprovante salvo para lançamento {lancamento_id} ---")
+        logger.info(f"Comprovante salvo para lançamento {lancamento_id}")
         
         return jsonify({
             'message': 'Comprovante salvo com sucesso',
@@ -1183,7 +1184,7 @@ def upload_comprovante(lancamento_id):
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ADMIN] Erro ao salvar comprovante: {e}")
+        logger.exception(f"Erro ao salvar comprovante: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1344,8 +1345,7 @@ def dashboard():
         })
         
     except Exception as e:
-        print(f"[ADMIN] Erro no dashboard: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro no dashboard: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1397,7 +1397,7 @@ def importar_obra():
         db.session.add(imovel)
         db.session.commit()
         
-        print(f"--- [ADMIN] Obra importada como imóvel: {imovel.nome} (obra_id: {obra_id}) ---")
+        logger.info(f"Obra importada como imóvel: {imovel.nome} (obra_id: {obra_id})")
         
         return jsonify({
             'message': 'Obra importada com sucesso',
@@ -1406,8 +1406,7 @@ def importar_obra():
         
     except Exception as e:
         db.session.rollback()
-        print(f"[ADMIN] Erro ao importar obra: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro ao importar obra: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1520,7 +1519,7 @@ def extrair_dados_boleto_pdf_admin(pdf_base64):
                         if valor > 0:
                             boleto['valor'] = valor
                             break
-                    except:
+                    except Exception:
                         pass
 
                 # Extrair data de vencimento
@@ -1535,7 +1534,7 @@ def extrair_dados_boleto_pdf_admin(pdf_base64):
                             datas_futuras.append(d)
                         else:
                             datas_passadas.append(d)
-                    except:
+                    except Exception:
                         pass
                 if datas_futuras:
                     boleto['data_vencimento'] = min(datas_futuras).isoformat()
@@ -1565,8 +1564,7 @@ def extrair_dados_boleto_pdf_admin(pdf_base64):
             return {'sucesso': True, 'multiplos': True, 'quantidade': len(boletos_encontrados), 'boletos': boletos_encontrados, 'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
 
     except Exception as e:
-        print(f"[ADMIN] Erro ao extrair PDF: {e}")
-        traceback.print_exc()
+        logger.exception(f"Erro ao extrair PDF: {e}")
         return {'sucesso': False, 'multiplos': False, 'quantidade': 0, 'boletos': [], 'codigo_barras': None, 'data_vencimento': None, 'valor': None, 'beneficiario': None}
 
 
@@ -1599,7 +1597,7 @@ def listar_boletos_admin(imovel_id):
 
         return jsonify([b.to_dict() for b in boletos])
     except Exception as e:
-        traceback.print_exc()
+        logger.exception(f"Erro ao listar boletos: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1637,11 +1635,11 @@ def criar_boleto_admin(imovel_id):
         )
         db.session.add(boleto)
         db.session.commit()
-        print(f"--- [ADMIN] Boleto criado: {boleto.id} no imóvel {imovel_id} ---")
+        logger.info(f"Boleto criado: {boleto.id} no imóvel {imovel_id}")
         return jsonify(boleto.to_dict()), 201
     except Exception as e:
         db.session.rollback()
-        traceback.print_exc()
+        logger.exception(f"Erro ao criar boleto: {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1661,7 +1659,7 @@ def extrair_pdf_boleto_admin(imovel_id):
         resultado = extrair_dados_boleto_pdf_admin(pdf_base64)
         return jsonify(resultado)
     except Exception as e:
-        traceback.print_exc()
+        logger.exception(f"Erro ao extrair PDF (rota): {e}")
         return jsonify({'erro': str(e)}), 500
 
 
@@ -1768,7 +1766,7 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
         criar_categorias_padrao()
-        print("--- [ADMIN] Tabelas criadas ---")
+        logger.info("Tabelas criadas")
     
     port = int(os.environ.get('PORT', 5001))
     app.run(host='0.0.0.0', port=port, debug=True)
