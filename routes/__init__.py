@@ -8,3 +8,6 @@ from routes.caixa import caixa_bp  # noqa: F401
 from routes.servicos import servicos_bp  # noqa: F401
 from routes.boletos import boletos_bp  # noqa: F401
 from routes.lancamentos import lancamentos_bp  # noqa: F401
+from routes.cronograma import cronograma_bp  # noqa: F401
+from routes.orcamento_eng import orcamento_eng_bp  # noqa: F401
+from routes.obras import obras_bp  # noqa: F401
