@@ -370,9 +370,9 @@ def login():
         return make_response(jsonify({}), 200)
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         if not dados:
-            return jsonify({'erro': 'JSON inválido'}), 400
+            return jsonify({'erro': 'JSON inválido ou ausente'}), 400
         username = dados.get('username', '').strip()
         password = dados.get('password', '')
 
@@ -409,7 +409,7 @@ def register():
         return make_response(jsonify({}), 200)
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         username = dados.get('username', '').strip()
         password = dados.get('password', '')
@@ -479,7 +479,7 @@ def criar_usuario():
         return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         username = dados.get('username', '').strip()
         password = dados.get('password', '')
@@ -537,7 +537,7 @@ def atualizar_usuario(usuario_id):
     usuario = Usuario.query.get_or_404(usuario_id)
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         if dados.get('nome'):
             usuario.nome = dados['nome'].strip()
@@ -607,7 +607,7 @@ def reset_senha_usuario(usuario_id):
     usuario = Usuario.query.get_or_404(usuario_id)
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         nova_senha = dados.get('nova_senha', '')
         
         if len(nova_senha) < 6:
@@ -710,7 +710,7 @@ def criar_imovel():
         return jsonify({'erro': 'Não autorizado'}), 401
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         imovel = Imovel(
             usuario_id=user.id,
@@ -766,7 +766,7 @@ def atualizar_imovel(imovel_id):
         return jsonify({'erro': 'Acesso negado'}), 403
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         imovel.nome = dados.get('nome', imovel.nome)
         imovel.tipo = dados.get('tipo', imovel.tipo)
@@ -868,7 +868,7 @@ def criar_lancamento():
         return jsonify({'erro': 'Não autorizado'}), 401
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         # Verificar se o imóvel pertence ao usuário
         imovel = Imovel.query.get(dados.get('imovel_id'))
@@ -1054,7 +1054,7 @@ def atualizar_lancamento(lancamento_id):
         return jsonify({'erro': 'Acesso negado'}), 403
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         lancamento.categoria_id = dados.get('categoria_id', lancamento.categoria_id)
         lancamento.descricao = dados.get('descricao', lancamento.descricao)
@@ -1129,7 +1129,7 @@ def marcar_pago(lancamento_id):
         return jsonify({'erro': 'Acesso negado'}), 403
     
     try:
-        dados = request.get_json() or {}
+        dados = request.get_json(silent=True) or {}
         
         lancamento.status = 'pago'
         lancamento.data_pagamento = date.fromisoformat(dados.get('data_pagamento', date.today().isoformat()))
@@ -1159,7 +1159,7 @@ def upload_comprovante(lancamento_id):
         return jsonify({'erro': 'Acesso negado'}), 403
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         if not dados.get('comprovante_base64'):
             return jsonify({'erro': 'Comprovante não enviado'}), 400
@@ -1365,7 +1365,7 @@ def importar_obra():
         return jsonify({'erro': 'Não autorizado'}), 401
     
     try:
-        dados = request.get_json()
+        dados = request.get_json(silent=True)
         
         # Verificar se já foi importado
         obra_id = dados.get('obra_id')
@@ -1612,7 +1612,7 @@ def criar_boleto_admin(imovel_id):
         return jsonify({'erro': 'Acesso negado'}), 403
 
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data.get('descricao') or not data.get('valor') or not data.get('data_vencimento'):
             return jsonify({'erro': 'Descrição, valor e data de vencimento são obrigatórios'}), 400
 
@@ -1650,7 +1650,7 @@ def extrair_pdf_boleto_admin(imovel_id):
     if not user:
         return jsonify({'erro': 'Não autorizado'}), 401
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         pdf_base64 = data.get('arquivo_base64', '')
         if ',' in pdf_base64:
             pdf_base64 = pdf_base64.split(',')[1]
@@ -1671,7 +1671,7 @@ def editar_boleto_admin(imovel_id, boleto_id):
     if user.role != 'admin' and boleto.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True)
         for campo in ['descricao', 'beneficiario', 'codigo_barras', 'status']:
             if campo in data:
                 setattr(boleto, campo, data[campo])
@@ -1694,7 +1694,7 @@ def pagar_boleto_admin(imovel_id, boleto_id):
     if user.role != 'admin' and boleto.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         boleto.status = 'Pago'
         boleto.data_pagamento = datetime.strptime(
             data.get('data_pagamento', date.today().isoformat()), '%Y-%m-%d'
