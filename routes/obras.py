@@ -1043,6 +1043,50 @@ def desarquivar_obra(obra_id):
         return jsonify({"erro": str(e)}), 500
 
 
+@obras_bp.route('/obras/<int:obra_id>', methods=['PATCH', 'OPTIONS'])
+@jwt_required()
+def atualizar_obra(obra_id):
+    """Atualiza campos editáveis da obra (nome, cliente, area)."""
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    logger.info(f"--- [LOG] Rota /obras/{obra_id} (PATCH) acessada ---")
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada"}), 404
+
+        dados = request.get_json(silent=True) or {}
+
+        if 'nome' in dados:
+            nome = (dados['nome'] or '').strip()
+            if not nome:
+                return jsonify({"erro": "Nome não pode ficar vazio"}), 400
+            obra.nome = nome
+
+        if 'cliente' in dados:
+            obra.cliente = (dados['cliente'] or '').strip() or None
+
+        if 'area' in dados:
+            try:
+                obra.area = float(dados['area']) if dados['area'] not in (None, '') else None
+            except (ValueError, TypeError):
+                return jsonify({"erro": "Área inválida"}), 400
+
+        db.session.commit()
+        logger.info(f"Obra {obra_id} atualizada pelo usuário {user.id}")
+        return jsonify({"mensagem": "Obra atualizada com sucesso", "obra": obra.to_dict()}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"--- [ERRO] /obras/{obra_id} (PATCH): {str(e)} ---")
+        return jsonify({"erro": str(e)}), 500
+
+
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
 # @obras_bp.route('/servicos/<int:servico_id>/pagamentos', methods=['POST', 'OPTIONS'])
 # @check_permission(roles=['administrador', 'master']) 
