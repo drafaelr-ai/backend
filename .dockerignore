@@ -16,8 +16,6 @@ fly.admin.toml
 fly.obraly.toml
 Dockerfile.admin
 Dockerfile.obraly
-requirements_admin.txt
-app_admin.py
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

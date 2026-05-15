@@ -10,7 +10,15 @@ RUN apt-get update && apt-get install -y \
 COPY requirements_admin.txt .
 RUN pip install --no-cache-dir -r requirements_admin.txt
 
+# Factory pattern — copy all admin modules
 COPY app_admin.py .
+COPY auto_migration_admin.py .
+COPY config_admin.py .
+COPY extensions_admin.py .
+COPY logging_setup.py .
+COPY services_admin/ ./services_admin/
+COPY models_admin/ ./models_admin/
+COPY routes_admin/ ./routes_admin/
 
 EXPOSE 8080
 
