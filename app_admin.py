@@ -6,6 +6,7 @@ from flask import Flask
 from config_admin import DevelopmentConfig, ProductionConfig
 from extensions_admin import db, jwt, cors, apply_cors_headers
 from logging_setup import setup_logging
+from auto_migration_admin import run_auto_migration_admin
 from routes_admin import (
     health_bp,
     auth_admin_bp,
@@ -54,6 +55,9 @@ def create_app(config=None):
     app.register_blueprint(boletos_admin_bp)
 
     logger.info(f"app_admin: {len(list(app.url_map.iter_rules()))} rotas registradas")
+
+    with app.app_context():
+        run_auto_migration_admin()
 
     return app
 

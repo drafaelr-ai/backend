@@ -22,7 +22,7 @@ def bi_vencimentos():
     try:
         user = get_current_user()
         if user.role == 'master':
-            obras_ids = [o.id for o in Obra.query.all()]
+            obras_ids = [r[0] for r in Obra.query.with_entities(Obra.id).all()]
         else:
             obras_ids = [o.id for o in user.obras_permitidas]
 
@@ -104,7 +104,7 @@ def bi_historico_mensal():
     try:
         user = get_current_user()
         if user.role == 'master':
-            obras_ids = [o.id for o in Obra.query.all()]
+            obras_ids = [r[0] for r in Obra.query.with_entities(Obra.id).all()]
         else:
             obras_ids = [o.id for o in user.obras_permitidas]
 
@@ -202,7 +202,7 @@ def bi_projecao():
     try:
         user = get_current_user()
         if user.role == 'master':
-            obras_ids = [o.id for o in Obra.query.all()]
+            obras_ids = [r[0] for r in Obra.query.with_entities(Obra.id).all()]
         else:
             obras_ids = [o.id for o in user.obras_permitidas]
 

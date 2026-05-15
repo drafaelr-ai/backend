@@ -41,6 +41,19 @@ def listar_lancamentos():
     if ano:
         query = query.filter(extract('year', Lancamento.data_lancamento) == ano)
 
+    page = request.args.get('page', type=int)
+    if page is not None:
+        per_page = min(request.args.get('per_page', 50, type=int), 200)
+        pag = query.order_by(Lancamento.data_lancamento.desc()).paginate(
+            page=page, per_page=per_page, error_out=False
+        )
+        return jsonify({
+            'items': [l.to_dict() for l in pag.items],
+            'total': pag.total,
+            'page': page,
+            'per_page': per_page,
+            'has_next': pag.has_next,
+        })
     lancamentos = query.order_by(Lancamento.data_lancamento.desc()).all()
     return jsonify([l.to_dict() for l in lancamentos])
 
@@ -159,9 +172,9 @@ def alertas_vencimento():
         data_limite = hoje + timedelta(days=dias_alerta)
 
         if user.role == 'admin':
-            imoveis_ids = [i.id for i in Imovel.query.filter_by(ativo=True).all()]
+            imoveis_ids = [r[0] for r in Imovel.query.filter_by(ativo=True).with_entities(Imovel.id).all()]
         else:
-            imoveis_ids = [i.id for i in Imovel.query.filter_by(usuario_id=user.id, ativo=True).all()]
+            imoveis_ids = [r[0] for r in Imovel.query.filter_by(usuario_id=user.id, ativo=True).with_entities(Imovel.id).all()]
 
         lancamentos = Lancamento.query.filter(
             Lancamento.imovel_id.in_(imoveis_ids),

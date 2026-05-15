@@ -468,6 +468,23 @@ def run_auto_migration():
         else:
             logger.info("   ℹ️ Tabela diario_imagens já existe")
 
+        # Fase 5-D: Performance indexes (idempotent — IF NOT EXISTS)
+        logger.debug("Adicionando indexes de performance Fase 5-D...")
+        perf_indexes = [
+            ("idx_perf_lancamento_obra_id",          "lancamento(obra_id)"),
+            ("idx_perf_lancamento_data",              "lancamento(data)"),
+            ("idx_perf_lancamento_status",            "lancamento(status)"),
+            ("idx_perf_pagamento_futuro_obra_id",     "pagamento_futuro(obra_id)"),
+            ("idx_perf_pagamento_futuro_status",      "pagamento_futuro(status)"),
+            ("idx_perf_pagamento_servico_servico_id", "pagamento_servico(servico_id)"),
+            ("idx_perf_parcela_individual_pag_id",   "parcela_individual(pagamento_parcelado_id)"),
+            ("idx_perf_parcela_individual_status",   "parcela_individual(status)"),
+            ("idx_perf_movimentacao_obra_id",         "movimentacao_caixa(obra_id)"),
+        ]
+        for idx_name, idx_def in perf_indexes:
+            cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def};")
+        logger.info(f"Indexes Fase 5-D: {len(perf_indexes)} aplicados (IF NOT EXISTS)")
+
         conn.commit()
         cur.close()
         conn.close()
