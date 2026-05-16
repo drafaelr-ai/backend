@@ -19,7 +19,8 @@ from models.nota_fiscal import NotaFiscal
 from models.orcamento_eng_etapa import OrcamentoEngEtapa
 from models.orcamento_eng_item import OrcamentoEngItem
 from models.cronograma_etapa import CronogramaEtapa
-from services import get_current_user, check_permission
+from models.cronograma_obra import CronogramaObra
+from services import get_current_user, check_permission, user_has_access_to_obra
 
 logger = logging.getLogger(__name__)
 
