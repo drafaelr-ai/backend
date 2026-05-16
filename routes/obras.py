@@ -1,4 +1,4 @@
-import io
+﻿import io
 import re
 import json
 import csv
@@ -2109,8 +2109,7 @@ def export_csv(obra_id):
     # ... (código atualizado para valor_total/valor_pago) ...
     if request.method == 'OPTIONS': return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     logger.info(f"--- [LOG] Rota /export/csv (GET) para obra_id={obra_id} ---")
-    try:
-        verify_jwt_in_request() 
+    try: 
         user = get_current_user()
         if not user or not user_has_access_to_obra(user, obra_id):
            logger.warning(f"--- [AVISO] Tentativa de export CSV sem permissão ou token (obra_id={obra_id}) ---")

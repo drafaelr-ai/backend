@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import traceback
 from datetime import datetime
 
@@ -350,7 +350,6 @@ def migrar_pagamentos_antigos():
     
     try:
         # Garantir que está autenticado
-        verify_jwt_in_request()
         
         # Verificar se é administrador
         current_user = get_current_user()
@@ -933,7 +932,6 @@ def sincronizar_cronograma_orcamento(cronograma_id):
         return response
     
     try:
-        verify_jwt_in_request()
         user = get_current_user()
         
         cronograma = CronogramaObra.query.get(cronograma_id)
@@ -1007,7 +1005,6 @@ def vincular_cronograma_orcamento(cronograma_id):
         return response
     
     try:
-        verify_jwt_in_request()
         user = get_current_user()
         
         cronograma = CronogramaObra.query.get(cronograma_id)
