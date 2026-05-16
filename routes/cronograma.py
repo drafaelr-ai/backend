@@ -1,4 +1,4 @@
-import io
+﻿import io
 import base64
 import calendar
 import logging
@@ -2271,7 +2271,6 @@ def create_cronograma():
     
     try:
         # Verificar autenticação
-        verify_jwt_in_request()
         current_user = get_current_user()
         if not current_user:
             return jsonify({'error': 'Usuário não autenticado'}), 401
@@ -2463,7 +2462,6 @@ def delete_cronograma(cronograma_id):
     
     try:
         # Verificar autenticação
-        verify_jwt_in_request()
         current_user = get_current_user()
         if not current_user:
             return jsonify({'error': 'Usuário não autenticado'}), 401
@@ -2640,7 +2638,6 @@ def create_etapa_cronograma(cronograma_id):
         return response
     
     try:
-        verify_jwt_in_request()
         current_user = get_current_user()
         if not current_user:
             return jsonify({'error': 'Usuário não autenticado'}), 401
@@ -2820,7 +2817,6 @@ def update_etapa_cronograma(cronograma_id, etapa_id):
         return response
     
     try:
-        verify_jwt_in_request()
         current_user = get_current_user()
         if not current_user:
             return jsonify({'error': 'Usuário não autenticado'}), 401
@@ -2890,7 +2886,6 @@ def delete_etapa_cronograma(cronograma_id, etapa_id):
         return response
     
     try:
-        verify_jwt_in_request()
         current_user = get_current_user()
         if not current_user:
             return jsonify({'error': 'Usuário não autenticado'}), 401
@@ -2932,7 +2927,6 @@ def reordenar_etapas_cronograma(cronograma_id):
         return response
     
     try:
-        verify_jwt_in_request()
         current_user = get_current_user()
         if not current_user:
             return jsonify({'error': 'Usuário não autenticado'}), 401
@@ -3060,7 +3054,6 @@ def importar_orcamento_para_cronograma(obra_id):
         return response
     
     try:
-        verify_jwt_in_request()
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
