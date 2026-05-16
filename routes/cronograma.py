@@ -2380,15 +2380,17 @@ def update_cronograma(cronograma_id):
         
         # PLANEJAMENTO (datas previstas)
         if 'data_inicio' in data:
-            try:
-                item.data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
-            except ValueError:
-                return jsonify({'error': 'Formato de data_inicio inválido'}), 400
+            if data['data_inicio']:
+                try:
+                    item.data_inicio = datetime.strptime(data['data_inicio'], '%Y-%m-%d').date()
+                except (ValueError, TypeError):
+                    return jsonify({'error': 'Formato de data_inicio inválido'}), 400
         if 'data_fim_prevista' in data:
-            try:
-                item.data_fim_prevista = datetime.strptime(data['data_fim_prevista'], '%Y-%m-%d').date()
-            except ValueError:
-                return jsonify({'error': 'Formato de data_fim_prevista inválido'}), 400
+            if data['data_fim_prevista']:
+                try:
+                    item.data_fim_prevista = datetime.strptime(data['data_fim_prevista'], '%Y-%m-%d').date()
+                except (ValueError, TypeError):
+                    return jsonify({'error': 'Formato de data_fim_prevista inválido'}), 400
         
         # EXECUÇÃO REAL (datas reais e percentual)
         if 'data_inicio_real' in data:
