@@ -2357,14 +2357,12 @@ def update_cronograma(cronograma_id):
         return response
     
     try:
-        # Verificar autenticação
-        verify_jwt_in_request()
         current_user = get_current_user()
         if not current_user:
             return jsonify({'error': 'Usuário não autenticado'}), 401
-        
+
         data = request.json
-        
+
         item = CronogramaObra.query.get(cronograma_id)
         if not item:
             return jsonify({'error': 'Etapa não encontrada'}), 404
