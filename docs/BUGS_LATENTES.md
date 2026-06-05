@@ -71,3 +71,12 @@ Componentes que chamam APIs sem autenticação (via `window.open` ou `fetch()` d
 A lista de bugs do módulo patrimonial ainda não foi auditada. A Fase 8 começa com auditoria completa de `AppAdmin.js` e `app_admin.py`.
 
 **Item crítico pré-Fase 8:** verificar se o bug de login 500 no admin ainda está presente.
+
+---
+
+## Superlink
+
+| # | ID | Item | Situação |
+|---|---|---|---|
+| 1 | B-01 | **Extração de boleto por PDF-imagem falha silenciosamente** | `extrair_dados_boleto_pdf_admin` retorna `None` quando o PDF é scan/imagem sem camada de texto (pdfplumber não extrai). O campo `codigo_barras` fica vazio no modal Admin e o usuário digita manualmente. Comportamento intencional (fallback documentado), mas poderia ser melhorado com OCR (tesseract) ou um aviso explícito "PDF não reconhecido — insira manualmente". |
+| 2 | B-02 | **Superlink Main não pré-preenche `pix_chave`** | No módulo Main, `pagamento_futuro` e `pagamento_parcelado` têm coluna `codigo_barras` mas não têm `pix_chave` em todos os endpoints. O modal deixa o campo vazio para preenchimento manual. Corrigir no endpoint `/historico-unificado` expondo `pix` de cada tipo de pagamento. |

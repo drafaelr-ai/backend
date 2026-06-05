@@ -1,12 +1,12 @@
 # Roadmap — Obraly
 
-Atualizado em 12/05/2026.
+Atualizado em 05/06/2026.
 
 ---
 
 ## Estado atual
 
-Fases 1–4 e 6 concluídas:
+Fases 1–4, 6 e Superlink concluídas:
 
 | Fase | Status | Conteúdo |
 |---|---|---|
@@ -19,6 +19,7 @@ Fases 1–4 e 6 concluídas:
 | 7 | ⏳ | Acessibilidade (não iniciada) |
 | 8 | ⏳ | Módulo Patrimonial — **PRIORIDADE** |
 | 9 | ⏳ | Cronograma Operacional Integrado |
+| — | ✅ | **Superlink de Pagamento** (fora de fase, entregue 05/06/2026) |
 
 ---
 
@@ -72,7 +73,7 @@ O módulo patrimonial tem dados reais de clientes em produção. Qualquer opera�
 
 #### Features confirmadas pelo usuário
 
-- **Compartilhamento WhatsApp** por imóvel (replica do módulo main)
+- **Superlink de pagamento** por imóvel — ✅ entregue (botão em ModalLancamentosDashboard)
 - **Boletos contextuais** por imóvel
 - **Period selector** no dashboard (acumulado vs. mês atual)
 - **Imóvel cards clicáveis** no dashboard (navegação direta para detalhe)
@@ -108,6 +109,27 @@ A **variância Pago × Executado** é a métrica-chave. A estrutura já existe �
 | 9.4 | AI sugestões: "Pago R$X em categoria Y, marcar etapa Z como N%?" |
 
 **Combinação recomendada:** 9.3 (weekly view mobile) + 9.4 (AI sugestões) — maior redução de fricção.
+
+---
+
+## Superlink de Pagamento — ✅ Entregue (05/06/2026)
+
+Substituiu o compartilhamento individual por WhatsApp por um link permanente de 7 dias.
+
+| Componente | Entregue |
+|---|---|
+| Migration idempotente (`superlink` table, JSONB `itens`) | ✅ |
+| `Superlink` model Main + `SuperlinkAdmin` model Admin | ✅ |
+| `POST /superlink` + `GET /superlink/<token>` (público) | ✅ |
+| `POST /admin/superlink` + `GET /admin/superlink/<token>` (público) | ✅ |
+| Smoke 7/7 PASS + deploy obraly-api v40 + obraly-admin-api | ✅ |
+| Página pública `/pagar/<token>` — PIX + boleto, 410 expired, 404 notfound | ✅ |
+| `GerarSuperlinkModal` (Main) em `HistoricoPagamentosCard` | ✅ |
+| `GerarSuperlinkAdminModal` (Admin) em `ModalLancamentosDashboard` | ✅ |
+
+**Snapshot:** cada link congela descrição, valor, contexto, forma e chave no momento da geração. A rota pública nunca lê models internos.
+
+**Boleto / extração PDF:** `extrair_dados_boleto_pdf_admin` reutilizada no Admin. Quando o PDF é imagem (sem texto extraível), o campo `codigo_barras` fica vazio para digitação manual — comportamento documentado em B-01 de BUGS_LATENTES.
 
 ---
 
