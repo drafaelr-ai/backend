@@ -485,6 +485,30 @@ def run_auto_migration():
             cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def};")
         logger.info(f"Indexes Fase 5-D: {len(perf_indexes)} aplicados (IF NOT EXISTS)")
 
+        # =================================================================
+        # SUPERLINK — tabela de links de pagamento compartilháveis
+        # itens JSONB: [{descricao, valor, contexto, forma, pix_chave, codigo_barras}]
+        # =================================================================
+        cur.execute("SELECT to_regclass('public.superlink');")
+        if not cur.fetchone()[0]:
+            logger.info("📝 Criando tabela superlink...")
+            cur.execute("""
+                CREATE TABLE superlink (
+                    id          SERIAL PRIMARY KEY,
+                    token       VARCHAR(64) NOT NULL UNIQUE,
+                    grupo_id    INTEGER,
+                    titulo      VARCHAR(255) NOT NULL,
+                    itens       JSONB NOT NULL,
+                    valor_total DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    criado_em   TIMESTAMP NOT NULL DEFAULT NOW(),
+                    expira_em   TIMESTAMP NOT NULL
+                );
+                CREATE INDEX idx_superlink_token ON superlink (token);
+            """)
+            logger.info("✅ Tabela superlink criada!")
+        else:
+            logger.info("   ℹ️ Tabela superlink já existe")
+
         conn.commit()
         cur.close()
         conn.close()
