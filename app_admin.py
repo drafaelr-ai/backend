@@ -16,6 +16,7 @@ from routes_admin import (
     dashboard_admin_bp,
     importar_obra_bp,
     boletos_admin_bp,
+    superlink_admin_bp,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ def create_app(config=None):
     app.register_blueprint(dashboard_admin_bp)
     app.register_blueprint(importar_obra_bp)
     app.register_blueprint(boletos_admin_bp)
+    app.register_blueprint(superlink_admin_bp)
 
     logger.info(f"app_admin: {len(list(app.url_map.iter_rules()))} rotas registradas")
 

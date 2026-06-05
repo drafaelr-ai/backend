@@ -7,6 +7,7 @@ from routes_admin.lancamentos_admin import lancamentos_admin_bp
 from routes_admin.dashboard_admin import dashboard_admin_bp
 from routes_admin.importar_obra import importar_obra_bp
 from routes_admin.boletos_admin import boletos_admin_bp
+from routes_admin.superlink_admin import superlink_admin_bp
 
 __all__ = [
     'health_bp',
@@ -18,4 +19,5 @@ __all__ = [
     'dashboard_admin_bp',
     'importar_obra_bp',
     'boletos_admin_bp',
+    'superlink_admin_bp',
 ]

@@ -46,11 +46,12 @@ from models.pagamento_parcelado import PagamentoParcelado # noqa: F401
 from models.cronograma_etapa import CronogramaEtapa   # noqa: F401
 from models.cronograma_obra import CronogramaObra     # noqa: F401
 from models.agenda_demanda import AgendaDemanda       # noqa: F401
+from models.superlink import Superlink                # noqa: F401
 
 from routes import (
     notificacoes_bp, bi_bp, diario_bp, auth_bp, admin_bp, sid_bp,
     caixa_bp, servicos_bp, boletos_bp, lancamentos_bp,
-    cronograma_bp, orcamento_eng_bp, obras_bp,
+    cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
 )
 
 setup_logging()
@@ -141,6 +142,7 @@ def create_app(config_class=Config):
     app.register_blueprint(cronograma_bp)
     app.register_blueprint(orcamento_eng_bp)
     app.register_blueprint(obras_bp)
+    app.register_blueprint(superlink_bp)
 
     return app
 

@@ -11,3 +11,4 @@ from routes.lancamentos import lancamentos_bp  # noqa: F401
 from routes.cronograma import cronograma_bp  # noqa: F401
 from routes.orcamento_eng import orcamento_eng_bp  # noqa: F401
 from routes.obras import obras_bp  # noqa: F401
+from routes.superlink import superlink_bp  # noqa: F401
