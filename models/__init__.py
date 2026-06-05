@@ -23,3 +23,4 @@ from .pagamento_parcelado import PagamentoParcelado  # noqa: F401
 from .cronograma_etapa import CronogramaEtapa  # noqa: F401
 from .cronograma_obra import CronogramaObra  # noqa: F401
 from .agenda_demanda import AgendaDemanda  # noqa: F401
+from .superlink import Superlink  # noqa: F401
