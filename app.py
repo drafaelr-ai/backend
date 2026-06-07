@@ -62,6 +62,9 @@ ALLOWED_ORIGINS = [
     'https://www.obraly.uk',
     'http://localhost:3000',
     'http://localhost:3001',
+    'https://localhost',       # Capacitor Android (androidScheme: https)
+    'capacitor://localhost',   # Capacitor Android (scheme padrão)
+    'ionic://localhost',       # fallback Ionic/Capacitor
 ]
 
 
