@@ -484,6 +484,22 @@ def run_auto_migration():
         else:
             print("   ℹ️ Tabela diario_imagens já existe")
 
+        # Superlink (obras)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS superlink (
+                id SERIAL PRIMARY KEY,
+                token VARCHAR(64) NOT NULL UNIQUE,
+                grupo_id INTEGER,
+                titulo VARCHAR(255) NOT NULL,
+                itens JSONB NOT NULL,
+                refs JSONB,
+                valor_total FLOAT NOT NULL DEFAULT 0,
+                criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+                expira_em TIMESTAMP NOT NULL
+            );
+        """)
+        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_superlink_token ON superlink (token);")
+
         conn.commit()
         cur.close()
         conn.close()
@@ -19383,6 +19399,161 @@ def limpar_dados_teste(obra_id):
             "erro": str(e),
             "traceback": traceback.format_exc()
         }), 500
+
+
+# ==============================================================================
+# SUPERLINK (OBRAS)
+# ==============================================================================
+import secrets as _secrets
+
+class Superlink(db.Model):
+    __tablename__ = 'superlink'
+    id          = db.Column(db.Integer, primary_key=True)
+    token       = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    grupo_id    = db.Column(db.Integer, nullable=True)   # obra_id para queries dinâmicas
+    titulo      = db.Column(db.String(255), nullable=False)
+    itens       = db.Column(db.JSON, nullable=False)
+    refs        = db.Column(db.JSON, nullable=True)
+    valor_total = db.Column(db.Float, nullable=False, default=0)
+    criado_em   = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    expira_em   = db.Column(db.DateTime, nullable=False)
+
+    def is_expirado(self):
+        return datetime.utcnow() > self.expira_em
+
+
+_SL_TABELAS_PERMITIDAS = {'pagamento_futuro', 'boleto', 'parcela_individual'}
+
+
+def _superlink_itens_vivos(grupo_id, refs, itens_snapshot):
+    """Resolve itens ao vivo: boletos por obra_id + lançamentos por refs (filtra pagos)."""
+    resultado = []
+
+    if grupo_id:
+        obra_nome = ''
+        try:
+            r = db.session.execute(db.text("SELECT nome FROM obra WHERE id = :id"), {'id': int(grupo_id)}).fetchone()
+            if r:
+                obra_nome = r[0] or ''
+        except Exception:
+            pass
+        try:
+            rows = db.session.execute(db.text("""
+                SELECT descricao, beneficiario, valor, data_vencimento, codigo_barras
+                FROM boleto
+                WHERE obra_id = :oid AND status != 'Pago'
+                  AND codigo_barras IS NOT NULL AND codigo_barras != ''
+                ORDER BY data_vencimento ASC NULLS LAST
+            """), {'oid': int(grupo_id)}).fetchall()
+            for r in rows:
+                resultado.append({
+                    'descricao':       r[0] or r[1] or 'Boleto',
+                    'valor':           float(r[2] or 0),
+                    'contexto':        obra_nome,
+                    'forma':           'boleto',
+                    'codigo_barras':   r[4],
+                    'data_vencimento': r[3].isoformat() if r[3] else None,
+                })
+        except Exception:
+            pass
+
+    for idx, ref in enumerate(refs or []):
+        if not ref:
+            continue
+        tabela = ref.get('tabela')
+        rid    = ref.get('id')
+        if not tabela or not rid or tabela not in _SL_TABELAS_PERMITIDAS:
+            continue
+        if tabela == 'boleto':
+            continue  # já tratados acima
+        try:
+            row = db.session.execute(db.text(f"SELECT status FROM {tabela} WHERE id = :id"), {'id': int(rid)}).fetchone()
+            if row and str(row[0]).lower() in ('pago', 'cancelado'):
+                continue
+            if idx < len(itens_snapshot or []):
+                resultado.append(dict(itens_snapshot[idx]))
+        except Exception:
+            pass
+
+    if not grupo_id and not resultado:
+        resultado = [i for i in (itens_snapshot or []) if not i.get('pago')]
+
+    return resultado
+
+
+@app.route('/superlink', methods=['POST'])
+@jwt_required()
+def criar_superlink():
+    try:
+        data  = request.get_json() or {}
+        titulo  = (data.get('titulo') or '').strip()
+        itens   = data.get('itens', [])
+        refs    = data.get('refs') or None
+        obra_id = data.get('obra_id')
+
+        if not titulo:
+            return jsonify({'erro': 'titulo obrigatório'}), 400
+        if not itens or not isinstance(itens, list):
+            return jsonify({'erro': 'itens deve ser lista não vazia'}), 400
+        for item in itens:
+            desc  = (item.get('descricao') or '').strip()
+            valor = item.get('valor')
+            forma = (item.get('forma') or '').strip()
+            if not desc or valor is None or not forma:
+                return jsonify({'erro': 'cada item precisa de descricao, valor e forma'}), 400
+            if forma == 'pix' and not (item.get('pix_chave') or '').strip():
+                return jsonify({'erro': f'item "{desc}": forma=pix exige pix_chave'}), 400
+            if forma == 'boleto' and not (item.get('codigo_barras') or '').strip():
+                return jsonify({'erro': f'item "{desc}": forma=boleto exige codigo_barras'}), 400
+
+        valor_total = sum(float(i['valor']) for i in itens)
+
+        token = None
+        for _ in range(5):
+            t = _secrets.token_urlsafe(24)
+            if not Superlink.query.filter_by(token=t).first():
+                token = t
+                break
+        if not token:
+            return jsonify({'erro': 'Não foi possível gerar token único'}), 500
+
+        agora = datetime.utcnow()
+        sl = Superlink(
+            token=token,
+            grupo_id=int(obra_id) if obra_id else None,
+            titulo=titulo,
+            itens=itens,
+            refs=refs,
+            valor_total=valor_total,
+            criado_em=agora,
+            expira_em=agora + timedelta(days=5),
+        )
+        db.session.add(sl)
+        db.session.commit()
+        return jsonify({'token': token, 'url': f'https://obraly.uk/pagar/{token}'}), 201
+    except Exception:
+        db.session.rollback()
+        return jsonify({'erro': 'Erro ao criar superlink'}), 500
+
+
+@app.route('/superlink/<token>', methods=['GET'])
+def obter_superlink(token):
+    try:
+        sl = Superlink.query.filter_by(token=token).first()
+        if not sl:
+            return jsonify({'erro': 'Link não encontrado'}), 404
+        if sl.is_expirado():
+            return jsonify({'erro': 'Link expirado'}), 410
+        itens       = _superlink_itens_vivos(sl.grupo_id, sl.refs, sl.itens)
+        valor_total = sum(float(i.get('valor') or 0) for i in itens)
+        return jsonify({
+            'titulo':      sl.titulo,
+            'itens':       itens,
+            'valor_total': valor_total,
+            'expira_em':   sl.expira_em.isoformat() + 'Z',
+        }), 200
+    except Exception:
+        return jsonify({'erro': 'Erro ao buscar superlink'}), 500
 
 
 # ==============================================================================

@@ -16,9 +16,38 @@ from routes_admin import (
     dashboard_admin_bp,
     importar_obra_bp,
     boletos_admin_bp,
+    superlink_admin_bp,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _run_migrations():
+    from sqlalchemy import text
+    migrations = [
+        "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;",
+        "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;",
+        """CREATE TABLE IF NOT EXISTS superlink (
+            id SERIAL PRIMARY KEY,
+            token VARCHAR(64) NOT NULL UNIQUE,
+            grupo_id INTEGER,
+            titulo VARCHAR(255) NOT NULL,
+            itens JSONB NOT NULL,
+            refs JSONB,
+            valor_total FLOAT NOT NULL DEFAULT 0,
+            criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
+            expira_em TIMESTAMP NOT NULL
+        );""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_superlink_token ON superlink (token);",
+    ]
+    try:
+        with db.engine.connect() as conn:
+            for sql in migrations:
+                conn.execute(text(sql))
+            conn.commit()
+        logger.info("_run_migrations: OK")
+    except Exception:
+        logger.exception("_run_migrations: falhou (tabela pode não existir ainda)")
 
 
 def create_app(config=None):
@@ -37,6 +66,9 @@ def create_app(config=None):
     jwt.init_app(app)
     cors.init_app(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
 
+    with app.app_context():
+        _run_migrations()
+
     app.after_request(apply_cors_headers)
 
     @app.route('/<path:any_path>', methods=['OPTIONS'])
@@ -52,6 +84,7 @@ def create_app(config=None):
     app.register_blueprint(dashboard_admin_bp)
     app.register_blueprint(importar_obra_bp)
     app.register_blueprint(boletos_admin_bp)
+    app.register_blueprint(superlink_admin_bp)
 
     logger.info(f"app_admin: {len(list(app.url_map.iter_rules()))} rotas registradas")
 

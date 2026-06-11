@@ -481,9 +481,18 @@ def run_auto_migration():
             ("idx_perf_parcela_individual_status",   "parcela_individual(status)"),
             ("idx_perf_movimentacao_obra_id",         "movimentacao_caixa(obra_id)"),
         ]
+        idx_ok = 0
         for idx_name, idx_def in perf_indexes:
-            cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def};")
-        logger.info(f"Indexes Fase 5-D: {len(perf_indexes)} aplicados (IF NOT EXISTS)")
+            try:
+                cur.execute("SAVEPOINT before_idx")
+                cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def};")
+                cur.execute("RELEASE SAVEPOINT before_idx")
+                idx_ok += 1
+            except Exception as idx_err:
+                cur.execute("ROLLBACK TO SAVEPOINT before_idx")
+                cur.execute("RELEASE SAVEPOINT before_idx")
+                logger.warning("   ⚠️ Index %s ignorado: %s", idx_name, idx_err)
+        logger.info(f"Indexes Fase 5-D: {idx_ok}/{len(perf_indexes)} aplicados (IF NOT EXISTS)")
 
         # =================================================================
         # SUPERLINK — tabela de links de pagamento compartilháveis
@@ -508,6 +517,10 @@ def run_auto_migration():
             logger.info("✅ Tabela superlink criada!")
         else:
             logger.info("   ℹ️ Tabela superlink já existe")
+
+        # Coluna refs: [{tabela, id}] para query ao vivo (aditiva, idempotente)
+        cur.execute("ALTER TABLE superlink ADD COLUMN IF NOT EXISTS refs JSONB;")
+        logger.info("auto_migration: refs garantida em superlink")
 
         conn.commit()
         cur.close()

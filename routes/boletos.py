@@ -306,7 +306,8 @@ def criar_boleto(obra_id):
             valor=float(data.get('valor')),
             data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             status='Pendente',
-            vinculado_servico_id=data.get('vinculado_servico_id'),  # Vincular a serviço
+            vinculado_servico_id=data.get('vinculado_servico_id'),
+            orcamento_item_id=data.get('orcamento_item_id') or None,
             arquivo_nome=data.get('arquivo_nome'),
             arquivo_pdf=data.get('arquivo_pdf') or data.get('arquivo_base64')
         )
@@ -383,15 +384,8 @@ def editar_boleto(obra_id, boleto_id):
         if 'vinculado_servico_id' in data:
             boleto.vinculado_servico_id = data['vinculado_servico_id']
         
-        # NOVO: Atualizar orcamento_item_id via SQL direto
         if 'orcamento_item_id' in data:
-            orcamento_item_id = data['orcamento_item_id']
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE boleto SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {boleto_id}"
-                ))
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+            boleto.orcamento_item_id = data['orcamento_item_id'] or None
         
         db.session.commit()
         

@@ -21,6 +21,7 @@ class AdminBoleto(db.Model):
     # Controle
     status = db.Column(db.String(20), default='Pendente')  # Pendente, Pago, Vencido
     data_pagamento = db.Column(db.Date, nullable=True)
+    orcamento_item_id = db.Column(db.Integer, nullable=True)
 
     # Arquivo PDF (base64)
     arquivo_nome = db.Column(db.String(255), nullable=True)
@@ -66,5 +67,6 @@ class AdminBoleto(db.Model):
             'tem_pdf': bool(self.arquivo_pdf),
             'dias_para_vencer': dias_para_vencer,
             'urgencia': urgencia,
+            'orcamento_item_id': self.orcamento_item_id,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }

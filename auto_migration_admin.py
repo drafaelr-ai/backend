@@ -60,6 +60,14 @@ def run_auto_migration_admin():
         else:
             logger.info("auto_migration_admin: superlink já existe")
 
+        # Coluna orcamento_item_id em admin_boleto (aditiva, idempotente)
+        cur.execute("ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;")
+        logger.info("auto_migration_admin: orcamento_item_id em admin_boleto garantida")
+
+        # Coluna refs: [{tabela, id}] para query ao vivo (aditiva, idempotente)
+        cur.execute("ALTER TABLE superlink ADD COLUMN IF NOT EXISTS refs JSONB;")
+        logger.info("auto_migration_admin: refs garantida em superlink")
+
         conn.commit()
         cur.close()
         conn.close()

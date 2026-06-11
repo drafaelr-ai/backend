@@ -22,6 +22,22 @@ from routes_admin import (
 logger = logging.getLogger(__name__)
 
 
+def _run_migrations():
+    from sqlalchemy import text
+    migrations = [
+        "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;",
+        "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;",
+    ]
+    try:
+        with db.engine.connect() as conn:
+            for sql in migrations:
+                conn.execute(text(sql))
+            conn.commit()
+        logger.info("_run_migrations: OK")
+    except Exception:
+        logger.exception("_run_migrations: falhou (tabela pode não existir ainda)")
+
+
 def create_app(config=None):
     app = Flask(__name__)
 
@@ -37,6 +53,9 @@ def create_app(config=None):
     db.init_app(app)
     jwt.init_app(app)
     cors.init_app(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
+
+    with app.app_context():
+        _run_migrations()
 
     app.after_request(apply_cors_headers)
 

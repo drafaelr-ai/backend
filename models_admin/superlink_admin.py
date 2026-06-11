@@ -11,6 +11,7 @@ class SuperlinkAdmin(db.Model):
     grupo_id    = db.Column(db.Integer, nullable=True)
     titulo      = db.Column(db.String(255), nullable=False)
     itens       = db.Column(db.JSON, nullable=False)
+    refs        = db.Column(db.JSON, nullable=True)
     valor_total = db.Column(db.Float, nullable=False, default=0)
     criado_em   = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     expira_em   = db.Column(db.DateTime, nullable=False)

@@ -73,6 +73,7 @@ def criar_boleto_admin(imovel_id):
             beneficiario=data.get('beneficiario'),
             valor=float(data.get('valor')),
             data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
+            orcamento_item_id=data.get('orcamento_item_id') or None,
             arquivo_nome=data.get('arquivo_nome'),
             arquivo_pdf=data.get('arquivo_pdf') or data.get('arquivo_base64'),
         )
@@ -122,6 +123,8 @@ def editar_boleto_admin(imovel_id, boleto_id):
             boleto.valor = float(data['valor'])
         if 'data_vencimento' in data:
             boleto.data_vencimento = datetime.strptime(data['data_vencimento'], '%Y-%m-%d').date()
+        if 'orcamento_item_id' in data:
+            boleto.orcamento_item_id = data['orcamento_item_id'] or None
         db.session.commit()
         return jsonify(boleto.to_dict())
     except Exception as e:
