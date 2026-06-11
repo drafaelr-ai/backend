@@ -1,5 +1,6 @@
 import logging
 from datetime import date, datetime
+from sqlalchemy.orm import deferred
 from extensions import db
 
 logger = logging.getLogger(__name__)
@@ -24,10 +25,11 @@ class Boleto(db.Model):
     status = db.Column(db.String(20), default='Pendente')  # Pendente, Pago, Vencido
     data_pagamento = db.Column(db.Date, nullable=True)
     vinculado_servico_id = db.Column(db.Integer, nullable=True)
+    orcamento_item_id = db.Column(db.Integer, nullable=True)
 
     # Arquivo PDF
     arquivo_nome = db.Column(db.String(255), nullable=True)
-    arquivo_pdf = db.Column(db.Text, nullable=True)  # Base64 do PDF
+    arquivo_pdf = deferred(db.Column(db.Text, nullable=True))  # Base64 do PDF
 
     # Alertas enviados
     alerta_7dias = db.Column(db.Boolean, default=False)
@@ -75,21 +77,15 @@ class Boleto(db.Model):
                 logger.warning("Excecao suprimida em ", exc_info=True)
                 pass
 
-        # Buscar orcamento_item_id de forma segura (coluna pode não existir)
-        orcamento_item_id = None
+        orcamento_item_id = self.orcamento_item_id
         orcamento_item_nome = None
-        try:
-            result = db.session.execute(db.text(
-                f"SELECT orcamento_item_id FROM boleto WHERE id = {self.id}"
-            )).fetchone()
-            if result and result[0]:
-                orcamento_item_id = result[0]
+        if orcamento_item_id:
+            try:
                 item = OrcamentoEngItem.query.get(orcamento_item_id)
                 if item:
                     orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-        except Exception:
-            logger.warning("Excecao suprimida em ", exc_info=True)
-            pass
+            except Exception:
+                logger.warning("Excecao suprimida em ", exc_info=True)
 
         return {
             "id": self.id,
@@ -108,7 +104,7 @@ class Boleto(db.Model):
             "orcamento_item_id": orcamento_item_id,
             "orcamento_item_nome": orcamento_item_nome,
             "arquivo_nome": self.arquivo_nome,
-            "tem_pdf": bool(self.arquivo_pdf),
+            "tem_pdf": bool(self.arquivo_nome),
             "dias_para_vencer": dias_para_vencer,
             "urgencia": urgencia,
             "created_at": self.created_at.isoformat() if self.created_at else None
