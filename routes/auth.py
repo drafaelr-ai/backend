@@ -13,6 +13,7 @@ auth_bp = Blueprint('auth', __name__)
 
 
 @auth_bp.route('/register', methods=['POST', 'OPTIONS'])
+@limiter.limit("5 per hour", methods=["POST"])
 def register():
     logger.info("--- [LOG] Rota /register (POST) acessada ---")
     if request.method == 'OPTIONS':
