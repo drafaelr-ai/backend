@@ -19,3 +19,10 @@ Dockerfile.obraly
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# scripts de diagnóstico e arquivos temporários com credenciais
+_*.py
+smoke_*.py
+*.sql
+*.json
+*.xlsx
+*.csv
