@@ -27,18 +27,6 @@ def _run_migrations():
     migrations = [
         "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;",
         "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;",
-        """CREATE TABLE IF NOT EXISTS superlink (
-            id SERIAL PRIMARY KEY,
-            token VARCHAR(64) NOT NULL UNIQUE,
-            grupo_id INTEGER,
-            titulo VARCHAR(255) NOT NULL,
-            itens JSONB NOT NULL,
-            refs JSONB,
-            valor_total FLOAT NOT NULL DEFAULT 0,
-            criado_em TIMESTAMP NOT NULL DEFAULT NOW(),
-            expira_em TIMESTAMP NOT NULL
-        );""",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_superlink_token ON superlink (token);",
     ]
     try:
         with db.engine.connect() as conn:

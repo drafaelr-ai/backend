@@ -44,6 +44,7 @@ def login():
 
 
 @auth_admin_bp.route('/register', methods=['POST', 'OPTIONS'])
+@jwt_required()
 def register():
     if request.method == 'OPTIONS':
         return make_response(jsonify({}), 200)

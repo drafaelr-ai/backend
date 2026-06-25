@@ -30,6 +30,8 @@ def health():
 @health_bp.route('/init-db', methods=['GET', 'POST'])
 def init_db():
     try:
+        if Usuario.query.count() > 0:
+            return jsonify({'status': 'error', 'message': 'Não autorizado'}), 403
         db.create_all()
         criar_categorias_padrao()
 

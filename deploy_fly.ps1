@@ -56,14 +56,40 @@ if ($LASTEXITCODE -eq 0) {
 Write-Host ""
 Write-Host "--- [2/2] Preparando Obraly Admin ---" -ForegroundColor Yellow
 
-New-Item -ItemType Directory -Force -Path ".\fly-deploy\obraly-admin-api" | Out-Null
+$adminDst = ".\fly-deploy\obraly-admin-api"
+New-Item -ItemType Directory -Force -Path $adminDst | Out-Null
 
-Copy-Item ".\app_admin.py"         ".\fly-deploy\obraly-admin-api\app_admin.py" -Force
-Copy-Item ".\Dockerfile.admin"     ".\fly-deploy\obraly-admin-api\Dockerfile" -Force
-Copy-Item ".\fly.admin.toml"       ".\fly-deploy\obraly-admin-api\fly.toml" -Force
-Copy-Item ".\requirements_admin.txt" ".\fly-deploy\obraly-admin-api\requirements_admin.txt" -Force
+# -------------------------------------------------------------------
+# SYNC COMPLETO canônico -> fly-deploy (build context do admin).
+# OBRIGATÓRIO espelhar TODAS as pastas/arquivos que o Dockerfile.admin
+# referencia. Sincronizar só app_admin.py (como antes) deixava routes_admin/
+# models_admin/services_admin/ STALE -> fixes do admin não subiam.
+# As pastas usam robocopy /MIR (espelho: remove órfãos no destino).
+# -------------------------------------------------------------------
+foreach ($folder in @("models_admin", "routes_admin", "services_admin")) {
+    robocopy ".\$folder" "$adminDst\$folder" /MIR /XD __pycache__ /NFL /NDL /NJH /NJS /NC /NS | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        Write-Host "❌ Falha ao sincronizar $folder (robocopy exit $LASTEXITCODE). Abortando." -ForegroundColor Red
+        exit 1
+    }
+}
 
-Write-Host "✓ Arquivos copiados" -ForegroundColor Green
+# Arquivos individuais que o Dockerfile.admin copia (+ infra de deploy)
+$adminFiles = @(
+    "app_admin.py",
+    "auto_migration_admin.py",
+    "config_admin.py",
+    "extensions_admin.py",
+    "logging_setup.py",
+    "requirements_admin.txt"
+)
+foreach ($f in $adminFiles) {
+    Copy-Item ".\$f" "$adminDst\$f" -Force
+}
+Copy-Item ".\Dockerfile.admin"  "$adminDst\Dockerfile" -Force
+Copy-Item ".\fly.admin.toml"    "$adminDst\fly.toml" -Force
+
+Write-Host "✓ Sync completo: 3 pastas espelhadas + $($adminFiles.Count) arquivos + Dockerfile/fly.toml" -ForegroundColor Green
 
 Set-Location ".\fly-deploy\obraly-admin-api"
 
