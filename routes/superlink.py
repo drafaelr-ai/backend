@@ -23,75 +23,56 @@ def _gerar_token():
 def _itens_dinamicos(grupo_id, refs, itens_snapshot):
     """Resolve itens ao vivo do superlink de obras.
 
-    - grupo_id (obra_id): re-query todos os boletos não pagos da obra
-    - refs pagamento_futuro / parcela_individual: re-query cada um, filtra pagos
-    Itens pagos são removidos do resultado (não apenas marcados).
+    LISTA FIXA: apenas os itens SELECIONADOS na geração (itens_snapshot,
+    alinhado posicionalmente com refs). grupo_id NÃO é usado para listar —
+    a seleção é o que define o que aparece. Isso impede que a rota pública
+    vaze boletos não selecionados da obra.
+
+    STATUS AO VIVO: cada item é re-consultado pelo seu ref {tabela, id};
+    se virou pago/cancelado após a geração, é removido (não apenas marcado).
     """
+    itens_snapshot = itens_snapshot or []
+    refs = refs or []
+
+    # Legado: link sem refs → não há como checar status ao vivo; devolve o
+    # snapshot filtrado (que já contém SÓ os selecionados).
+    if not refs:
+        return [dict(i) for i in itens_snapshot if not i.get('pago')]
+
     resultado = []
+    for idx, item in enumerate(itens_snapshot):
+        ref = refs[idx] if idx < len(refs) else None
 
-    # 1. Boletos da obra ao vivo (dinâmico — aparece/some conforme status)
-    if grupo_id:
-        obra_nome = ''
-        try:
-            row = db.session.execute(
-                db.text("SELECT nome FROM obra WHERE id = :id"),
-                {'id': int(grupo_id)},
-            ).fetchone()
-            if row:
-                obra_nome = row[0] or ''
-        except Exception:
-            logger.warning("Falha ao buscar nome da obra: id=%s", grupo_id)
-
-        try:
-            rows = db.session.execute(
-                db.text("""
-                    SELECT descricao, beneficiario, valor, data_vencimento, codigo_barras
-                    FROM boleto
-                    WHERE obra_id = :oid
-                      AND status != 'Pago'
-                      AND codigo_barras IS NOT NULL
-                      AND codigo_barras != ''
-                    ORDER BY data_vencimento ASC NULLS LAST
-                """),
-                {'oid': int(grupo_id)},
-            ).fetchall()
-            for r in rows:
-                resultado.append({
-                    'descricao':       r[0] or r[1] or 'Boleto',
-                    'valor':           float(r[2] or 0),
-                    'contexto':        obra_nome,
-                    'forma':           'boleto',
-                    'codigo_barras':   r[4],
-                    'data_vencimento': r[3].isoformat() if r[3] else None,
-                })
-        except Exception:
-            logger.exception("Re-query boletos obras falhou: obra_id=%s", grupo_id)
-
-    # 2. Lançamentos por refs — usa snapshot para preservar pix_chave, filtra pagos
-    for idx, ref in enumerate(refs or []):
+        # Item sem ref de banco (ex: pix avulso) → mantém; sem status ao vivo.
         if not ref:
+            if not item.get('pago'):
+                resultado.append(dict(item))
             continue
+
         tabela = ref.get('tabela')
         rid = ref.get('id')
+
+        # ref inválido / fora da whitelist → a seleção manda; mantém snapshot.
         if not tabela or not rid or tabela not in _TABELAS_PERMITIDAS:
+            if not item.get('pago'):
+                resultado.append(dict(item))
             continue
-        if tabela == 'boleto':
-            continue  # boletos já tratados acima via grupo_id
+
         try:
             row = db.session.execute(
                 db.text(f"SELECT status FROM {tabela} WHERE id = :id"),
                 {'id': int(rid)},
             ).fetchone()
-            if row and str(row[0]).lower() in ('pago', 'cancelado'):
-                continue  # item pago → remove do resultado
-            if idx < len(itens_snapshot or []):
-                resultado.append(dict(itens_snapshot[idx]))
+            if not row:
+                continue  # sumiu do banco → não exibe
+            if str(row[0]).lower() in ('pago', 'cancelado'):
+                continue  # pago/cancelado → remove do resultado
+            resultado.append(dict(item))
         except Exception:
             logger.warning("Live status falhou: tabela=%s id=%s", tabela, rid)
-
-    # 3. Fallback: sem grupo_id e resultado vazio → snapshot filtrado (legado)
-    if not grupo_id and not resultado:
-        resultado = [i for i in (itens_snapshot or []) if not i.get('pago')]
+            # Erro de leitura: preserva o item selecionado (nunca vaza extra).
+            if not item.get('pago'):
+                resultado.append(dict(item))
 
     return resultado
 
