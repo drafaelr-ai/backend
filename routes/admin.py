@@ -21,6 +21,7 @@ from models.orcamento_eng_item import OrcamentoEngItem
 from models.cronograma_etapa import CronogramaEtapa
 from models.cronograma_obra import CronogramaObra
 from services import get_current_user, check_permission, user_has_access_to_obra
+from services.orcamento_service import resolver_orcamento_item_id
 
 logger = logging.getLogger(__name__)
 
@@ -2298,12 +2299,14 @@ def simular_pagamento_teste(obra_id):
             db.session.add(novo)
             db.session.flush()
             
-            # Vincular ao item do orçamento
-            if orcamento_item_id:
-                db.session.execute(db.text(
-                    f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo.id}"
-                ))
-            
+            # Vínculo com item do orçamento — via ORM, com validação explícita.
+            oid, erro = resolver_orcamento_item_id(orcamento_item_id)
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (teste lancamento): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            novo.orcamento_item_id = oid
+
             db.session.commit()
             resultado["id_criado"] = novo.id
             resultado["mensagem"] = f"Lançamento #{novo.id} criado e vinculado com sucesso!"
@@ -2321,11 +2324,14 @@ def simular_pagamento_teste(obra_id):
             db.session.add(novo)
             db.session.flush()
             
-            if orcamento_item_id:
-                db.session.execute(db.text(
-                    f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo.id}"
-                ))
-            
+            # Vínculo com item do orçamento — via ORM, com validação explícita.
+            oid, erro = resolver_orcamento_item_id(orcamento_item_id)
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (teste pagamento_futuro): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            novo.orcamento_item_id = oid
+
             db.session.commit()
             resultado["id_criado"] = novo.id
             resultado["mensagem"] = f"Pagamento Futuro #{novo.id} criado e vinculado com sucesso!"
@@ -2347,11 +2353,14 @@ def simular_pagamento_teste(obra_id):
             db.session.add(novo)
             db.session.flush()
             
-            if orcamento_item_id:
-                db.session.execute(db.text(
-                    f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo.id}"
-                ))
-            
+            # Vínculo com item do orçamento — via ORM, com validação explícita.
+            oid, erro = resolver_orcamento_item_id(orcamento_item_id)
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (teste parcelado): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            novo.orcamento_item_id = oid
+
             db.session.commit()
             resultado["id_criado"] = novo.id
             resultado["mensagem"] = f"Pagamento Parcelado #{novo.id} criado e vinculado com sucesso!"

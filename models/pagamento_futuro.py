@@ -22,24 +22,18 @@ class PagamentoFuturo(db.Model):
     servico_id = db.Column(db.Integer, db.ForeignKey('servico.id'), nullable=True)
     tipo = db.Column(db.String(50), nullable=True)  # 'Mão de Obra', 'Material', ou 'Despesa'
 
+    # Vínculo com item do orçamento (orcamento_eng_item). Coluna+FK já existem no banco.
+    orcamento_item_id = db.Column(db.Integer, nullable=True)
+
     def to_dict(self):
         from models.orcamento_eng_item import OrcamentoEngItem
 
-        # Buscar orcamento_item_id de forma segura (coluna pode não existir)
-        orcamento_item_id = None
+        # Nome do item de orçamento vinculado (lê via coluna mapeada)
         orcamento_item_nome = None
-        try:
-            result = db.session.execute(db.text(
-                f"SELECT orcamento_item_id FROM pagamento_futuro WHERE id = {self.id}"
-            )).fetchone()
-            if result and result[0]:
-                orcamento_item_id = result[0]
-                item = OrcamentoEngItem.query.get(orcamento_item_id)
-                if item:
-                    orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-        except Exception:
-            logger.warning("Excecao suprimida em ", exc_info=True)
-            pass
+        if self.orcamento_item_id:
+            item = OrcamentoEngItem.query.get(self.orcamento_item_id)
+            if item:
+                orcamento_item_nome = f"{item.codigo} - {item.descricao}"
 
         return {
             "id": self.id,
@@ -54,6 +48,6 @@ class PagamentoFuturo(db.Model):
             "observacoes": self.observacoes,
             "servico_id": self.servico_id,
             "tipo": self.tipo,
-            "orcamento_item_id": orcamento_item_id,
+            "orcamento_item_id": self.orcamento_item_id,
             "orcamento_item_nome": orcamento_item_nome
         }

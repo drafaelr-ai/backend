@@ -64,6 +64,12 @@ Componentes que chamam APIs sem autenticação (via `window.open` ou `fetch()` d
 
 `obra.status` não tem enum definido formalmente. Valores em uso: `ativa`, `finalizada`. Definir formalmente: `ativa | finalizada | arquivada | cancelada` e garantir que todos os endpoints e filtros de frontend usem os mesmos valores.
 
+### `orcamento_item_id` via f-string + swallow (parcelado / serviço)
+
+| # | ID | Item | Situação |
+|---|---|---|---|
+| 1 | B-03 | ✅ **RESOLVIDO (2026-06-25)** — f-string + swallow em parcelado/serviço | Corrigido no fix geral do vínculo orçamento: `PagamentoParcelado` e `PagamentoServico` agora mapeiam `orcamento_item_id` (coluna de `pagamento_servico` criada via `auto_migration`); gravação via ORM + `resolver_orcamento_item_id` → 400 em `cronograma.py`, `admin.py`, `sid.py` (x2) e `obras.py`. Leitura (`historico_unificado`) passou a expor `orcamento_item_id` para boleto e pagamento_servico. Nenhum f-string/swallow de `orcamento_item_id` restante nas rotas. |
+
 ---
 
 ## Módulo Patrimonial (para a Fase 8)

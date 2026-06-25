@@ -18,6 +18,9 @@ class PagamentoServico(db.Model):
     prioridade = db.Column(db.Integer, nullable=False, default=0)
     fornecedor = db.Column(db.String(150), nullable=True)
 
+    # Vínculo com item do orçamento (orcamento_eng_item). Coluna criada por auto_migration.
+    orcamento_item_id = db.Column(db.Integer, nullable=True)
+
     def to_dict(self):
         return {
             "id": self.id, "data": self.data.isoformat(),
@@ -30,5 +33,6 @@ class PagamentoServico(db.Model):
             "pix": self.pix,
             "prioridade": self.prioridade,
             "fornecedor": self.fornecedor,
+            "orcamento_item_id": self.orcamento_item_id,
             "pagamento_id": self.id
         }

@@ -21,6 +21,7 @@ from models.servico import Servico
 from models.servico_usuario import ServicoUsuario
 from models.servico_base import ServicoBase
 from models.pagamento_servico import PagamentoServico
+from services.orcamento_service import resolver_orcamento_item_id
 from models.pagamento_futuro import PagamentoFuturo
 from models.lancamento import Lancamento
 from models.nota_fiscal import NotaFiscal
@@ -617,7 +618,21 @@ def get_obra_detalhes(obra_id):
         
         # --- HISTÓRICO UNIFICADO ---
         historico_unificado = []
-        
+
+        # Mapa id->nome dos itens de orçamento da obra (para exibir o vínculo no histórico
+        # de boleto e pagamento_servico, que não fazem JOIN). Uma query, sem N+1.
+        _orc_itens_map = {}
+        try:
+            _orc_rows = db.session.execute(db.text("""
+                SELECT i.id, i.codigo, i.descricao
+                FROM orcamento_eng_item i
+                JOIN orcamento_eng_etapa e ON i.etapa_id = e.id
+                WHERE e.obra_id = :obra_id
+            """), {"obra_id": obra_id}).fetchall()
+            _orc_itens_map = {r.id: f"{r.codigo} - {r.descricao}" for r in _orc_rows}
+        except Exception:
+            logger.warning("Falha ao montar mapa de itens de orçamento para histórico", exc_info=True)
+
         # OTIMIZAÇÃO: Buscar todos os lançamentos com orcamento_item_id em uma única query
         lancamentos_com_item = db.session.execute(db.text("""
             SELECT l.id, l.obra_id, l.tipo, l.descricao, l.valor_total, l.valor_pago, 
@@ -650,8 +665,9 @@ def get_obra_detalhes(obra_id):
         
         # OTIMIZAÇÃO: Buscar pagamentos de serviços com uma única query
         pagamentos_servicos = db.session.execute(db.text("""
-            SELECT ps.id, ps.tipo_pagamento, ps.valor_total, ps.valor_pago, ps.data, 
+            SELECT ps.id, ps.tipo_pagamento, ps.valor_total, ps.valor_pago, ps.data,
                    ps.data_vencimento, ps.status, ps.prioridade, ps.fornecedor,
+                   ps.orcamento_item_id,
                    s.id as servico_id, s.nome as servico_nome, s.pix
             FROM pagamento_servico ps
             JOIN servico s ON ps.servico_id = s.id
@@ -667,9 +683,11 @@ def get_obra_detalhes(obra_id):
                 "valor_total": float(pag.valor_total or 0.0), 
                 "valor_pago": float(pag.valor_pago or 0.0), 
                 "status": pag.status, "pix": pag.pix, "servico_id": pag.servico_id,
+                "orcamento_item_id": pag.orcamento_item_id,
+                "orcamento_item_nome": _orc_itens_map.get(pag.orcamento_item_id),
                 "pagamento_id": pag.id,
                 "prioridade": pag.prioridade,
-                "fornecedor": pag.fornecedor 
+                "fornecedor": pag.fornecedor
             })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
@@ -780,6 +798,8 @@ def get_obra_detalhes(obra_id):
                     "pix": boleto.codigo_barras,
                     "servico_id": boleto.vinculado_servico_id,
                     "servico_nome": servico_nome,
+                    "orcamento_item_id": boleto.orcamento_item_id,
+                    "orcamento_item_nome": _orc_itens_map.get(boleto.orcamento_item_id),
                     "boleto_id": boleto.id,
                     "prioridade": 0,
                     "fornecedor": boleto.beneficiario
@@ -1221,13 +1241,12 @@ def atualizar_pagamento_servico(pagamento_id):
         if 'tipo_pagamento' in dados:
             pagamento.tipo_pagamento = dados['tipo_pagamento']  # 'mao_de_obra' ou 'material'
         if 'orcamento_item_id' in dados:
-            orcamento_item_id = dados['orcamento_item_id']
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE pagamento_servico SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
-                ))
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao atualizar orcamento_item_id em pagamento_servico: {e}")
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (pagamento_servico {pagamento_id}): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            pagamento.orcamento_item_id = oid
         db.session.commit()
         return jsonify({"sucesso": True, "id": pagamento_id})
     except Exception as e:

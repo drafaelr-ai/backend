@@ -17,6 +17,7 @@ from services import (
     check_permission,
     notificar_masters,
 )
+from services.orcamento_service import resolver_orcamento_item_id
 
 logger = logging.getLogger(__name__)
 
@@ -177,19 +178,17 @@ def add_lancamento(obra_id):
                 servico_id=dados.get('servico_id')
             )
             
-            # NOVO: Atualizar orcamento_item_id via SQL direto (coluna pode não existir no model)
             db.session.add(novo_lancamento)
             db.session.flush()  # Para obter o ID
-            
-            orcamento_item_id = dados.get('orcamento_item_id')
-            if orcamento_item_id:
-                try:
-                    db.session.execute(db.text(
-                        f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_lancamento.id}"
-                    ))
-                except Exception as e:
-                    logger.exception(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
-            
+
+            # Vínculo com item do orçamento — via ORM, com validação explícita.
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo lancamento): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            novo_lancamento.orcamento_item_id = oid
+
             db.session.commit()
             
             # --- NOTIFICAÇÃO PARA MASTERS ---
@@ -263,15 +262,14 @@ def editar_lancamento(lancamento_id):
         lancamento.fornecedor = dados.get('fornecedor', lancamento.fornecedor) 
         lancamento.servico_id = dados.get('servico_id')
         
-        # NOVO: Atualizar orcamento_item_id via SQL direto
+        # Vínculo com item do orçamento — via ORM, com validação explícita.
         if 'orcamento_item_id' in dados:
-            orcamento_item_id = dados['orcamento_item_id']
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE lancamento SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {lancamento_id}"
-                ))
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (lancamento {lancamento_id}): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            lancamento.orcamento_item_id = oid
         
         db.session.commit()
         return jsonify(lancamento.to_dict())
@@ -312,15 +310,14 @@ def atualizar_lancamento_parcial(lancamento_id):
         if 'tipo' in dados:
             lancamento.tipo = dados['tipo']  # 'Mão de Obra' ou 'Material'
         
-        # NOVO: Atualizar orcamento_item_id via SQL direto
+        # Vínculo com item do orçamento — via ORM, com validação explícita.
         if 'orcamento_item_id' in dados:
-            orcamento_item_id = dados['orcamento_item_id']
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE lancamento SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {lancamento_id}"
-                ))
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (lancamento {lancamento_id}): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            lancamento.orcamento_item_id = oid
         
         db.session.commit()
         logger.info(f"--- [LOG] Lançamento {lancamento_id} atualizado parcialmente ---")

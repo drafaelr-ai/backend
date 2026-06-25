@@ -14,6 +14,7 @@ from models.pagamento_parcelado import PagamentoParcelado
 from models.parcela_individual import ParcelaIndividual
 from models.pagamento_futuro import PagamentoFuturo
 from services import get_current_user, user_has_access_to_obra, check_permission
+from services.orcamento_service import resolver_orcamento_item_id
 
 logger = logging.getLogger(__name__)
 
@@ -191,16 +192,14 @@ def criar_pagamento_futuro(obra_id):
         db.session.flush()  # Flush para obter o ID antes do commit
         logger.debug(f"--- [DEBUG] Flush OK, ID atribuído: {novo_pagamento.id} ---")
         
-        # NOVO: Atualizar orcamento_item_id via SQL direto
-        orcamento_item_id = data.get('orcamento_item_id')
-        if orcamento_item_id:
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_pagamento.id}"
-                ))
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
-        
+        # Vínculo com item do orçamento — via ORM, com validação explícita.
+        oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+        if erro:
+            db.session.rollback()
+            logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo pagamento): {erro} ---")
+            return jsonify({"erro": erro}), 400
+        novo_pagamento.orcamento_item_id = oid
+
         db.session.commit()
         logger.debug(f"--- [DEBUG] Commit realizado! ---")
         
@@ -270,16 +269,16 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
             pagamento.servico_id = data['servico_id'] if data['servico_id'] else None
             logger.debug(f"--- [DEBUG] Serviço ID atualizado: {data['servico_id']} ---")
         
-        # NOVO: Atualizar orcamento_item_id via SQL direto
+        # Vínculo com item do orçamento — via ORM, com validação explícita.
+        # Item inválido => 400 (nunca mais 200 silencioso).
         if 'orcamento_item_id' in data:
-            orcamento_item_id = data['orcamento_item_id']
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE pagamento_futuro SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
-                ))
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
-        
+            oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (pagamento {pagamento_id}): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            pagamento.orcamento_item_id = oid
+
         logger.debug(f"--- [DEBUG] Tentando commit no banco... ---")
         db.session.commit()
         
@@ -691,15 +690,10 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         db.session.add(novo_lancamento)
         db.session.flush()
         
-        # NOVO: Copiar orcamento_item_id para o novo lançamento
+        # Copiar orcamento_item_id (dado interno já validado) para o novo lançamento via ORM.
         if orcamento_item_id_original:
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id_original} WHERE id = {novo_lancamento.id}"
-                ))
-                logger.info(f"   ✅ orcamento_item_id copiado para lançamento")
-            except Exception as e:
-                logger.exception(f"   ⚠️ Erro ao copiar orcamento_item_id: {e}")
+            novo_lancamento.orcamento_item_id = orcamento_item_id_original
+            logger.info(f"   ✅ orcamento_item_id copiado para lançamento")
         
         # DELETE o PagamentoFuturo
         db.session.delete(pagamento)
@@ -842,26 +836,13 @@ def criar_pagamento_parcelado(obra_id):
         db.session.add(novo_pagamento)
         db.session.flush()  # Para obter o ID do pagamento
         
-        # NOVO: Atualizar orcamento_item_id via SQL direto
-        orcamento_item_id_raw = data.get('orcamento_item_id')
-        logger.info(f"--- [LOG] orcamento_item_id recebido: {orcamento_item_id_raw} (tipo: {type(orcamento_item_id_raw)}) ---")
-        
-        # Converter para int se for string válida
-        orcamento_item_id = None
-        if orcamento_item_id_raw:
-            try:
-                orcamento_item_id = int(orcamento_item_id_raw)
-            except (ValueError, TypeError):
-                logger.exception(f"[AVISO] orcamento_item_id inválido: {orcamento_item_id_raw}")
-        
-        if orcamento_item_id:
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_pagamento.id}"
-                ))
-                logger.info(f"--- [LOG] orcamento_item_id {orcamento_item_id} salvo no pagamento {novo_pagamento.id} ---")
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+        # Vínculo com item do orçamento — via ORM, com validação explícita.
+        oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+        if erro:
+            db.session.rollback()
+            logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo parcelado): {erro} ---")
+            return jsonify({"erro": erro}), 400
+        novo_pagamento.orcamento_item_id = oid
         
         # 🆕 Criar parcela de ENTRADA (se houver)
         if tem_entrada and valor_entrada > 0:
@@ -1016,16 +997,14 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
                 pagamento.servico_id = None
                 logger.info(f"--- [LOG] PagamentoParcelado {pagamento_id} desvinculado de serviço ---")
         
-        # NOVO: Atualizar orcamento_item_id via SQL direto
+        # Vínculo com item do orçamento — via ORM, com validação explícita.
         if 'orcamento_item_id' in data:
-            orcamento_item_id = data['orcamento_item_id']
-            try:
-                db.session.execute(db.text(
-                    f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {'NULL' if not orcamento_item_id else orcamento_item_id} WHERE id = {pagamento_id}"
-                ))
-                logger.info(f"--- [LOG] PagamentoParcelado {pagamento_id} orcamento_item_id atualizado para {orcamento_item_id} ---")
-            except Exception as e:
-                logger.exception(f"[AVISO] Erro ao atualizar orcamento_item_id: {e}")
+            oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (parcelado {pagamento_id}): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            pagamento.orcamento_item_id = oid
         
         # CORREÇÃO: Atualizar segmento quando alterado
         if 'segmento' in data:

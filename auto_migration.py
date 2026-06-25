@@ -522,6 +522,12 @@ def run_auto_migration():
         cur.execute("ALTER TABLE superlink ADD COLUMN IF NOT EXISTS refs JSONB;")
         logger.info("auto_migration: refs garantida em superlink")
 
+        # Vínculo orçamento em pagamento_servico (aditiva, idempotente).
+        # As demais tabelas (lancamento, pagamento_futuro, boleto, pagamento_parcelado_v2)
+        # já têm a coluna; só pagamento_servico faltava.
+        cur.execute("ALTER TABLE pagamento_servico ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;")
+        logger.info("auto_migration: orcamento_item_id garantida em pagamento_servico")
+
         conn.commit()
         cur.close()
         conn.close()

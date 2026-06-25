@@ -17,6 +17,7 @@ from models.pagamento_futuro import PagamentoFuturo
 from models.lancamento import Lancamento
 from models.orcamento_eng_etapa import OrcamentoEngEtapa
 from models.orcamento_eng_item import OrcamentoEngItem
+from services.orcamento_service import resolver_orcamento_item_id
 from models.parcela_individual import ParcelaIndividual
 from models.pagamento_parcelado import PagamentoParcelado
 from models.cronograma_etapa import CronogramaEtapa
@@ -774,18 +775,13 @@ def inserir_pagamento(obra_id):
             db.session.add(novo_parcelado)
             db.session.flush()
             
-            # 🆕 Salvar orcamento_item_id via SQL direto (coluna pode não estar no model)
-            orcamento_item_id = dados.get('orcamento_item_id')
-            logger.info(f"   🔗 orcamento_item_id recebido: {orcamento_item_id}")
-            if orcamento_item_id:
-                try:
-                    orcamento_item_id_int = int(orcamento_item_id)
-                    db.session.execute(db.text(
-                        f"UPDATE pagamento_parcelado_v2 SET orcamento_item_id = {orcamento_item_id_int} WHERE id = {novo_parcelado.id}"
-                    ))
-                    logger.info(f"   ✅ orcamento_item_id {orcamento_item_id_int} salvo no PagamentoParcelado {novo_parcelado.id}")
-                except Exception as e:
-                    logger.exception(f"   ⚠️ Erro ao salvar orcamento_item_id: {e}")
+            # Vínculo com item do orçamento — via ORM, com validação explícita.
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo parcelado): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            novo_parcelado.orcamento_item_id = oid
             
             logger.info(f"   ✅ PagamentoParcelado criado: ID={novo_parcelado.id}")
             
@@ -966,18 +962,16 @@ def inserir_pagamento(obra_id):
                 db.session.add(novo_futuro)
                 db.session.flush()
                 
-                # NOVO: Vincular ao item do orçamento se fornecido
-                orcamento_item_id = dados.get('orcamento_item_id')
-                if orcamento_item_id:
-                    try:
-                        db.session.execute(db.text(
-                            f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_futuro.id}"
-                        ))
-                    except Exception as e:
-                        logger.exception(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                # Vínculo com item do orçamento — via ORM, com validação explícita.
+                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+                if erro:
+                    db.session.rollback()
+                    logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo pagamento futuro): {erro} ---")
+                    return jsonify({"erro": erro}), 400
+                novo_futuro.orcamento_item_id = oid
                 
                 db.session.commit()
-                logger.info(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
+                logger.info(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={oid}")
                 logger.info(f"{'='*80}\n")
                 return jsonify(novo_futuro.to_dict()), 201
             
@@ -998,18 +992,16 @@ def inserir_pagamento(obra_id):
                 db.session.add(novo_futuro)
                 db.session.flush()
                 
-                # NOVO: Vincular ao item do orçamento se fornecido
-                orcamento_item_id = dados.get('orcamento_item_id')
-                if orcamento_item_id:
-                    try:
-                        db.session.execute(db.text(
-                            f"UPDATE pagamento_futuro SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_futuro.id}"
-                        ))
-                    except Exception as e:
-                        logger.exception(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                # Vínculo com item do orçamento — via ORM, com validação explícita.
+                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+                if erro:
+                    db.session.rollback()
+                    logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo pagamento futuro): {erro} ---")
+                    return jsonify({"erro": erro}), 400
+                novo_futuro.orcamento_item_id = oid
                 
                 db.session.commit()
-                logger.info(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={orcamento_item_id}")
+                logger.info(f"   ✅ PagamentoFuturo criado: ID={novo_futuro.id}, orcamento_item_id={oid}")
                 logger.info(f"{'='*80}\n")
                 return jsonify(novo_futuro.to_dict()), 201
             
@@ -1031,18 +1023,16 @@ def inserir_pagamento(obra_id):
                 db.session.add(novo_lancamento)
                 db.session.flush()
                 
-                # NOVO: Vincular ao item do orçamento se fornecido
-                orcamento_item_id = dados.get('orcamento_item_id')
-                if orcamento_item_id:
-                    try:
-                        db.session.execute(db.text(
-                            f"UPDATE lancamento SET orcamento_item_id = {orcamento_item_id} WHERE id = {novo_lancamento.id}"
-                        ))
-                    except Exception as e:
-                        logger.exception(f"[AVISO] Erro ao definir orcamento_item_id: {e}")
+                # Vínculo com item do orçamento — via ORM, com validação explícita.
+                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+                if erro:
+                    db.session.rollback()
+                    logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo lancamento): {erro} ---")
+                    return jsonify({"erro": erro}), 400
+                novo_lancamento.orcamento_item_id = oid
                 
                 db.session.commit()
-                logger.info(f"   ✅ Lançamento criado: ID={novo_lancamento.id}, orcamento_item_id={orcamento_item_id}")
+                logger.info(f"   ✅ Lançamento criado: ID={novo_lancamento.id}, orcamento_item_id={oid}")
                 logger.info(f"{'='*80}\n")
                 return jsonify(novo_lancamento.to_dict()), 201
     

@@ -30,6 +30,9 @@ class PagamentoParcelado(db.Model):
     pix = db.Column(db.String(255), nullable=True)
     forma_pagamento = db.Column(db.String(20), nullable=True, default='PIX')
 
+    # Vínculo com item do orçamento (orcamento_eng_item). Coluna+FK já existem no banco.
+    orcamento_item_id = db.Column(db.Integer, nullable=True)
+
     def to_dict(self):
         from models.parcela_individual import ParcelaIndividual
         from models.servico import Servico
@@ -87,20 +90,11 @@ class PagamentoParcelado(db.Model):
                 logger.exception(f"[AVISO] Erro ao buscar serviço {self.servico_id}: {e}")
                 servico_nome = None
 
-        orcamento_item_id = None
         orcamento_item_nome = None
-        try:
-            result = db.session.execute(db.text(
-                f"SELECT orcamento_item_id FROM pagamento_parcelado_v2 WHERE id = {self.id}"
-            )).fetchone()
-            if result and result[0]:
-                orcamento_item_id = result[0]
-                item = OrcamentoEngItem.query.get(orcamento_item_id)
-                if item:
-                    orcamento_item_nome = f"{item.codigo} - {item.descricao}"
-        except Exception:
-            logger.warning("Excecao suprimida em ", exc_info=True)
-            pass
+        if self.orcamento_item_id:
+            item = OrcamentoEngItem.query.get(self.orcamento_item_id)
+            if item:
+                orcamento_item_nome = f"{item.codigo} - {item.descricao}"
 
         try:
             segmento_value = self.segmento if hasattr(self, 'segmento') and self.segmento else 'Material'
@@ -154,6 +148,6 @@ class PagamentoParcelado(db.Model):
             "tem_entrada": tem_entrada,
             "servico_id": self.servico_id,
             "servico_nome": servico_nome,
-            "orcamento_item_id": orcamento_item_id,
+            "orcamento_item_id": self.orcamento_item_id,
             "orcamento_item_nome": orcamento_item_nome
         }
