@@ -528,6 +528,112 @@ def run_auto_migration():
         cur.execute("ALTER TABLE pagamento_servico ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;")
         logger.info("auto_migration: orcamento_item_id garantida em pagamento_servico")
 
+        # RH: estado da obra (UF) — origem do piso da CCT. Aditivo, idempotente,
+        # nullable (dado existente intacto).
+        cur.execute("ALTER TABLE obra ADD COLUMN IF NOT EXISTS uf VARCHAR(2);")
+        logger.info("auto_migration: coluna uf garantida em obra (RH)")
+
+        # =================================================================
+        # MÓDULO PESSOAL / RH — 6 tabelas (aditivo, idempotente)
+        # Ordem de dependência: categoria_mo → convencao_coletiva →
+        # convencao_valor → funcionario → pagamento_salario → encargo.
+        # FKs para obra.id usam ON DELETE SET NULL (não apaga RH ao remover obra).
+        # Nenhuma tabela existente é alterada.
+        # =================================================================
+        logger.info("📝 RH: garantindo tabelas do módulo Pessoal/RH...")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS categoria_mo (
+                id        SERIAL PRIMARY KEY,
+                nome      VARCHAR(80) NOT NULL,
+                descricao VARCHAR(200)
+            );
+            CREATE INDEX IF NOT EXISTS idx_categoria_mo_nome ON categoria_mo (nome);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS convencao_coletiva (
+                id              SERIAL PRIMARY KEY,
+                uf              VARCHAR(2) NOT NULL,
+                sindicato       VARCHAR(160),
+                vigencia_inicio DATE NOT NULL,
+                vigencia_fim    DATE NOT NULL,
+                arquivo_url     VARCHAR(500),
+                status          VARCHAR(20) NOT NULL DEFAULT 'rascunho',
+                data_upload     TIMESTAMP DEFAULT NOW()
+            );
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS convencao_valor (
+                id            SERIAL PRIMARY KEY,
+                convencao_id  INTEGER NOT NULL REFERENCES convencao_coletiva(id) ON DELETE CASCADE,
+                categoria_id  INTEGER NOT NULL REFERENCES categoria_mo(id),
+                piso_salarial NUMERIC(12,2) NOT NULL,
+                beneficios    JSONB DEFAULT '[]'::jsonb
+            );
+            CREATE INDEX IF NOT EXISTS idx_convencao_valor_convencao ON convencao_valor (convencao_id);
+            CREATE INDEX IF NOT EXISTS idx_convencao_valor_categoria ON convencao_valor (categoria_id);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS funcionario (
+                id            SERIAL PRIMARY KEY,
+                nome          VARCHAR(160) NOT NULL,
+                cpf           VARCHAR(14),
+                categoria_id  INTEGER NOT NULL REFERENCES categoria_mo(id),
+                obra_id       INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                salario       NUMERIC(12,2) NOT NULL,
+                data_admissao DATE,
+                data_demissao DATE,
+                status        VARCHAR(20) NOT NULL DEFAULT 'ativo',
+                data_criacao  TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_funcionario_cpf ON funcionario (cpf);
+            CREATE INDEX IF NOT EXISTS idx_funcionario_obra ON funcionario (obra_id);
+            CREATE INDEX IF NOT EXISTS idx_funcionario_categoria ON funcionario (categoria_id);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pagamento_salario (
+                id              SERIAL PRIMARY KEY,
+                funcionario_id  INTEGER NOT NULL REFERENCES funcionario(id),
+                competencia     VARCHAR(7) NOT NULL,
+                tipo            VARCHAR(20) NOT NULL,
+                valor           NUMERIC(12,2) NOT NULL,
+                data_pagamento  DATE NOT NULL,
+                obra_id         INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                comprovante_url VARCHAR(500),
+                observacao      VARCHAR(300),
+                data_criacao    TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_pag_salario_competencia ON pagamento_salario (competencia);
+            CREATE INDEX IF NOT EXISTS idx_pag_salario_funcionario ON pagamento_salario (funcionario_id);
+            CREATE INDEX IF NOT EXISTS idx_pag_salario_obra ON pagamento_salario (obra_id);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS encargo (
+                id             SERIAL PRIMARY KEY,
+                tipo           VARCHAR(20) NOT NULL,
+                competencia    VARCHAR(7) NOT NULL,
+                vencimento     DATE,
+                data_pagamento DATE,
+                valor          NUMERIC(12,2) NOT NULL,
+                arquivo_url    VARCHAR(500),
+                obra_id        INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                funcionario_id INTEGER REFERENCES funcionario(id) ON DELETE SET NULL,
+                observacao     VARCHAR(300),
+                data_criacao   TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_encargo_competencia ON encargo (competencia);
+            CREATE INDEX IF NOT EXISTS idx_encargo_tipo ON encargo (tipo);
+            CREATE INDEX IF NOT EXISTS idx_encargo_obra ON encargo (obra_id);
+        """)
+
+        logger.info("✅ RH: 6 tabelas garantidas (categoria_mo, convencao_coletiva, "
+                    "convencao_valor, funcionario, pagamento_salario, encargo)")
+
         conn.commit()
         cur.close()
         conn.close()

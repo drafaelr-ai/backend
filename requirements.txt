@@ -20,3 +20,6 @@ psycopg2-binary==2.9.9
 Flask-JWT-Extended==4.6.0
 pdfplumber==0.11.4
 Flask-Limiter==4.1.1
+requests==2.32.3
+anthropic==0.109.1
+openpyxl==3.1.5
