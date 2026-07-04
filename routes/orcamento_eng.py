@@ -298,6 +298,9 @@ def criar_etapa_orcamento(obra_id):
         # ========================================
         # SINCRONIZAÇÃO AUTOMÁTICA COM CRONOGRAMA
         # ========================================
+        # Import tardio: a função vive em routes.cronograma (import órfão da
+        # extração fase-4). Lazy evita qualquer risco de import circular.
+        from routes.cronograma import sincronizar_etapa_orcamento_para_cronograma
         cronograma_criado = sincronizar_etapa_orcamento_para_cronograma(etapa.id, obra_id)
         
         db.session.commit()
@@ -308,9 +311,10 @@ def criar_etapa_orcamento(obra_id):
             resultado['cronograma_id'] = cronograma_criado.id
         
         return jsonify(resultado), 201
-        
+
     except Exception as e:
         db.session.rollback()
+        logger.exception("Erro em POST /obras/%s/orcamento-eng/etapas", obra_id)
         return jsonify({"erro": str(e)}), 500
 
 
