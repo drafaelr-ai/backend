@@ -92,19 +92,22 @@ def listar_convencoes():
 @rh_bp.route('/convencoes/extrair', methods=['POST'])
 @jwt_required()
 def extrair_convencao():
-    """Upload do PDF → roda o parser → retorna JSON de categorias. NÃO salva."""
+    """Upload do PDF → roda o parser → retorna JSON de categorias. NÃO salva.
+
+    Degradação graciosa: qualquer falha do parser (sem chave, timeout, resposta
+    não-JSON) retorna 200 com categorias vazias + aviso, para o fluxo de revisão
+    abrir em modo manual. Nunca 500/503 (e nunca 422, que o fetchWithAuth trata
+    como sessão expirada e desloga o operador)."""
+    _AVISO = "Não consegui ler a convenção automaticamente. Preencha as categorias manualmente."
     try:
         arquivo = request.files.get('arquivo') or request.files.get('file')
         if not arquivo:
             return jsonify({"erro": "arquivo (PDF) é obrigatório"}), 400
         resultado = cct_parser_service.parse_cct(arquivo)
         return jsonify(resultado), 200
-    except RuntimeError as e:
-        logger.warning("extrair_convencao indisponível: %s", e)
-        return jsonify({"erro": str(e)}), 503
-    except Exception as e:
-        logger.exception("Erro em POST /rh/convencoes/extrair")
-        return jsonify({"erro": "Erro ao extrair convenção", "detalhe": str(e)}), 500
+    except Exception:
+        logger.exception("Falha no parser de CCT — degradando p/ preenchimento manual")
+        return jsonify({"categorias": [], "aviso": _AVISO}), 200
 
 
 def _resolver_categoria(nome):
@@ -144,11 +147,13 @@ def criar_convencao():
             return jsonify({"erro": "vigencia_inicio e vigencia_fim são obrigatórias (YYYY-MM-DD)"}), 400
 
         arquivo_url = None
+        anexo_falhou = False
         if arquivo:
             try:
                 arquivo_url = storage_service.upload_arquivo(arquivo, 'convencoes')
             except Exception as e:
-                logger.warning("Upload da CCT falhou (segue sem arquivo): %s", e)
+                anexo_falhou = True
+                logger.exception("Upload da CCT falhou (segue sem arquivo): %s", e)
 
         conv = ConvencaoColetiva(
             uf=uf,
@@ -176,7 +181,10 @@ def criar_convencao():
             ))
 
         db.session.commit()
-        return jsonify(conv.to_dict()), 201
+        resp = conv.to_dict()
+        if anexo_falhou:
+            resp['aviso'] = "Convenção salva, mas o anexo (PDF) não pôde ser enviado."
+        return jsonify(resp), 201
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/convencoes")
@@ -472,11 +480,13 @@ def criar_pagamento():
             return jsonify({"erro": "Funcionário não encontrado"}), 404
 
         comprovante_url = None
+        anexo_falhou = False
         if arquivo:
             try:
                 comprovante_url = storage_service.upload_arquivo(arquivo, 'comprovantes')
             except Exception as e:
-                logger.warning("Upload do comprovante falhou (segue sem): %s", e)
+                anexo_falhou = True
+                logger.exception("Upload do comprovante falhou (segue sem): %s", e)
 
         pag = PagamentoSalario(
             funcionario_id=func.id,
@@ -490,7 +500,10 @@ def criar_pagamento():
         )
         db.session.add(pag)
         db.session.commit()
-        return jsonify(pag.to_dict()), 201
+        resp = pag.to_dict()
+        if anexo_falhou:
+            resp['aviso'] = "Pagamento salvo, mas o comprovante não pôde ser enviado."
+        return jsonify(resp), 201
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/pagamentos")
@@ -592,11 +605,13 @@ def criar_encargo():
             return jsonify({"erro": f"tipo (∈ {sorted(_ENCARGO_TIPOS)}), competencia e valor são obrigatórios"}), 400
 
         arquivo_url = None
+        anexo_falhou = False
         if arquivo:
             try:
                 arquivo_url = storage_service.upload_arquivo(arquivo, 'guias')
             except Exception as e:
-                logger.warning("Upload da guia falhou (segue sem): %s", e)
+                anexo_falhou = True
+                logger.exception("Upload da guia falhou (segue sem): %s", e)
 
         enc = Encargo(
             tipo=tipo,
@@ -611,7 +626,10 @@ def criar_encargo():
         )
         db.session.add(enc)
         db.session.commit()
-        return jsonify(enc.to_dict()), 201
+        resp = enc.to_dict()
+        if anexo_falhou:
+            resp['aviso'] = "Encargo salvo, mas a guia (PDF) não pôde ser enviada."
+        return jsonify(resp), 201
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/encargos")

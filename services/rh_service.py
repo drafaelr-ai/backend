@@ -92,7 +92,7 @@ def dashboard(competencia):
         .scalar() or 0
     )
     custo_total = folha_total + encargos_total
-    pct_encargos = round(encargos_total / folha_total * 100) if folha_total else 0
+    pct_encargos = round(encargos_total / folha_total * 100) if folha_total else None
 
     # --- MO por obra (salários snapshot + encargos diretos + rateio do Geral) ---
     salarios_por_obra = _somar_por_obra(competencia)
@@ -113,8 +113,6 @@ def dashboard(competencia):
 
     # Conjunto de obras que aparecem (salários ou encargos diretos), incl. None (Sem obra)
     obra_ids = set(salarios_por_obra) | set(encargos_diretos)
-    if encargos_geral and None not in obra_ids and not salarios_por_obra:
-        obra_ids.add(None)
 
     # Nomes das obras
     nomes = {}
@@ -129,6 +127,7 @@ def dashboard(competencia):
         enc_direto = encargos_diretos.get(oid, 0.0)
         rateio = 0.0
         estimado = False
+        # Rateio proporcional só quando há folha p/ ratear (evita divisão por zero)
         if encargos_geral and folha_total > 0 and salarios > 0:
             rateio = encargos_geral * (salarios / folha_total)
             estimado = True
@@ -141,6 +140,18 @@ def dashboard(competencia):
             'total': round(salarios + encargos_obra, 2),
             'encargo_estimado': estimado,
         })
+
+    # Sem folha p/ ratear: encargos "Geral" não somem — vão num balde único "Geral".
+    if encargos_geral and folha_total == 0:
+        mo_por_obra.append({
+            'obra_id': None,
+            'obra': 'Geral',
+            'salarios': 0.0,
+            'encargos': round(encargos_geral, 2),
+            'total': round(encargos_geral, 2),
+            'encargo_estimado': False,
+        })
+
     mo_por_obra.sort(key=lambda x: x['total'], reverse=True)
 
     # --- Folha por segmento (categoria): total via pagamentos, qtd = ativos ---
