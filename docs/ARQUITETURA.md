@@ -81,6 +81,8 @@ backend-fase4/
 | `cronograma_bp` | routes/cronograma.py | 30 | — |
 | `orcamento_eng_bp` | routes/orcamento_eng.py | 14 | `/obras/<int:obra_id>/orcamento-eng` |
 | `obras_bp` | routes/obras.py | 40 | — |
+| `superlink_bp` | routes/superlink.py | 2 | `/superlink` |
+| `rh_bp` | routes/rh.py | 27 | `/rh` |
 
 ### Padrões de arquitetura
 
@@ -150,6 +152,47 @@ Roda a cada cold start, antes de `create_app()`. Usa `psycopg2` diretamente (sem
 
 ---
 
+## Backend — Módulo Pessoal / RH
+
+Módulo **centralizado** (fora de qualquer obra), no backend Main (`obraly-api`,
+Supabase `kwmuiviyqjcxawuiqkrl`). **Registra** funcionários, CCTs, pagamentos de
+salário e encargos — **não calcula** férias/13º/rescisão.
+
+### Schema — 6 models + `obra.uf`
+
+| Model | Tabela | Papel |
+|---|---|---|
+| `CategoriaMO` | `categoria_mo` | funções globais (Pedreiro, Servente…) |
+| `ConvencaoColetiva` | `convencao_coletiva` | CCT por UF (rascunho \| confirmada) |
+| `ConvencaoValor` | `convencao_valor` | piso + benefícios (JSONB) por convenção × categoria |
+| `Funcionario` | `funcionario` | `obra_id` nulo = centralizado; `salario` sempre persistido |
+| `PagamentoSalario` | `pagamento_salario` | `obra_id` é **snapshot** do funcionário no POST |
+| `Encargo` | `encargo` | FGTS/INSS-DARF/eSocial-DAE; `status` derivado |
+
+Migration aditiva/idempotente em `auto_migration.py` (`CREATE TABLE IF NOT EXISTS`,
+FKs para `obra.id` com `ON DELETE SET NULL`). Adicionada coluna nullable `obra.uf`
+(origem do piso da CCT). Dinheiro em `Numeric(12,2)`; `competencia` em `'YYYY-MM'`.
+
+### Services
+
+| Service | Papel |
+|---|---|
+| `storage_service.py` | Supabase Storage (bucket privado `rh-arquivos`) via REST; `ensure_bucket`, `upload_arquivo`, `signed_url` |
+| `cct_parser_service.py` | pdfplumber (lazy) + Anthropic SDK (`RH_PARSER_MODEL`, default `claude-sonnet-4-6`); extrai categorias/pisos/benefícios; **não persiste**; degrada gracioso |
+| `rh_service.py` | `piso_vigente(categoria, uf)`, `piso_vigente_funcionario`, `dashboard(competencia)` com **rateio proporcional** dos encargos gerais |
+
+### Rotas (`rh_bp`, `/rh`, todas `@jwt_required()`)
+
+CRUD de `categorias`, `convencoes` (+ `extrair` PDF→JSON), `funcionarios`
+(+ `piso-sugerido`, `PATCH .../obra` migrar), `pagamentos`, `encargos`
+(+ `importar` .xlsx/.csv), `arquivo/<tipo>/<id>` (signed URL) e `dashboard`.
+
+### Secrets (Fly `obraly-api`)
+
+`ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (+ `RH_PARSER_MODEL` opcional).
+
+---
+
 ## Frontend — Módulo Principal
 
 ### Estrutura de arquivos
@@ -207,7 +250,14 @@ frontend-fase6/src/
 ?obra=X   → ObraDetalhe (visão de uma obra)
 (sem ?obra) → Dashboard (lista panorâmica de obras)
 selectedModule='admin' → AppAdmin.js
+selectedModule='rh'    → screens/RH (lazy) — auth via AuthContext + fetchWithAuth
 ```
+
+**Módulo Pessoal / RH (frontend):** `screens/RH/` — `index.jsx` (navbar + 5 abas),
+`DashboardRH`, `FuncionariosRH`, `ConvencoesRH` (wizard 3 passos), `PagamentosRH`,
+`EncargosRH` + `rhApi.js`/`rhFormat.js`/`rh.css` (escopado, tokens v2.0). Modais em
+`components/modals/` (`FuncionarioModal`, `PagamentoSalarioModal`, `EncargoModal`)
+via wrapper `Modal.jsx`. Card "Pessoal / RH" em `layout/ModuleSelectorScreen.jsx`.
 
 ### Modal pattern
 

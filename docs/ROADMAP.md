@@ -20,6 +20,7 @@ Fases 1–4, 6 e Superlink concluídas:
 | 8 | ⏳ | Módulo Patrimonial — **PRIORIDADE** |
 | 9 | ⏳ | Cronograma Operacional Integrado |
 | — | ✅ | **Superlink de Pagamento** (fora de fase, entregue 05/06/2026) |
+| — | ✅ | **Módulo Pessoal / RH** (fora de fase, entregue 07/2026) |
 
 ---
 
@@ -130,6 +131,26 @@ Substituiu o compartilhamento individual por WhatsApp por um link permanente de 
 **Snapshot:** cada link congela descrição, valor, contexto, forma e chave no momento da geração. A rota pública nunca lê models internos.
 
 **Boleto / extração PDF:** `extrair_dados_boleto_pdf_admin` reutilizada no Admin. Quando o PDF é imagem (sem texto extraível), o campo `codigo_barras` fica vazio para digitação manual — comportamento documentado em B-01 de BUGS_LATENTES.
+
+---
+
+## Módulo Pessoal / RH — ✅ Entregue (07/2026)
+
+Módulo centralizado (fora de qualquer obra) no backend Main. **Registra**
+funcionários, CCTs, pagamentos de salário e encargos — não calcula férias/13º/rescisão.
+
+| Componente | Entregue |
+|---|---|
+| 6 models + migration aditiva/idempotente (+ `obra.uf` nullable) | ✅ |
+| Services: storage (Supabase), parser CCT (pdfplumber + Anthropic), rh_service (dashboard c/ rateio) | ✅ |
+| `rh_bp` (`/rh`) — 27 rotas, todas `@jwt_required()`; smoke multi-role 0 FAIL | ✅ |
+| Deploy backend `obraly-api` + secrets (`ANTHROPIC_API_KEY`, `SUPABASE_*`) + bucket `rh-arquivos` | ✅ |
+| Frontend: 5 telas + 3 modais + card no ModuleSelector, fiéis ao preview | ✅ |
+| Hotfix pré-smoke: guard ÷0 no dashboard + degradação graciosa parser/storage | ✅ |
+
+**Decisões:** UF do piso vem de `obra.uf` (`funcionario.obra → obra.uf → piso_vigente`).
+Parser degrada com 200+aviso (nunca 422, que o `fetchWithAuth` trata como logout).
+`obra_id` do pagamento é snapshot (custo histórico por obra permanece correto).
 
 ---
 
