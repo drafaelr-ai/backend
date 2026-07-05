@@ -47,11 +47,19 @@ from models.cronograma_etapa import CronogramaEtapa   # noqa: F401
 from models.cronograma_obra import CronogramaObra     # noqa: F401
 from models.agenda_demanda import AgendaDemanda       # noqa: F401
 from models.superlink import Superlink                # noqa: F401
+# Módulo Pessoal / RH
+from models.categoria_mo import CategoriaMO           # noqa: F401
+from models.convencao_coletiva import ConvencaoColetiva  # noqa: F401
+from models.convencao_valor import ConvencaoValor     # noqa: F401
+from models.funcionario import Funcionario            # noqa: F401
+from models.pagamento_salario import PagamentoSalario # noqa: F401
+from models.encargo import Encargo                    # noqa: F401
 
 from routes import (
     notificacoes_bp, bi_bp, diario_bp, auth_bp, admin_bp, sid_bp,
     caixa_bp, servicos_bp, boletos_bp, lancamentos_bp,
     cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
+    rh_bp,
 )
 
 setup_logging()
@@ -146,6 +154,7 @@ def create_app(config_class=Config):
     app.register_blueprint(orcamento_eng_bp)
     app.register_blueprint(obras_bp)
     app.register_blueprint(superlink_bp)
+    app.register_blueprint(rh_bp)
 
     return app
 

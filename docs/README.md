@@ -7,6 +7,10 @@ Sistema de gestão para construções e administração patrimonial.
 - **Obras** (módulo principal) — construções em andamento, orçamentos,
   cronogramas, pagamentos, boletos, lançamentos financeiros
 - **Patrimonial** (admin) — imóveis finalizados, receitas/despesas, locação
+- **Pessoal / RH** — módulo centralizado (fora de qualquer obra): funcionários,
+  convenções coletivas (CCT, com leitura de PDF via Anthropic), pagamentos de
+  salário e encargos (FGTS/INSS-DARF/eSocial-DAE), com dashboard de custo de
+  mão de obra por obra (rateio proporcional dos encargos gerais)
 
 ## Stack
 

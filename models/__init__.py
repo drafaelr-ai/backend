@@ -24,3 +24,10 @@ from .cronograma_etapa import CronogramaEtapa  # noqa: F401
 from .cronograma_obra import CronogramaObra  # noqa: F401
 from .agenda_demanda import AgendaDemanda  # noqa: F401
 from .superlink import Superlink  # noqa: F401
+# --- Módulo Pessoal / RH ---
+from .categoria_mo import CategoriaMO  # noqa: F401
+from .convencao_coletiva import ConvencaoColetiva  # noqa: F401
+from .convencao_valor import ConvencaoValor  # noqa: F401
+from .funcionario import Funcionario  # noqa: F401
+from .pagamento_salario import PagamentoSalario  # noqa: F401
+from .encargo import Encargo  # noqa: F401
