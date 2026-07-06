@@ -22,7 +22,9 @@ def register():
         dados = request.json
         username = dados.get('username')
         password = dados.get('password')
-        role = dados.get('role', 'comum')
+        # Segurança: role elevado (master/administrador) NUNCA pode ser definido
+        # pelo próprio cliente em auto-registro público. Sempre força 'comum'.
+        role = 'comum'
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
         if User.query.filter_by(username=username).first():

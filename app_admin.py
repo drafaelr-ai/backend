@@ -3,8 +3,9 @@ import os
 
 from flask import Flask
 
+from auto_migration_admin import run_auto_migration_admin
 from config_admin import DevelopmentConfig, ProductionConfig
-from extensions_admin import db, jwt, cors, apply_cors_headers
+from extensions_admin import db, jwt, cors, apply_cors_headers, ALLOWED_ORIGINS
 from logging_setup import setup_logging
 from routes_admin import (
     health_bp,
@@ -52,10 +53,11 @@ def create_app(config=None):
 
     db.init_app(app)
     jwt.init_app(app)
-    cors.init_app(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
+    cors.init_app(app, resources={r'/*': {'origins': ALLOWED_ORIGINS}}, supports_credentials=False)
 
     with app.app_context():
         _run_migrations()
+        run_auto_migration_admin()
 
     app.after_request(apply_cors_headers)
 
@@ -85,5 +87,5 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=port, debug=True)
 
 
-# gunicorn entrypoint (Dockerfile.admin: gunicorn app_admin_new:app)
+# gunicorn entrypoint (Dockerfile.admin: gunicorn app_admin:app)
 app = create_app()

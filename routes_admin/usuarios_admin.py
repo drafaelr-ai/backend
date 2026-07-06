@@ -29,7 +29,7 @@ def criar_usuario():
     if not user or user.role != 'admin':
         return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
 
         username = dados.get('username', '').strip()
         password = dados.get('password', '')
@@ -74,7 +74,7 @@ def atualizar_usuario(usuario_id):
         return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
     usuario = Usuario.query.get_or_404(usuario_id)
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
 
         if dados.get('nome'):
             usuario.nome = dados['nome'].strip()
@@ -136,7 +136,7 @@ def reset_senha_usuario(usuario_id):
         return jsonify({'erro': 'Acesso negado. Apenas administradores.'}), 403
     usuario = Usuario.query.get_or_404(usuario_id)
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
         nova_senha = dados.get('nova_senha', '')
 
         if len(nova_senha) < 6:

@@ -53,7 +53,7 @@ def criar_boleto_admin(imovel_id):
         return jsonify({'erro': 'Acesso negado'}), 403
 
     try:
-        data = request.get_json(silent=True)
+        data = request.get_json(silent=True) or {}
         if not data.get('descricao') or not data.get('valor') or not data.get('data_vencimento'):
             return jsonify({'erro': 'Descrição, valor e data de vencimento são obrigatórios'}), 400
 
@@ -94,7 +94,7 @@ def extrair_pdf_boleto_admin(imovel_id):
     if not user:
         return jsonify({'erro': 'Não autorizado'}), 401
     try:
-        data = request.get_json(silent=True)
+        data = request.get_json(silent=True) or {}
         pdf_base64 = data.get('arquivo_base64', '')
         if ',' in pdf_base64:
             pdf_base64 = pdf_base64.split(',')[1]
@@ -111,11 +111,13 @@ def extrair_pdf_boleto_admin(imovel_id):
 @jwt_required()
 def editar_boleto_admin(imovel_id, boleto_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
     boleto = AdminBoleto.query.get_or_404(boleto_id)
     if user.role != 'admin' and boleto.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
     try:
-        data = request.get_json(silent=True)
+        data = request.get_json(silent=True) or {}
         for campo in ['descricao', 'beneficiario', 'codigo_barras', 'status']:
             if campo in data:
                 setattr(boleto, campo, data[campo])
@@ -137,6 +139,8 @@ def editar_boleto_admin(imovel_id, boleto_id):
 @jwt_required()
 def pagar_boleto_admin(imovel_id, boleto_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
     boleto = AdminBoleto.query.get_or_404(boleto_id)
     if user.role != 'admin' and boleto.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
@@ -158,6 +162,8 @@ def pagar_boleto_admin(imovel_id, boleto_id):
 @jwt_required()
 def deletar_boleto_admin(imovel_id, boleto_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
     boleto = AdminBoleto.query.get_or_404(boleto_id)
     if user.role != 'admin' and boleto.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
@@ -175,6 +181,8 @@ def deletar_boleto_admin(imovel_id, boleto_id):
 @jwt_required()
 def obter_arquivo_boleto_admin(imovel_id, boleto_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
     boleto = AdminBoleto.query.get_or_404(boleto_id)
     if user.role != 'admin' and boleto.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
@@ -189,6 +197,9 @@ def resumo_boletos_admin(imovel_id):
     user = get_current_user()
     if not user:
         return jsonify({'erro': 'Não autorizado'}), 401
+    imovel = Imovel.query.get_or_404(imovel_id)
+    if user.role != 'admin' and imovel.usuario_id != user.id:
+        return jsonify({'erro': 'Acesso negado'}), 403
     try:
         hoje = date.today()
         boletos = AdminBoleto.query.filter_by(imovel_id=imovel_id).all()

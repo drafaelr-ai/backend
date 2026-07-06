@@ -49,7 +49,13 @@ def register():
     if request.method == 'OPTIONS':
         return make_response(jsonify({}), 200)
     try:
+        user = get_current_user()
+        if not user or user.role != 'admin':
+            return jsonify({'erro': 'Acesso negado'}), 403
+
         dados = request.get_json(silent=True)
+        if not dados:
+            return jsonify({'erro': 'JSON inválido ou ausente'}), 400
 
         username = dados.get('username', '').strip()
         password = dados.get('password', '')

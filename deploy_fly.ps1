@@ -101,7 +101,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Configurando variáveis admin..." -ForegroundColor Yellow
 
-$DB_ADMIN_URL = "postgresql://postgres.sjomlpyraztqcqfujrml:Controleobras%2322@aws-1-sa-east-1.pooler.supabase.com:6543/postgres"
+$DB_ADMIN_URL = Read-Host "Digite a DATABASE_URL_ADMIN completa (connection string do Supabase admin)"
 $JWT_ADMIN    = Read-Host "Digite o JWT_SECRET_KEY_ADMIN (pode ser qualquer string longa)"
 
 fly secrets set `

@@ -332,8 +332,10 @@ def editar_etapa_orcamento(obra_id, etapa_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
+        if etapa.obra_id != obra_id:
+            return jsonify({"erro": "Etapa não pertence a esta obra"}), 404
         dados = request.json
-        
+
         if 'codigo' in dados:
             etapa.codigo = dados['codigo']
         if 'nome' in dados:
@@ -396,7 +398,9 @@ def deletar_etapa_orcamento(obra_id, etapa_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
-        
+        if etapa.obra_id != obra_id:
+            return jsonify({"erro": "Etapa não pertence a esta obra"}), 404
+
         # Deletar serviços vinculados aos itens (com tratamento de erro)
         for item in etapa.itens:
             try:
@@ -566,8 +570,10 @@ def editar_item_orcamento(obra_id, item_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         item = OrcamentoEngItem.query.get_or_404(item_id)
+        if not item.etapa or item.etapa.obra_id != obra_id:
+            return jsonify({"erro": "Item não pertence a esta obra"}), 404
         dados = request.json
-        
+
         # Guardar totais antigos para atualizar serviço
         totais_antigos = item.calcular_totais() if item.servico_id else None
         
@@ -633,7 +639,9 @@ def deletar_item_orcamento(obra_id, item_id):
             return jsonify({"erro": "Sem permissão"}), 403
         
         item = OrcamentoEngItem.query.get_or_404(item_id)
-        
+        if not item.etapa or item.etapa.obra_id != obra_id:
+            return jsonify({"erro": "Item não pertence a esta obra"}), 404
+
         # Deletar serviço vinculado (com tratamento de erro)
         try:
             if item.servico_id:

@@ -11,13 +11,12 @@ Architecture:
 """
 import os
 import logging
-from urllib.parse import quote_plus
 
 from flask import Flask, request
 
 from logging_setup import setup_logging
 from extensions import db, jwt, cors, limiter
-from config import Config
+from config import Config, _build_database_url, _DB_USER
 from auto_migration import run_auto_migration
 
 # Models — imported so SQLAlchemy discovers them before any db operation.
@@ -111,15 +110,7 @@ def create_app(config_class=Config):
         raise ValueError("Variável de ambiente DB_PASSWORD não definida.")
     logger.info("--- [LOG] Variável DB_PASSWORD carregada com sucesso. ---")
 
-    encoded_password = quote_plus(db_password)
-    _DB_USER = "postgres.kwmuiviyqjcxawuiqkrl"
-    _DB_HOST = "aws-1-sa-east-1.pooler.supabase.com"
-    _DB_PORT = "6543"
-    _DB_NAME = "postgres"
-    database_url = (
-        f"postgresql://{_DB_USER}:{encoded_password}"
-        f"@{_DB_HOST}:{_DB_PORT}/{_DB_NAME}?sslmode=require"
-    )
+    database_url = _build_database_url()
     logger.info(f"--- [LOG] String de conexão criada para usuário {_DB_USER} ---")
     app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 

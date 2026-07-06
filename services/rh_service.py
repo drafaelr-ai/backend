@@ -52,6 +52,15 @@ def piso_vigente(categoria_id, uf):
     return float(row[0]) if row and row[0] is not None else None
 
 
+def piso_vigente_batch(pares):
+    """Versão em lote de `piso_vigente` p/ evitar N+1 em listagens de
+    funcionários: recebe um iterável de (categoria_id, uf) e resolve cada
+    combinação única uma única vez (várias linhas costumam repetir a mesma
+    categoria/UF). Retorna {(categoria_id, uf): piso}."""
+    unicos = {(cid, uf) for cid, uf in pares if cid and uf}
+    return {par: piso_vigente(par[0], par[1]) for par in unicos}
+
+
 def piso_vigente_funcionario(funcionario):
     """Piso vigente para um funcionário: UF vem da obra vinculada (se houver)."""
     try:

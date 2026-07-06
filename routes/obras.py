@@ -13,6 +13,11 @@ from flask import Blueprint, jsonify, request, make_response, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from sqlalchemy import func, case
 from sqlalchemy.orm import joinedload
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 from extensions import db
 from models.obra import Obra
@@ -900,11 +905,25 @@ def get_obra_detalhes(obra_id):
         
         
         # Buscar lançamentos para o retorno (usando a query já feita)
-        lancamentos_retorno = Lancamento.query.filter_by(obra_id=obra_id).all()
-        
+        # Eager-load do serviço vinculado + pré-carga em lote dos nomes de item de
+        # orçamento evita N+1 queries dentro de Lancamento.to_dict() (perf).
+        lancamentos_retorno = Lancamento.query.filter_by(obra_id=obra_id).options(
+            joinedload(Lancamento.servico)
+        ).all()
+
+        orcamento_item_ids = {l.orcamento_item_id for l in lancamentos_retorno if l.orcamento_item_id}
+        orcamento_item_nome_map = {}
+        if orcamento_item_ids:
+            itens_orcamento = OrcamentoEngItem.query.filter(
+                OrcamentoEngItem.id.in_(orcamento_item_ids)
+            ).all()
+            orcamento_item_nome_map = {
+                item.id: f"{item.codigo} - {item.descricao}" for item in itens_orcamento
+            }
+
         return jsonify({
             "obra": obra.to_dict(),
-            "lancamentos": [l.to_dict() for l in lancamentos_retorno],
+            "lancamentos": [l.to_dict(orcamento_item_nome_map) for l in lancamentos_retorno],
             "servicos": servicos_com_totais,
             "historico_unificado": historico_unificado, 
             "sumarios": sumarios_dict,
@@ -1237,6 +1256,12 @@ def atualizar_pagamento_servico(pagamento_id):
         pagamento = db.session.get(PagamentoServico, pagamento_id)
         if not pagamento:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
+
+        user = get_current_user()
+        servico = db.session.get(Servico, pagamento.servico_id)
+        if not servico or not user_has_access_to_obra(user, servico.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
         dados = request.json
         if 'tipo_pagamento' in dados:
             pagamento.tipo_pagamento = dados['tipo_pagamento']  # 'mao_de_obra' ou 'material'
@@ -2132,7 +2157,7 @@ def export_csv(obra_id):
         user = get_current_user()
         if not user or not user_has_access_to_obra(user, obra_id):
            logger.warning(f"--- [AVISO] Tentativa de export CSV sem permissão ou token (obra_id={obra_id}) ---")
-           pass
+           return jsonify({"erro": "Acesso negado a esta obra."}), 403
         obra = Obra.query.get_or_404(obra_id)
         items = obra.lancamentos
         si = io.StringIO()
@@ -3947,13 +3972,16 @@ def limpar_tudo_pendente_global():
 
 
 @obras_bp.route('/popular-servicos-base', methods=['GET', 'POST'])
+@jwt_required()
 def popular_servicos_base():
     """
     Popula a base de serviços de referência (executar apenas uma vez)
-    GET: Acesso direto pelo navegador (sem autenticação, apenas para setup inicial)
-    POST: Acesso autenticado
+    GET/POST: Acesso restrito a administrador/master (setup inicial da base de referência)
     """
     try:
+        user = get_current_user()
+        if not user or user.role not in ('administrador', 'master'):
+            return jsonify({"erro": "Acesso negado"}), 403
         # Verificar se já está populado
         if ServicoBase.query.count() > 0:
             return jsonify({"mensagem": "Base já populada", "total": ServicoBase.query.count()})

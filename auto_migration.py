@@ -6,7 +6,8 @@ cold start. No models or Flask app required — uses psycopg2 directly.
 import os
 import logging
 import traceback
-from urllib.parse import quote_plus
+
+from config import _build_database_url
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,7 @@ def run_auto_migration():
             logger.warning("⚠️ DB_PASSWORD não encontrada, pulando migration")
             return
 
-        encoded_password = quote_plus(db_password)
-        url = f"postgresql://postgres.kwmuiviyqjcxawuiqkrl:{encoded_password}@aws-1-sa-east-1.pooler.supabase.com:6543/postgres?sslmode=require"
+        url = _build_database_url()
 
         conn = psycopg2.connect(url)
         cur = conn.cursor()
@@ -483,6 +483,11 @@ def run_auto_migration():
         ]
         idx_ok = 0
         for idx_name, idx_def in perf_indexes:
+            # Falha por-indice e isolada aqui via SAVEPOINT/ROLLBACK e nunca
+            # propaga pro except de nivel de funcao (raise no fim de
+            # run_auto_migration): um indice com coluna inexistente (ex.:
+            # idx_perf_movimentacao_obra_id, coluna removida/renomeada) so
+            # loga um warning e segue, NAO derruba o boot.
             try:
                 cur.execute("SAVEPOINT before_idx")
                 cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_def};")
@@ -550,6 +555,27 @@ def run_auto_migration():
             );
             CREATE INDEX IF NOT EXISTS idx_categoria_mo_nome ON categoria_mo (nome);
         """)
+
+        # Índice único (case-insensitive) em categoria_mo.nome — evita categorias
+        # duplicadas criadas por confirmações de CCT concorrentes (RH-fix).
+        # Guardado: só cria se não houver duplicatas hoje (não apaga/mescla
+        # dado existente); se houver, apenas loga um aviso p/ limpeza manual.
+        cur.execute("""
+            SELECT lower(nome) FROM categoria_mo
+            GROUP BY lower(nome) HAVING COUNT(*) > 1;
+        """)
+        dupes_categoria = cur.fetchall()
+        if dupes_categoria:
+            logger.warning(
+                "⚠️ RH: categoria_mo tem nomes duplicados (case-insensitive) — "
+                "pulando criação do índice único até limpeza manual: %s",
+                [d[0] for d in dupes_categoria],
+            )
+        else:
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_categoria_mo_nome_unique
+                ON categoria_mo (lower(nome));
+            """)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS convencao_coletiva (
@@ -640,5 +666,12 @@ def run_auto_migration():
         logger.info("🎉 AUTO-MIGRATION CONCLUÍDA!")
 
     except Exception as e:
+        # Nem toda falha conhecida chega aqui: o loop de indices de perf
+        # (SAVEPOINT/ROLLBACK por indice, acima) e o dedup de categoria_mo
+        # em _resolver_categoria (routes/rh.py) ja isolam seus proprios
+        # erros esperados localmente. Este raise cobre falhas genuinamente
+        # inesperadas (schema quebrado, conexao caiu no meio, etc.) e
+        # propositalmente derruba o boot em vez de mascarar o problema.
         logger.exception(f"❌ Erro na auto-migration: {e}")
         traceback.print_exc()
+        raise
