@@ -29,13 +29,21 @@ class Funcionario(db.Model):
     categoria = db.relationship('CategoriaMO', lazy=True)
     obra = db.relationship('Obra', lazy=True)
 
-    def to_dict(self):
+    def to_dict(self, piso_lookup=None):
+        """`piso_lookup`: dict opcional {(categoria_id, uf): piso} pré-calculado
+        em lote pelo chamador (ex.: listagens) para evitar 1-2 queries extras
+        de piso vigente por funcionário (N+1). Se omitido, calcula na hora
+        (comportamento original, usado nas rotas de item único)."""
         acima_do_piso = None
         try:
-            # Resolução do piso vigente vive no rh_service (RH-2). Importação
-            # tardia evita ciclo e mantém to_dict resiliente antes do service.
-            from services.rh_service import piso_vigente_funcionario
-            piso = piso_vigente_funcionario(self)
+            if piso_lookup is not None:
+                uf = self.obra.uf if self.obra else None
+                piso = piso_lookup.get((self.categoria_id, uf)) if uf else None
+            else:
+                # Resolução do piso vigente vive no rh_service (RH-2). Importação
+                # tardia evita ciclo e mantém to_dict resiliente antes do service.
+                from services.rh_service import piso_vigente_funcionario
+                piso = piso_vigente_funcionario(self)
             if piso is not None and self.salario is not None:
                 acima_do_piso = float(self.salario) > float(piso)
         except Exception:

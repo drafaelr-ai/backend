@@ -9,6 +9,8 @@ from datetime import datetime, date
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 
 from extensions import db
 from models.categoria_mo import CategoriaMO
@@ -17,7 +19,9 @@ from models.convencao_valor import ConvencaoValor
 from models.funcionario import Funcionario
 from models.pagamento_salario import PagamentoSalario
 from models.encargo import Encargo
+from models.obra import Obra
 from services import cct_parser_service, rh_service, storage_service
+from services import get_current_user, user_has_access_to_obra
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,32 @@ def _to_num(valor):
         return None
 
 
+def _parse_int_arg(nome, valor):
+    """int(valor) com erro amigável (400) em vez de deixar ValueError estourar
+    pro except genérico da rota (que devolveria 500). Retorna (valor, erro);
+    `erro` é a tupla (response, status) pronta pra `return` quando inválido."""
+    try:
+        return int(valor), None
+    except (TypeError, ValueError):
+        return None, (jsonify({"erro": f"{nome} inválido"}), 400)
+
+
+def _obra_ids_permitidos(user):
+    """None = sem restrição (master/administrador, vê tudo). Lista = só essas
+    obras (usuário comum); lista vazia = nenhuma obra liberada."""
+    if user and user.role in ('master', 'administrador'):
+        return None
+    return [o.id for o in user.obras_permitidas] if user else []
+
+
+def _restringir_por_obra(query, coluna_obra_id, user):
+    """Restringe a query às obras permitidas do usuário (no-op p/ master/administrador)."""
+    obra_ids = _obra_ids_permitidos(user)
+    if obra_ids is None:
+        return query
+    return query.filter(coluna_obra_id.in_(obra_ids))
+
+
 # ---------------------------------------------------------------- categorias
 
 @rh_bp.route('/categorias', methods=['GET'])
@@ -78,10 +108,15 @@ def listar_categorias():
 def listar_convencoes():
     try:
         convs = ConvencaoColetiva.query.order_by(ConvencaoColetiva.data_upload.desc()).all()
+        contagens = dict(
+            db.session.query(ConvencaoValor.convencao_id, db.func.count(ConvencaoValor.id))
+            .group_by(ConvencaoValor.convencao_id)
+            .all()
+        )
         out = []
         for c in convs:
             d = c.to_dict()
-            d['categorias_count'] = ConvencaoValor.query.filter_by(convencao_id=c.id).count()
+            d['categorias_count'] = contagens.get(c.id, 0)
             out.append(d)
         return jsonify(out), 200
     except Exception as e:
@@ -111,15 +146,26 @@ def extrair_convencao():
 
 
 def _resolver_categoria(nome):
-    """Encontra CategoriaMO por nome (case-insensitive) ou cria uma nova."""
+    """Encontra CategoriaMO por nome (case-insensitive) ou cria uma nova.
+
+    Usa um SAVEPOINT (begin_nested) ao criar: se outra transação concorrente
+    criou a mesma categoria (nome case-insensitive) entre o SELECT e o
+    INSERT, o índice único de categoria_mo.lower(nome) dispara IntegrityError
+    aqui — nesse caso só desfazemos o savepoint e reconsultamos a categoria
+    já criada pela outra transação, em vez de duplicar."""
     nome = (nome or '').strip()
     if not nome:
         return None
     cat = CategoriaMO.query.filter(db.func.lower(CategoriaMO.nome) == nome.lower()).first()
-    if not cat:
-        cat = CategoriaMO(nome=nome)
-        db.session.add(cat)
-        db.session.flush()
+    if cat:
+        return cat
+    try:
+        with db.session.begin_nested():
+            cat = CategoriaMO(nome=nome)
+            db.session.add(cat)
+            db.session.flush()
+    except IntegrityError:
+        cat = CategoriaMO.query.filter(db.func.lower(CategoriaMO.nome) == nome.lower()).first()
     return cat
 
 
@@ -145,6 +191,8 @@ def criar_convencao():
         vig_fim = _parse_date(dados.get('vigencia_fim'))
         if not vig_ini or not vig_fim:
             return jsonify({"erro": "vigencia_inicio e vigencia_fim são obrigatórias (YYYY-MM-DD)"}), 400
+        if vig_ini > vig_fim:
+            return jsonify({"erro": "vigencia_inicio deve ser <= vigencia_fim"}), 400
 
         arquivo_url = None
         anexo_falhou = False
@@ -224,6 +272,8 @@ def editar_convencao(conv_id):
             conv.vigencia_inicio = _parse_date(dados['vigencia_inicio']) or conv.vigencia_inicio
         if dados.get('vigencia_fim'):
             conv.vigencia_fim = _parse_date(dados['vigencia_fim']) or conv.vigencia_fim
+        if conv.vigencia_inicio and conv.vigencia_fim and conv.vigencia_inicio > conv.vigencia_fim:
+            return jsonify({"erro": "vigencia_inicio deve ser <= vigencia_fim"}), 400
         if dados.get('status') in ('rascunho', 'confirmada'):
             conv.status = dados['status']
 
@@ -273,18 +323,33 @@ def remover_convencao(conv_id):
 @jwt_required()
 def listar_funcionarios():
     try:
-        q = Funcionario.query
-        obra_id = request.args.get('obra_id')
+        current_user = get_current_user()
+        q = Funcionario.query.options(
+            joinedload(Funcionario.categoria), joinedload(Funcionario.obra)
+        )
+        obra_id_raw = request.args.get('obra_id')
         status = request.args.get('status')
-        if obra_id is not None and obra_id != '':
-            if obra_id in ('null', 'sem', 'sem_obra'):
+        if obra_id_raw is not None and obra_id_raw != '':
+            if obra_id_raw in ('null', 'sem', 'sem_obra'):
+                if not user_has_access_to_obra(current_user, None):
+                    return jsonify({"erro": "Acesso negado"}), 403
                 q = q.filter(Funcionario.obra_id.is_(None))
             else:
-                q = q.filter(Funcionario.obra_id == int(obra_id))
+                obra_id, err = _parse_int_arg('obra_id', obra_id_raw)
+                if err:
+                    return err
+                if not user_has_access_to_obra(current_user, obra_id):
+                    return jsonify({"erro": "Acesso negado a esta obra"}), 403
+                q = q.filter(Funcionario.obra_id == obra_id)
+        else:
+            q = _restringir_por_obra(q, Funcionario.obra_id, current_user)
         if status:
             q = q.filter(Funcionario.status == status)
         funcs = q.order_by(Funcionario.nome).all()
-        return jsonify([f.to_dict() for f in funcs]), 200
+        piso_lookup = rh_service.piso_vigente_batch(
+            (f.categoria_id, f.obra.uf if f.obra else None) for f in funcs
+        )
+        return jsonify([f.to_dict(piso_lookup=piso_lookup) for f in funcs]), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/funcionarios")
         return jsonify({"erro": "Erro ao listar funcionários", "detalhe": str(e)}), 500
@@ -318,23 +383,32 @@ def criar_funcionario():
         categoria_id = dados.get('categoria_id')
         if not nome or not categoria_id:
             return jsonify({"erro": "nome e categoria_id são obrigatórios"}), 400
+        categoria_id = int(categoria_id)
+        if not db.session.get(CategoriaMO, categoria_id):
+            return jsonify({"erro": "Categoria não encontrada"}), 400
+
+        obra_id = int(dados['obra_id']) if dados.get('obra_id') else None
+        obra = None
+        if obra_id is not None:
+            obra = db.session.get(Obra, obra_id)
+            if not obra:
+                return jsonify({"erro": "Obra não encontrada"}), 400
+
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
 
         salario = _to_num(dados.get('salario'))
         if salario is None:
             # fallback: piso vigente da categoria pela UF da obra
-            obra_id = dados.get('obra_id')
-            uf = None
-            if obra_id:
-                from models.obra import Obra
-                obra = db.session.get(Obra, int(obra_id))
-                uf = obra.uf if obra else None
-            salario = rh_service.piso_vigente(int(categoria_id), uf) or 0
+            uf = obra.uf if obra else None
+            salario = rh_service.piso_vigente(categoria_id, uf) or 0
 
         func = Funcionario(
             nome=nome,
             cpf=(dados.get('cpf') or '').strip() or None,
-            categoria_id=int(categoria_id),
-            obra_id=int(dados['obra_id']) if dados.get('obra_id') else None,
+            categoria_id=categoria_id,
+            obra_id=obra_id,
             salario=salario,
             data_admissao=_parse_date(dados.get('data_admissao')),
             status=dados.get('status') or 'ativo',
@@ -355,6 +429,8 @@ def obter_funcionario(func_id):
         func = db.session.get(Funcionario, func_id)
         if not func:
             return jsonify({"erro": "Funcionário não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), func.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         return jsonify(func.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/funcionarios/<id>")
@@ -368,15 +444,26 @@ def editar_funcionario(func_id):
         func = db.session.get(Funcionario, func_id)
         if not func:
             return jsonify({"erro": "Funcionário não encontrado"}), 404
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, func.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         dados = request.get_json() or {}
         if 'nome' in dados and dados['nome']:
             func.nome = dados['nome'].strip()
         if 'cpf' in dados:
             func.cpf = (dados.get('cpf') or '').strip() or None
         if dados.get('categoria_id'):
-            func.categoria_id = int(dados['categoria_id'])
+            novo_cat_id = int(dados['categoria_id'])
+            if not db.session.get(CategoriaMO, novo_cat_id):
+                return jsonify({"erro": "Categoria não encontrada"}), 400
+            func.categoria_id = novo_cat_id
         if 'obra_id' in dados:
-            func.obra_id = int(dados['obra_id']) if dados.get('obra_id') else None
+            novo_obra_id = int(dados['obra_id']) if dados.get('obra_id') else None
+            if novo_obra_id is not None and not db.session.get(Obra, novo_obra_id):
+                return jsonify({"erro": "Obra não encontrada"}), 400
+            if not user_has_access_to_obra(current_user, novo_obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra"}), 403
+            func.obra_id = novo_obra_id
         if dados.get('salario') is not None:
             novo = _to_num(dados.get('salario'))
             if novo is not None:
@@ -404,9 +491,17 @@ def migrar_obra_funcionario(func_id):
         func = db.session.get(Funcionario, func_id)
         if not func:
             return jsonify({"erro": "Funcionário não encontrado"}), 404
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, func.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         dados = request.get_json() or {}
         obra_id = dados.get('obra_id')
-        func.obra_id = int(obra_id) if obra_id else None
+        novo_obra_id = int(obra_id) if obra_id else None
+        if novo_obra_id is not None and not db.session.get(Obra, novo_obra_id):
+            return jsonify({"erro": "Obra não encontrada"}), 400
+        if not user_has_access_to_obra(current_user, novo_obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        func.obra_id = novo_obra_id
         db.session.commit()
         return jsonify(func.to_dict()), 200
     except Exception as e:
@@ -423,6 +518,8 @@ def inativar_funcionario(func_id):
         func = db.session.get(Funcionario, func_id)
         if not func:
             return jsonify({"erro": "Funcionário não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), func.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         func.status = 'inativo'
         db.session.commit()
         return jsonify(func.to_dict()), 200
@@ -438,13 +535,28 @@ def inativar_funcionario(func_id):
 @jwt_required()
 def listar_pagamentos():
     try:
-        q = PagamentoSalario.query
+        current_user = get_current_user()
+        q = PagamentoSalario.query.options(
+            joinedload(PagamentoSalario.funcionario), joinedload(PagamentoSalario.obra)
+        )
         if request.args.get('competencia'):
             q = q.filter(PagamentoSalario.competencia == request.args['competencia'])
-        if request.args.get('obra_id'):
-            q = q.filter(PagamentoSalario.obra_id == int(request.args['obra_id']))
-        if request.args.get('funcionario_id'):
-            q = q.filter(PagamentoSalario.funcionario_id == int(request.args['funcionario_id']))
+        obra_id_raw = request.args.get('obra_id')
+        if obra_id_raw:
+            obra_id, err = _parse_int_arg('obra_id', obra_id_raw)
+            if err:
+                return err
+            if not user_has_access_to_obra(current_user, obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra"}), 403
+            q = q.filter(PagamentoSalario.obra_id == obra_id)
+        else:
+            q = _restringir_por_obra(q, PagamentoSalario.obra_id, current_user)
+        func_id_raw = request.args.get('funcionario_id')
+        if func_id_raw:
+            func_id, err = _parse_int_arg('funcionario_id', func_id_raw)
+            if err:
+                return err
+            q = q.filter(PagamentoSalario.funcionario_id == func_id)
         pags = q.order_by(PagamentoSalario.data_pagamento.desc()).all()
         return jsonify([p.to_dict() for p in pags]), 200
     except Exception as e:
@@ -478,6 +590,8 @@ def criar_pagamento():
         func = db.session.get(Funcionario, int(funcionario_id))
         if not func:
             return jsonify({"erro": "Funcionário não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), func.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
 
         comprovante_url = None
         anexo_falhou = False
@@ -517,6 +631,8 @@ def obter_pagamento(pag_id):
         pag = db.session.get(PagamentoSalario, pag_id)
         if not pag:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), pag.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         return jsonify(pag.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/pagamentos/<id>")
@@ -530,6 +646,8 @@ def editar_pagamento(pag_id):
         pag = db.session.get(PagamentoSalario, pag_id)
         if not pag:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), pag.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         dados = request.get_json() or {}
         if dados.get('competencia'):
             pag.competencia = dados['competencia'].strip()
@@ -558,6 +676,8 @@ def remover_pagamento(pag_id):
         pag = db.session.get(PagamentoSalario, pag_id)
         if not pag:
             return jsonify({"erro": "Pagamento não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), pag.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         db.session.delete(pag)
         db.session.commit()
         return jsonify({"ok": True}), 200
@@ -573,13 +693,24 @@ def remover_pagamento(pag_id):
 @jwt_required()
 def listar_encargos():
     try:
-        q = Encargo.query
+        current_user = get_current_user()
+        q = Encargo.query.options(
+            joinedload(Encargo.obra), joinedload(Encargo.funcionario)
+        )
         if request.args.get('competencia'):
             q = q.filter(Encargo.competencia == request.args['competencia'])
         if request.args.get('tipo'):
             q = q.filter(Encargo.tipo == request.args['tipo'])
-        if request.args.get('obra_id'):
-            q = q.filter(Encargo.obra_id == int(request.args['obra_id']))
+        obra_id_raw = request.args.get('obra_id')
+        if obra_id_raw:
+            obra_id, err = _parse_int_arg('obra_id', obra_id_raw)
+            if err:
+                return err
+            if not user_has_access_to_obra(current_user, obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra"}), 403
+            q = q.filter(Encargo.obra_id == obra_id)
+        else:
+            q = _restringir_por_obra(q, Encargo.obra_id, current_user)
         encargos = q.order_by(Encargo.vencimento.desc().nullslast()).all()
         return jsonify([e.to_dict() for e in encargos]), 200
     except Exception as e:
@@ -604,6 +735,15 @@ def criar_encargo():
         if tipo not in _ENCARGO_TIPOS or not competencia or valor is None:
             return jsonify({"erro": f"tipo (∈ {sorted(_ENCARGO_TIPOS)}), competencia e valor são obrigatórios"}), 400
 
+        obra_id = int(dados['obra_id']) if dados.get('obra_id') else None
+        if obra_id is not None and not db.session.get(Obra, obra_id):
+            return jsonify({"erro": "Obra não encontrada"}), 400
+        funcionario_id = int(dados['funcionario_id']) if dados.get('funcionario_id') else None
+        if funcionario_id is not None and not db.session.get(Funcionario, funcionario_id):
+            return jsonify({"erro": "Funcionário não encontrado"}), 400
+        if not user_has_access_to_obra(get_current_user(), obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+
         arquivo_url = None
         anexo_falhou = False
         if arquivo:
@@ -620,8 +760,8 @@ def criar_encargo():
             data_pagamento=_parse_date(dados.get('data_pagamento')),
             valor=valor,
             arquivo_url=arquivo_url,
-            obra_id=int(dados['obra_id']) if dados.get('obra_id') else None,
-            funcionario_id=int(dados['funcionario_id']) if dados.get('funcionario_id') else None,
+            obra_id=obra_id,
+            funcionario_id=funcionario_id,
             observacao=(dados.get('observacao') or '').strip() or None,
         )
         db.session.add(enc)
@@ -663,6 +803,7 @@ def importar_encargos():
         else:
             return jsonify({"erro": "formato não suportado (use .xlsx ou .csv)"}), 400
 
+        current_user = get_current_user()
         criados, ignorados = 0, 0
         for ln in linhas:
             tipo = str(ln.get('tipo') or '').strip().lower()
@@ -676,6 +817,9 @@ def importar_encargos():
                 obra_id = int(obra_id) if obra_id not in (None, '') else None
             except Exception:
                 obra_id = None
+            if not user_has_access_to_obra(current_user, obra_id):
+                ignorados += 1
+                continue
             db.session.add(Encargo(
                 tipo=tipo,
                 competencia=competencia,
@@ -700,6 +844,8 @@ def obter_encargo(enc_id):
         enc = db.session.get(Encargo, enc_id)
         if not enc:
             return jsonify({"erro": "Encargo não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), enc.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         return jsonify(enc.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/encargos/<id>")
@@ -713,6 +859,9 @@ def editar_encargo(enc_id):
         enc = db.session.get(Encargo, enc_id)
         if not enc:
             return jsonify({"erro": "Encargo não encontrado"}), 404
+        current_user = get_current_user()
+        if not user_has_access_to_obra(current_user, enc.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         dados = request.get_json() or {}
         if dados.get('tipo') in _ENCARGO_TIPOS:
             enc.tipo = dados['tipo']
@@ -727,7 +876,12 @@ def editar_encargo(enc_id):
             if novo is not None:
                 enc.valor = novo
         if 'obra_id' in dados:
-            enc.obra_id = int(dados['obra_id']) if dados.get('obra_id') else None
+            novo_obra_id = int(dados['obra_id']) if dados.get('obra_id') else None
+            if novo_obra_id is not None and not db.session.get(Obra, novo_obra_id):
+                return jsonify({"erro": "Obra não encontrada"}), 400
+            if not user_has_access_to_obra(current_user, novo_obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra"}), 403
+            enc.obra_id = novo_obra_id
         if 'observacao' in dados:
             enc.observacao = (dados.get('observacao') or '').strip() or None
         db.session.commit()
@@ -745,6 +899,8 @@ def remover_encargo(enc_id):
         enc = db.session.get(Encargo, enc_id)
         if not enc:
             return jsonify({"erro": "Encargo não encontrado"}), 404
+        if not user_has_access_to_obra(get_current_user(), enc.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
         db.session.delete(enc)
         db.session.commit()
         return jsonify({"ok": True}), 200
@@ -759,7 +915,10 @@ def remover_encargo(enc_id):
 @rh_bp.route('/arquivo/<tipo>/<int:item_id>', methods=['GET'])
 @jwt_required()
 def obter_arquivo(tipo, item_id):
-    """Retorna signed URL do arquivo (convencao | comprovante | guia) sob auth."""
+    """Retorna signed URL do arquivo (convencao | comprovante | guia) sob auth.
+
+    Convenção é dado global (por UF), sem obra_id — não é obra-scoped.
+    Comprovante/guia herdam o obra_id do registro (pagamento/encargo)."""
     try:
         path = None
         if tipo == 'convencao':
@@ -767,9 +926,13 @@ def obter_arquivo(tipo, item_id):
             path = obj.arquivo_url if obj else None
         elif tipo == 'comprovante':
             obj = db.session.get(PagamentoSalario, item_id)
+            if obj and not user_has_access_to_obra(get_current_user(), obj.obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra"}), 403
             path = obj.comprovante_url if obj else None
         elif tipo == 'guia':
             obj = db.session.get(Encargo, item_id)
+            if obj and not user_has_access_to_obra(get_current_user(), obj.obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra"}), 403
             path = obj.arquivo_url if obj else None
         else:
             return jsonify({"erro": "tipo inválido (use convencao|comprovante|guia)"}), 400

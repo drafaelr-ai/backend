@@ -551,6 +551,27 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_categoria_mo_nome ON categoria_mo (nome);
         """)
 
+        # Índice único (case-insensitive) em categoria_mo.nome — evita categorias
+        # duplicadas criadas por confirmações de CCT concorrentes (RH-fix).
+        # Guardado: só cria se não houver duplicatas hoje (não apaga/mescla
+        # dado existente); se houver, apenas loga um aviso p/ limpeza manual.
+        cur.execute("""
+            SELECT lower(nome) FROM categoria_mo
+            GROUP BY lower(nome) HAVING COUNT(*) > 1;
+        """)
+        dupes_categoria = cur.fetchall()
+        if dupes_categoria:
+            logger.warning(
+                "⚠️ RH: categoria_mo tem nomes duplicados (case-insensitive) — "
+                "pulando criação do índice único até limpeza manual: %s",
+                [d[0] for d in dupes_categoria],
+            )
+        else:
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_categoria_mo_nome_unique
+                ON categoria_mo (lower(nome));
+            """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS convencao_coletiva (
                 id              SERIAL PRIMARY KEY,
