@@ -21,7 +21,7 @@ def importar_obra():
         return jsonify({'erro': 'Não autorizado'}), 401
 
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
 
         obra_id = dados.get('obra_id')
         if obra_id:

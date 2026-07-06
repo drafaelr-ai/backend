@@ -3,6 +3,7 @@ import os
 
 from flask import Flask
 
+from auto_migration_admin import run_auto_migration_admin
 from config_admin import DevelopmentConfig, ProductionConfig
 from extensions_admin import db, jwt, cors, apply_cors_headers
 from logging_setup import setup_logging
@@ -16,9 +17,26 @@ from routes_admin import (
     dashboard_admin_bp,
     importar_obra_bp,
     boletos_admin_bp,
+    superlink_admin_bp,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _run_migrations():
+    from sqlalchemy import text
+    migrations = [
+        "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;",
+        "ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;",
+    ]
+    try:
+        with db.engine.connect() as conn:
+            for sql in migrations:
+                conn.execute(text(sql))
+            conn.commit()
+        logger.info("_run_migrations: OK")
+    except Exception:
+        logger.exception("_run_migrations: falhou (tabela pode não existir ainda)")
 
 
 def create_app(config=None):
@@ -37,6 +55,10 @@ def create_app(config=None):
     jwt.init_app(app)
     cors.init_app(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
 
+    with app.app_context():
+        _run_migrations()
+        run_auto_migration_admin()
+
     app.after_request(apply_cors_headers)
 
     @app.route('/<path:any_path>', methods=['OPTIONS'])
@@ -52,6 +74,7 @@ def create_app(config=None):
     app.register_blueprint(dashboard_admin_bp)
     app.register_blueprint(importar_obra_bp)
     app.register_blueprint(boletos_admin_bp)
+    app.register_blueprint(superlink_admin_bp)
 
     logger.info(f"app_admin: {len(list(app.url_map.iter_rules()))} rotas registradas")
 
@@ -64,5 +87,8 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=port, debug=True)
 
 
-# gunicorn entrypoint (Dockerfile.admin: gunicorn app_admin_new:app)
+# NOTA: o entrypoint real usado em produção é app_admin.py (Dockerfile.admin
+# e fly-deploy/obraly-admin-api/Dockerfile usam "gunicorn app_admin:app").
+# Este módulo é mantido sincronizado como factory alternativa, mas não é
+# referenciado por nenhum CMD/Dockerfile atual.
 app = create_app()

@@ -1,7 +1,9 @@
 import logging
+import os
+import secrets
 from datetime import datetime
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from extensions_admin import db
 from models_admin import Usuario, Categoria
@@ -32,21 +34,28 @@ def init_db():
     try:
         if Usuario.query.count() > 0:
             return jsonify({'status': 'error', 'message': 'Não autorizado'}), 403
+
+        init_token = os.environ.get('ADMIN_INIT_TOKEN')
+        token_recebido = request.args.get('token') or (request.get_json(silent=True) or {}).get('token')
+        if not init_token or token_recebido != init_token:
+            return jsonify({'status': 'error', 'message': 'Não autorizado'}), 403
+
         db.create_all()
         criar_categorias_padrao()
 
         admin = Usuario.query.filter_by(username='admin').first()
         if not admin:
+            senha_gerada = secrets.token_urlsafe(12)
             admin = Usuario(
                 username='admin',
                 nome='Administrador',
                 email='admin@obraly.uk',
                 role='admin'
             )
-            admin.set_password('admin123')
+            admin.set_password(senha_gerada)
             db.session.add(admin)
             db.session.commit()
-            logger.info("Usuário admin criado (senha: admin123)")
+            logger.info(f"Usuário admin criado (senha gerada: {senha_gerada})")
 
         return jsonify({
             'status': 'success',

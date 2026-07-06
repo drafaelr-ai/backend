@@ -52,7 +52,7 @@ def criar_lancamento():
     if not user:
         return jsonify({'erro': 'Nao autorizado'}), 401
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
 
         imovel = Imovel.query.get(dados.get('imovel_id'))
         if not imovel:
@@ -207,11 +207,13 @@ def alertas_vencimento():
 @jwt_required()
 def atualizar_lancamento(lancamento_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Nao autorizado'}), 401
     lancamento = Lancamento.query.get_or_404(lancamento_id)
     if user.role != 'admin' and lancamento.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
 
         lancamento.categoria_id = dados.get('categoria_id', lancamento.categoria_id)
         lancamento.descricao = dados.get('descricao', lancamento.descricao)
@@ -254,6 +256,8 @@ def atualizar_lancamento(lancamento_id):
 @jwt_required()
 def deletar_lancamento(lancamento_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Nao autorizado'}), 401
     lancamento = Lancamento.query.get_or_404(lancamento_id)
     if user.role != 'admin' and lancamento.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
@@ -272,6 +276,8 @@ def deletar_lancamento(lancamento_id):
 @jwt_required()
 def marcar_pago(lancamento_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Nao autorizado'}), 401
     lancamento = Lancamento.query.get_or_404(lancamento_id)
     if user.role != 'admin' and lancamento.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
@@ -296,11 +302,13 @@ def marcar_pago(lancamento_id):
 @jwt_required()
 def upload_comprovante(lancamento_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Nao autorizado'}), 401
     lancamento = Lancamento.query.get_or_404(lancamento_id)
     if user.role != 'admin' and lancamento.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
         if not dados.get('comprovante_base64'):
             return jsonify({'erro': 'Comprovante nao enviado'}), 400
 
@@ -323,6 +331,8 @@ def upload_comprovante(lancamento_id):
 @jwt_required()
 def remover_comprovante(lancamento_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Nao autorizado'}), 401
     lancamento = Lancamento.query.get_or_404(lancamento_id)
     if user.role != 'admin' and lancamento.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403

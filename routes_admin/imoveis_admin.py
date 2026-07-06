@@ -58,7 +58,7 @@ def criar_imovel():
     if not user:
         return jsonify({'erro': 'Não autorizado'}), 401
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
 
         imovel = Imovel(
             usuario_id=user.id,
@@ -90,6 +90,8 @@ def criar_imovel():
 @jwt_required()
 def obter_imovel(imovel_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
     imovel = Imovel.query.get_or_404(imovel_id)
     if user.role != 'admin' and imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
@@ -100,11 +102,13 @@ def obter_imovel(imovel_id):
 @jwt_required()
 def atualizar_imovel(imovel_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
     imovel = Imovel.query.get_or_404(imovel_id)
     if user.role != 'admin' and imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
     try:
-        dados = request.get_json(silent=True)
+        dados = request.get_json(silent=True) or {}
 
         imovel.nome = dados.get('nome', imovel.nome)
         imovel.tipo = dados.get('tipo', imovel.tipo)
@@ -132,6 +136,8 @@ def atualizar_imovel(imovel_id):
 @jwt_required()
 def deletar_imovel(imovel_id):
     user = get_current_user()
+    if not user:
+        return jsonify({'erro': 'Não autorizado'}), 401
     imovel = Imovel.query.get_or_404(imovel_id)
     if user.role != 'admin' and imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
