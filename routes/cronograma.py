@@ -1452,11 +1452,6 @@ def marcar_multiplos_como_pago(obra_id):
         return jsonify({"erro": str(e)}), 500
 # --- FIM DO ENDPOINT MARCAR MÚLTIPLOS COMO PAGO ---
 
-# CRONOGRAMA DA OBRA - MODELO
-# ======================================================================
-
-        return jsonify({'error': 'Erro ao buscar serviços'}), 500
-
 
 @cronograma_bp.route('/obras/<int:obra_id>/servico-financeiro', methods=['GET', 'OPTIONS'])
 @jwt_required()

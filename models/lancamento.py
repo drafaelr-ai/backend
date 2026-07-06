@@ -26,9 +26,12 @@ class Lancamento(db.Model):
     # Vínculo com item do orçamento (orcamento_eng_item). Coluna+FK já existem no banco.
     orcamento_item_id = db.Column(db.Integer, nullable=True)
 
-    def to_dict(self):
-        from models.orcamento_eng_item import OrcamentoEngItem
-
+    def to_dict(self, orcamento_item_nome_map=None):
+        """
+        orcamento_item_nome_map (opcional): dict {orcamento_item_id: "codigo - descricao"}
+        pré-carregado pelo chamador para evitar 1 query extra por lançamento (N+1).
+        Se não for passado, mantém o comportamento antigo (query individual).
+        """
         # Trata segmento dinamicamente (não está no modelo)
         segmento_value = 'Material'
         try:
@@ -41,9 +44,13 @@ class Lancamento(db.Model):
         # Nome do item de orçamento vinculado (lê via coluna mapeada)
         orcamento_item_nome = None
         if self.orcamento_item_id:
-            item = OrcamentoEngItem.query.get(self.orcamento_item_id)
-            if item:
-                orcamento_item_nome = f"{item.codigo} - {item.descricao}"
+            if orcamento_item_nome_map is not None:
+                orcamento_item_nome = orcamento_item_nome_map.get(self.orcamento_item_id)
+            else:
+                from models.orcamento_eng_item import OrcamentoEngItem
+                item = OrcamentoEngItem.query.get(self.orcamento_item_id)
+                if item:
+                    orcamento_item_nome = f"{item.codigo} - {item.descricao}"
 
         return {
             "id": self.id, "obra_id": self.obra_id, "tipo": self.tipo,

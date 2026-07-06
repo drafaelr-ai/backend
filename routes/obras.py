@@ -13,6 +13,11 @@ from flask import Blueprint, jsonify, request, make_response, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from sqlalchemy import func, case
 from sqlalchemy.orm import joinedload
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 from extensions import db
 from models.obra import Obra
@@ -900,11 +905,25 @@ def get_obra_detalhes(obra_id):
         
         
         # Buscar lançamentos para o retorno (usando a query já feita)
-        lancamentos_retorno = Lancamento.query.filter_by(obra_id=obra_id).all()
+        # Eager-load do serviço vinculado + pré-carga em lote dos nomes de item de
+        # orçamento evita N+1 queries dentro de Lancamento.to_dict() (perf).
+        lancamentos_retorno = Lancamento.query.filter_by(obra_id=obra_id).options(
+            joinedload(Lancamento.servico)
+        ).all()
+
+        orcamento_item_ids = {l.orcamento_item_id for l in lancamentos_retorno if l.orcamento_item_id}
+        orcamento_item_nome_map = {}
+        if orcamento_item_ids:
+            itens_orcamento = OrcamentoEngItem.query.filter(
+                OrcamentoEngItem.id.in_(orcamento_item_ids)
+            ).all()
+            orcamento_item_nome_map = {
+                item.id: f"{item.codigo} - {item.descricao}" for item in itens_orcamento
+            }
 
         return jsonify({
             "obra": obra.to_dict(),
-            "lancamentos": [l.to_dict() for l in lancamentos_retorno],
+            "lancamentos": [l.to_dict(orcamento_item_nome_map) for l in lancamentos_retorno],
             "servicos": servicos_com_totais,
             "historico_unificado": historico_unificado, 
             "sumarios": sumarios_dict,
