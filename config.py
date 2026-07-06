@@ -36,51 +36,14 @@ class Config:
         },
     }
 
-    ALLOWED_ORIGINS = [
-        'https://obraly.uk',
-        'https://www.obraly.uk',
-        'http://localhost:3000',
-        'http://localhost:3001',
-    ]
-
     @classmethod
     def init_app(cls, app):
         pass
 
-
-class DevelopmentConfig(Config):
-    DEBUG = True
-
-    @classmethod
-    def from_env(cls):
-        obj = cls()
-        obj.JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'dev-secret-change-me')
-        obj.SQLALCHEMY_DATABASE_URI = _build_database_url()
-        return obj
-
-
-class ProductionConfig(Config):
-    DEBUG = False
-
-    @classmethod
-    def from_env(cls):
-        secret = os.environ.get('JWT_SECRET_KEY')
-        if not secret:
-            raise RuntimeError(
-                "JWT_SECRET_KEY environment variable is required."
-            )
-        password = os.environ.get('DB_PASSWORD')
-        if not password:
-            raise ValueError("DB_PASSWORD environment variable is not defined.")
-
-        obj = cls()
-        obj.JWT_SECRET_KEY = secret
-        obj.SQLALCHEMY_DATABASE_URI = _build_database_url()
-        return obj
-
-
-config = {
-    'development': DevelopmentConfig,
-    'production': ProductionConfig,
-    'default': ProductionConfig,
-}
+# Nota: app.py NÃO usa from_object + from_env() de subclasses — ele monta
+# JWT_SECRET_KEY/SQLALCHEMY_DATABASE_URI manualmente em create_app() usando
+# os helpers acima (_build_database_url) para validar env vars com suas
+# próprias mensagens de erro. Subclasses DevelopmentConfig/ProductionConfig
+# com from_env() foram removidas daqui por serem código morto (nunca
+# instanciadas) — ver padrão equivalente, e efetivamente usado, em
+# config_admin.py para o app admin.
