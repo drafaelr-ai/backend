@@ -21,7 +21,7 @@ def bi_vencimentos():
     """Retorna todos os vencimentos para o calendário do BI"""
     try:
         user = get_current_user()
-        if user.role == 'master':
+        if user.role in ('master', 'administrador'):
             obras_ids = [r[0] for r in Obra.query.with_entities(Obra.id).all()]
         else:
             obras_ids = [o.id for o in user.obras_permitidas]
@@ -103,7 +103,7 @@ def bi_historico_mensal():
     """Retorna histórico de pagamentos agrupado por mês"""
     try:
         user = get_current_user()
-        if user.role == 'master':
+        if user.role in ('master', 'administrador'):
             obras_ids = [r[0] for r in Obra.query.with_entities(Obra.id).all()]
         else:
             obras_ids = [o.id for o in user.obras_permitidas]
@@ -201,7 +201,7 @@ def bi_projecao():
     """Retorna projeção de gastos futuros baseado em parcelas e vencimentos"""
     try:
         user = get_current_user()
-        if user.role == 'master':
+        if user.role in ('master', 'administrador'):
             obras_ids = [r[0] for r in Obra.query.with_entities(Obra.id).all()]
         else:
             obras_ids = [o.id for o in user.obras_permitidas]

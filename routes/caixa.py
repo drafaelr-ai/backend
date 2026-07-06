@@ -588,6 +588,5 @@ def gerar_relatorio_caixa_pdf(obra_id):
         logger.error(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
         return jsonify({
             "erro": "Erro ao gerar relatorio PDF",
-            "mensagem": str(e),
-            "detalhes": error_details
+            "mensagem": str(e)
         }), 500
