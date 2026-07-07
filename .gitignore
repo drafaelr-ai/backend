@@ -1,3 +1,8 @@
+# Backups locais (dumps/CSVs com dado real de cliente - nunca versionar)
+backups/
+backup_*.sql
+backup_*.json
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
