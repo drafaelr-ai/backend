@@ -30,6 +30,9 @@ def _itens_dinamicos_admin(grupo_id, refs, itens_snapshot):
 
     STATUS AO VIVO: cada item é re-consultado pelo seu ref {tabela, id};
     se virou pago/cancelado após a geração, é removido (não apenas marcado).
+    grupo_id É usado para validar que o registro referenciado pertence ao
+    mesmo imóvel do superlink — refs para registros de outro imóvel são
+    descartados como oráculo de status (mantém apenas o snapshot).
     """
     itens_snapshot = itens_snapshot or []
     refs = refs or []
@@ -60,11 +63,17 @@ def _itens_dinamicos_admin(grupo_id, refs, itens_snapshot):
 
         try:
             row = db.session.execute(
-                db.text(f"SELECT status FROM {tabela} WHERE id = :id"),
+                db.text(f"SELECT status, imovel_id FROM {tabela} WHERE id = :id"),
                 {'id': int(rid)},
             ).fetchone()
             if not row:
                 continue  # sumiu do banco → não exibe
+            # ref aponta para um registro de outro imóvel → não confiável como
+            # oráculo de status; descarta o ref e usa apenas o snapshot.
+            if grupo_id is not None and row[1] != grupo_id:
+                if not item.get('pago'):
+                    resultado.append(dict(item))
+                continue
             if str(row[0]).lower() in ('pago', 'cancelado'):
                 continue  # pago/cancelado → remove do resultado
             resultado.append(dict(item))
