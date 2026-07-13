@@ -1,5 +1,6 @@
-"""Supabase Storage — upload de arquivos do RH ao bucket privado `rh-arquivos`.
+"""Supabase Storage — upload de arquivos a buckets privados.
 
+Buckets: `rh-arquivos` (RH, default de compatibilidade) e `frota-arquivos` (Frota).
 Não armazena blob no Postgres (lição B-04): sobe pro Storage e guarda só o path.
 Usa a REST do Storage direto via `requests` (SUPABASE_URL + SUPABASE_SERVICE_KEY),
 evitando a dependência pesada do supabase-py.
@@ -38,22 +39,22 @@ def _headers(extra=None):
     return h
 
 
-def ensure_bucket():
-    """Cria o bucket privado `rh-arquivos` se ainda não existir (idempotente)."""
+def ensure_bucket(bucket=BUCKET):
+    """Cria o bucket privado se ainda não existir (idempotente)."""
     url = f'{_base_url()}/storage/v1/bucket'
     try:
         resp = requests.post(
             url,
             headers=_headers({'Content-Type': 'application/json'}),
-            json={'id': BUCKET, 'name': BUCKET, 'public': False},
+            json={'id': bucket, 'name': bucket, 'public': False},
             timeout=20,
         )
         if resp.status_code in (200, 201):
-            logger.info("storage: bucket '%s' criado", BUCKET)
+            logger.info("storage: bucket '%s' criado", bucket)
             return True
         # 400/409 = já existe → idempotente
         if resp.status_code in (400, 409) and 'exist' in resp.text.lower():
-            logger.info("storage: bucket '%s' já existe", BUCKET)
+            logger.info("storage: bucket '%s' já existe", bucket)
             return True
         logger.warning("storage: ensure_bucket status %s: %s", resp.status_code, resp.text[:200])
         return False
@@ -62,10 +63,12 @@ def ensure_bucket():
         return False
 
 
-def upload_arquivo(file, pasta):
+def upload_arquivo(file, pasta, bucket=BUCKET):
     """Sobe um arquivo (werkzeug FileStorage) ao bucket, retorna o path salvo.
 
     `pasta` é o subdiretório lógico (ex.: 'convencoes', 'comprovantes', 'guias').
+    Se o bucket ainda não existir (módulos novos, criação lazy), cria e tenta
+    uma segunda vez.
     """
     filename = secure_filename(getattr(file, 'filename', '') or 'arquivo')
     path = f'{pasta}/{uuid.uuid4().hex}_{filename}'
@@ -78,24 +81,24 @@ def upload_arquivo(file, pasta):
         except Exception:
             pass
 
-    url = f'{_base_url()}/storage/v1/object/{BUCKET}/{path}'
-    resp = requests.post(
-        url,
-        headers=_headers({'Content-Type': content_type, 'x-upsert': 'true'}),
-        data=data,
-        timeout=60,
-    )
+    url = f'{_base_url()}/storage/v1/object/{bucket}/{path}'
+    headers = _headers({'Content-Type': content_type, 'x-upsert': 'true'})
+    resp = requests.post(url, headers=headers, data=data, timeout=60)
+    if resp.status_code == 404 and 'bucket' in resp.text.lower():
+        # Bucket ainda não existe — criação lazy + 1 retry.
+        if ensure_bucket(bucket):
+            resp = requests.post(url, headers=headers, data=data, timeout=60)
     if resp.status_code not in (200, 201):
         raise RuntimeError(f'Upload falhou ({resp.status_code}): {resp.text[:200]}')
-    logger.info("storage: upload OK -> %s", path)
+    logger.info("storage: upload OK -> %s/%s", bucket, path)
     return path
 
 
-def signed_url(path, expires=3600):
+def signed_url(path, expires=3600, bucket=BUCKET):
     """Gera URL assinada de curta duração para um path do bucket."""
     if not path:
         return None
-    url = f'{_base_url()}/storage/v1/object/sign/{BUCKET}/{path}'
+    url = f'{_base_url()}/storage/v1/object/sign/{bucket}/{path}'
     resp = requests.post(
         url,
         headers=_headers({'Content-Type': 'application/json'}),

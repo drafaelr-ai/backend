@@ -53,12 +53,20 @@ from models.convencao_valor import ConvencaoValor     # noqa: F401
 from models.funcionario import Funcionario            # noqa: F401
 from models.pagamento_salario import PagamentoSalario # noqa: F401
 from models.encargo import Encargo                    # noqa: F401
+# Módulo Frota
+from models.frota_condutor import FrotaCondutor       # noqa: F401
+from models.frota_veiculo import FrotaVeiculo         # noqa: F401
+from models.frota_movimentacao import FrotaMovimentacao  # noqa: F401
+from models.frota_documento import FrotaDocumento     # noqa: F401
+from models.frota_manutencao import FrotaManutencao   # noqa: F401
+from models.frota_abastecimento import FrotaAbastecimento  # noqa: F401
+from models.frota_multa import FrotaMulta             # noqa: F401
 
 from routes import (
     notificacoes_bp, bi_bp, diario_bp, auth_bp, admin_bp, sid_bp,
     caixa_bp, servicos_bp, boletos_bp, lancamentos_bp,
     cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
-    rh_bp,
+    rh_bp, frota_bp,
 )
 
 setup_logging()
@@ -146,6 +154,7 @@ def create_app(config_class=Config):
     app.register_blueprint(obras_bp)
     app.register_blueprint(superlink_bp)
     app.register_blueprint(rh_bp)
+    app.register_blueprint(frota_bp)
 
     return app
 

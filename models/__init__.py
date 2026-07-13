@@ -31,3 +31,11 @@ from .convencao_valor import ConvencaoValor  # noqa: F401
 from .funcionario import Funcionario  # noqa: F401
 from .pagamento_salario import PagamentoSalario  # noqa: F401
 from .encargo import Encargo  # noqa: F401
+# --- Módulo Frota ---
+from .frota_condutor import FrotaCondutor  # noqa: F401
+from .frota_veiculo import FrotaVeiculo  # noqa: F401
+from .frota_movimentacao import FrotaMovimentacao  # noqa: F401
+from .frota_documento import FrotaDocumento  # noqa: F401
+from .frota_manutencao import FrotaManutencao  # noqa: F401
+from .frota_abastecimento import FrotaAbastecimento  # noqa: F401
+from .frota_multa import FrotaMulta  # noqa: F401

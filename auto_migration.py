@@ -660,6 +660,166 @@ def run_auto_migration():
         logger.info("✅ RH: 6 tabelas garantidas (categoria_mo, convencao_coletiva, "
                     "convencao_valor, funcionario, pagamento_salario, encargo)")
 
+        # =================================================================
+        # MÓDULO FROTA — 7 tabelas (aditivo, idempotente)
+        # Ordem de dependência: frota_condutor → frota_veiculo →
+        # frota_movimentacao → frota_documento → frota_manutencao →
+        # frota_abastecimento → frota_multa.
+        # FKs para obra(id)/funcionario(id): ON DELETE SET NULL.
+        # Sub-recursos → frota_veiculo(id): ON DELETE CASCADE.
+        # imovel_id é referência FRACA ao banco admin (admin_imovel) — sem FK.
+        # Nenhuma tabela existente é alterada.
+        # =================================================================
+        logger.info("📝 FROTA: garantindo tabelas do módulo Frota...")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_condutor (
+                id             SERIAL PRIMARY KEY,
+                nome           VARCHAR(160) NOT NULL,
+                cpf            VARCHAR(14),
+                telefone       VARCHAR(20),
+                cnh_numero     VARCHAR(20),
+                cnh_categoria  VARCHAR(5),
+                cnh_validade   DATE,
+                funcionario_id INTEGER REFERENCES funcionario(id) ON DELETE SET NULL,
+                status         VARCHAR(20) NOT NULL DEFAULT 'ativo',
+                observacao     VARCHAR(300),
+                data_criacao   TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_condutor_cpf ON frota_condutor (cpf);
+            CREATE INDEX IF NOT EXISTS idx_frota_condutor_funcionario ON frota_condutor (funcionario_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_condutor_cnh_validade ON frota_condutor (cnh_validade);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_veiculo (
+                id                SERIAL PRIMARY KEY,
+                placa             VARCHAR(10) NOT NULL,
+                renavam           VARCHAR(20),
+                chassi            VARCHAR(30),
+                marca             VARCHAR(60),
+                modelo            VARCHAR(80) NOT NULL,
+                ano_fabricacao    INTEGER,
+                ano_modelo        INTEGER,
+                tipo              VARCHAR(30) NOT NULL DEFAULT 'carro',
+                cor               VARCHAR(30),
+                combustivel       VARCHAR(20),
+                km_atual          INTEGER,
+                status            VARCHAR(20) NOT NULL DEFAULT 'ativo',
+                condutor_atual_id INTEGER REFERENCES frota_condutor(id) ON DELETE SET NULL,
+                local_tipo        VARCHAR(10),
+                obra_id           INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                imovel_id         INTEGER,
+                imovel_nome       VARCHAR(160),
+                observacao        VARCHAR(300),
+                data_criacao      TIMESTAMP DEFAULT NOW()
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_frota_veiculo_placa ON frota_veiculo (upper(placa));
+            CREATE INDEX IF NOT EXISTS idx_frota_veiculo_obra ON frota_veiculo (obra_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_veiculo_status ON frota_veiculo (status);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_movimentacao (
+                id                SERIAL PRIMARY KEY,
+                veiculo_id        INTEGER NOT NULL REFERENCES frota_veiculo(id) ON DELETE CASCADE,
+                destino_tipo      VARCHAR(10) NOT NULL,
+                obra_id           INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                imovel_id         INTEGER,
+                destino_nome      VARCHAR(160),
+                data_movimentacao DATE NOT NULL,
+                observacao        VARCHAR(300),
+                data_criacao      TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_mov_veiculo ON frota_movimentacao (veiculo_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_mov_obra ON frota_movimentacao (obra_id);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_documento (
+                id              SERIAL PRIMARY KEY,
+                veiculo_id      INTEGER NOT NULL REFERENCES frota_veiculo(id) ON DELETE CASCADE,
+                tipo            VARCHAR(20) NOT NULL,
+                descricao       VARCHAR(160),
+                data_vencimento DATE,
+                valor           NUMERIC(12,2),
+                arquivo_url     VARCHAR(500),
+                observacao      VARCHAR(300),
+                data_criacao    TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_doc_veiculo ON frota_documento (veiculo_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_doc_vencimento ON frota_documento (data_vencimento);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_manutencao (
+                id           SERIAL PRIMARY KEY,
+                veiculo_id   INTEGER NOT NULL REFERENCES frota_veiculo(id) ON DELETE CASCADE,
+                tipo         VARCHAR(20) NOT NULL,
+                descricao    VARCHAR(300),
+                data         DATE NOT NULL,
+                km           INTEGER,
+                custo        NUMERIC(12,2) NOT NULL,
+                oficina      VARCHAR(160),
+                arquivo_url  VARCHAR(500),
+                local_tipo   VARCHAR(10),
+                obra_id      INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                imovel_id    INTEGER,
+                local_nome   VARCHAR(160),
+                observacao   VARCHAR(300),
+                data_criacao TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_manut_veiculo ON frota_manutencao (veiculo_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_manut_obra ON frota_manutencao (obra_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_manut_data ON frota_manutencao (data);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_abastecimento (
+                id           SERIAL PRIMARY KEY,
+                veiculo_id   INTEGER NOT NULL REFERENCES frota_veiculo(id) ON DELETE CASCADE,
+                data         DATE NOT NULL,
+                litros       NUMERIC(10,2),
+                valor        NUMERIC(12,2) NOT NULL,
+                km           INTEGER,
+                combustivel  VARCHAR(20),
+                posto        VARCHAR(160),
+                condutor_id  INTEGER REFERENCES frota_condutor(id) ON DELETE SET NULL,
+                local_tipo   VARCHAR(10),
+                obra_id      INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                imovel_id    INTEGER,
+                local_nome   VARCHAR(160),
+                observacao   VARCHAR(300),
+                data_criacao TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_veiculo ON frota_abastecimento (veiculo_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_obra ON frota_abastecimento (obra_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_data ON frota_abastecimento (data);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_multa (
+                id               SERIAL PRIMARY KEY,
+                veiculo_id       INTEGER NOT NULL REFERENCES frota_veiculo(id) ON DELETE CASCADE,
+                data_infracao    DATE NOT NULL,
+                descricao        VARCHAR(300),
+                valor            NUMERIC(12,2) NOT NULL,
+                pontos           INTEGER,
+                condutor_id      INTEGER REFERENCES frota_condutor(id) ON DELETE SET NULL,
+                status_pagamento VARCHAR(20) NOT NULL DEFAULT 'pendente',
+                data_pagamento   DATE,
+                arquivo_url      VARCHAR(500),
+                observacao       VARCHAR(300),
+                data_criacao     TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_multa_veiculo ON frota_multa (veiculo_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_multa_status ON frota_multa (status_pagamento);
+        """)
+
+        logger.info("✅ FROTA: 7 tabelas garantidas (frota_condutor, frota_veiculo, "
+                    "frota_movimentacao, frota_documento, frota_manutencao, "
+                    "frota_abastecimento, frota_multa)")
+
         conn.commit()
         cur.close()
         conn.close()
