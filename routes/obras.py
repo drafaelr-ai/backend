@@ -248,7 +248,7 @@ def get_obras():
                 db.or_(Obra.arquivada == False, Obra.arquivada.is_(None))
             )
 
-        if user.role == 'administrador':
+        if user.role in ('administrador', 'master'):
             if mostrar_concluidas:
                 obras_com_totais = obras_query.order_by(Obra.nome).all()
             else:
@@ -2317,7 +2317,7 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
             titulo_relatorio = f"<b>Relatório de Pendências (Prioridade {prioridade_filtro}) - Todas as Obras</b>"
         
         
-        if user.role == 'administrador':
+        if user.role in ('administrador', 'master'):
             obras = Obra.query.order_by(Obra.nome).all()
         else:
             obras = user.obras_permitidas

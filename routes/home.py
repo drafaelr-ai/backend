@@ -52,7 +52,7 @@ def _situacao(venc, hoje):
     return 'a_vencer'
 
 
-def _item(modulo, origem, descricao, valor, venc, hoje, origem_id=None):
+def _item(modulo, origem, descricao, valor, venc, hoje, origem_id=None, tipo=None):
     return {
         'modulo': modulo,
         'origem': origem,
@@ -62,6 +62,9 @@ def _item(modulo, origem, descricao, valor, venc, hoje, origem_id=None):
         'data_vencimento': venc.isoformat(),
         'situacao': _situacao(venc, hoje),
         'dias': (venc - hoje).days,
+        # tipo orienta o frontend a abrir direto na aba certa da obra em vez
+        # da home genérica: 'lancamento'|'parcela'|'boleto'|'pagamento_futuro'
+        'tipo': tipo,
     }
 
 
@@ -83,7 +86,7 @@ def _pendencias_obras(user, corte, hoje):
         restante = max((l.valor_total or 0) - (l.valor_pago or 0), 0) or (l.valor_total or 0)
         desc = l.descricao + (f' — {l.fornecedor}' if l.fornecedor else '')
         itens.append(_item('obras', obras.get(l.obra_id), desc, restante,
-                           l.data_vencimento, hoje, l.obra_id))
+                           l.data_vencimento, hoje, l.obra_id, tipo='lancamento'))
 
     # Parcelas de pagamento parcelado (inclui parcelas de boleto a vencer)
     parcelas = (db.session.query(ParcelaIndividual, PagamentoParcelado)
@@ -96,7 +99,7 @@ def _pendencias_obras(user, corte, hoje):
     for p, pp in parcelas:
         desc = f'{pp.descricao} — parcela {p.numero_parcela}/{pp.numero_parcelas}'
         itens.append(_item('obras', obras.get(pp.obra_id), desc, p.valor_parcela,
-                           p.data_vencimento, hoje, pp.obra_id))
+                           p.data_vencimento, hoje, pp.obra_id, tipo='parcela'))
 
     # Boletos (Vencido explícito, ou Pendente com vencimento no corte)
     boletos = (Boleto.query
@@ -107,7 +110,7 @@ def _pendencias_obras(user, corte, hoje):
     for b in boletos:
         desc = 'Boleto ' + (b.descricao or b.beneficiario or 's/ descrição')
         itens.append(_item('obras', obras.get(b.obra_id), desc, b.valor,
-                           b.data_vencimento, hoje, b.obra_id))
+                           b.data_vencimento, hoje, b.obra_id, tipo='boleto'))
 
     # Pagamentos futuros (cronograma)
     futuros = (PagamentoFuturo.query
@@ -118,7 +121,7 @@ def _pendencias_obras(user, corte, hoje):
     for f in futuros:
         desc = f.descricao + (f' — {f.fornecedor}' if f.fornecedor else '')
         itens.append(_item('obras', obras.get(f.obra_id), desc, f.valor,
-                           f.data_vencimento, hoje, f.obra_id))
+                           f.data_vencimento, hoje, f.obra_id, tipo='pagamento_futuro'))
 
     return itens
 
