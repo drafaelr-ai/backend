@@ -34,8 +34,10 @@ DIAS_A_VENCER_DEFAULT = 3
 
 
 def _obras_visiveis(user):
-    """Map {id: nome} das obras que o usuário enxerga (não arquivadas)."""
-    query = Obra.query.filter(Obra.arquivada.isnot(True))
+    """Map {id: nome} das obras ATIVAS que o usuário enxerga (nem arquivada,
+    nem concluída — uma obra concluída para de gerar alerta de pendência,
+    mesmo que ainda tenha algo em aberto no financeiro)."""
+    query = Obra.query.filter(Obra.arquivada.isnot(True), Obra.concluida.isnot(True))
     if user.role not in ('master', 'administrador'):
         ids = [o.id for o in user.obras_permitidas]
         query = query.filter(Obra.id.in_(ids))
@@ -152,7 +154,7 @@ def alertas():
                                         it['valor'], venc, hoje, it['imovel_id']))
 
         # vencidos primeiro (mais antigos no topo), depois por vencimento
-        pendencias.sort(key=lambda x: (x['situacao'] != 'vencido', x['data_vencimento']))
+        _ordenar = lambda lst: sorted(lst, key=lambda x: (x['situacao'] != 'vencido', x['data_vencimento']))
 
         def _resumo(mod):
             do_mod = [p for p in pendencias if p['modulo'] == mod]
@@ -164,9 +166,18 @@ def alertas():
                 'valor_vencido': round(sum(p['valor'] for p in vencidos), 2),
             }
 
+        resumo = {'obras': _resumo('obras'), 'admin': _resumo('admin')}
+
+        # Corta por módulo ANTES de juntar — senão um módulo com muita coisa
+        # vencida (ex.: admin) engole as 30 vagas e a Obras Home fica com uma
+        # lista incompleta/errada mesmo tendo pendência real própria sobrando.
+        pend_obras = _ordenar([p for p in pendencias if p['modulo'] == 'obras'])[:20]
+        pend_admin = _ordenar([p for p in pendencias if p['modulo'] == 'admin'])[:20]
+        pendencias = _ordenar(pend_obras + pend_admin)
+
         return jsonify({
-            'pendencias': pendencias[:30],
-            'resumo': {'obras': _resumo('obras'), 'admin': _resumo('admin')},
+            'pendencias': pendencias,
+            'resumo': resumo,
             'aviso_admin': aviso_admin,
             'dias': dias,
         }), 200

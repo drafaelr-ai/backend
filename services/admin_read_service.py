@@ -45,12 +45,13 @@ def listar_pendencias(corte):
                 FROM admin_lancamento l
                 JOIN admin_imovel i ON i.id = l.imovel_id
                 WHERE l.status = 'pendente' AND l.tipo = 'despesa'
+                  AND i.ativo = TRUE
                   AND l.data_vencimento IS NOT NULL AND l.data_vencimento <= %s
                 UNION ALL
                 SELECT 'Boleto ' || b.descricao, b.valor, b.data_vencimento, i.id, i.nome
                 FROM admin_boleto b
                 JOIN admin_imovel i ON i.id = b.imovel_id
-                WHERE b.status <> 'Pago' AND b.data_vencimento <= %s
+                WHERE b.status <> 'Pago' AND i.ativo = TRUE AND b.data_vencimento <= %s
                 ORDER BY 3;
             """, (corte, corte))
             itens = [

@@ -57,11 +57,12 @@ with app.app_context():
 
     obra1 = Obra(nome='Obra Smoke 1')
     obra2 = Obra(nome='Obra Smoke 2')
+    obra3_concluida = Obra(nome='Obra Smoke 3 (concluida)', concluida=True)
     master = User(username='master_smoke', role='master')
     master.set_password('x')
     sem_obras = User(username='sem_obras_smoke', role='comum', modulos_permitidos=['rh'])
     sem_obras.set_password('x')
-    db.session.add_all([obra1, obra2, master, sem_obras])
+    db.session.add_all([obra1, obra2, obra3_concluida, master, sem_obras])
     db.session.commit()
 
     # ---- pendências ----
@@ -81,6 +82,10 @@ with app.app_context():
         # pagamento futuro vencido
         PagamentoFuturo(obra_id=obra1.id, descricao='Elétrica 2ª etapa', valor=8900,
                         data_vencimento=hoje - timedelta(days=1), status='Previsto'),
+        # lançamento vencido de obra CONCLUÍDA — não deve virar alerta (fixture de regressão)
+        Lancamento(obra_id=obra3_concluida.id, tipo='Material', descricao='Ghost pendencia concluida',
+                   valor_total=999, valor_pago=0, data=hoje - timedelta(days=20),
+                   data_vencimento=hoje - timedelta(days=5), status='A Pagar'),
     ])
     pp = PagamentoParcelado(obra_id=obra1.id, descricao='Esquadrias', segmento='Material',
                             valor_total=6000, numero_parcelas=3, valor_parcela=2000,
@@ -137,6 +142,8 @@ with app.app_context():
         check('resumo obras: 3 vencidos', body['resumo']['obras']['vencidos'] == 3,
               f"got {body['resumo']['obras']}")
         check('admin sem env: resumo zerado + sem quebrar', body['resumo']['admin']['qtd'] == 0)
+        check('obra concluída não gera pendência (sem ghost)',
+              not any('Ghost' in p['descricao'] for p in pend), f'got {[p["descricao"] for p in pend]}')
 
         r = c.get('/home/alertas?dias=10', headers=h_master)
         check('janela 10 dias inclui Areia', any('Areia' in p['descricao']
