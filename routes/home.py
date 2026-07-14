@@ -171,12 +171,13 @@ def alertas():
 
         resumo = {'obras': _resumo('obras'), 'admin': _resumo('admin')}
 
-        # Corta por módulo ANTES de juntar — senão um módulo com muita coisa
-        # vencida (ex.: admin) engole as 30 vagas e a Obras Home fica com uma
-        # lista incompleta/errada mesmo tendo pendência real própria sobrando.
-        pend_obras = _ordenar([p for p in pendencias if p['modulo'] == 'obras'])[:20]
-        pend_admin = _ordenar([p for p in pendencias if p['modulo'] == 'admin'])[:20]
-        pendencias = _ordenar(pend_obras + pend_admin)
+        # SEM corte de quantidade: qualquer limite aqui (ex.: [:30] combinado,
+        # ou até um corte por módulo) já causou contagem errada no frontend —
+        # o card/badge de vencidos soma o array que a API devolve, então um
+        # array truncado = número errado mostrado pro usuário. resumo já é
+        # a contagem correta (calculada antes de qualquer corte); a lista
+        # completa é a fonte de verdade tanto pra ela quanto pro detalhe.
+        pendencias = _ordenar(pendencias)
 
         return jsonify({
             'pendencias': pendencias,
