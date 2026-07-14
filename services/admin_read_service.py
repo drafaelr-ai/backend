@@ -25,6 +25,48 @@ _CACHE_TTL = 60
 _cache = {'ts': 0.0, 'data': None}
 
 
+def listar_pendencias(corte):
+    """Pendências de pagamento do patrimônio (READ-ONLY): lançamentos de
+    despesa pendentes e boletos não pagos com vencimento até `corte` (date).
+
+    Retorna (itens, aviso). Item: dict com descricao, valor, data_vencimento
+    (date), imovel_id, imovel_nome. Nunca levanta exceção."""
+    url = os.environ.get('DATABASE_URL_ADMIN')
+    if not url:
+        logger.warning('admin_read: DATABASE_URL_ADMIN não configurada')
+        return [], _AVISO_SEM_CONFIG
+    try:
+        conn = psycopg2.connect(url, connect_timeout=5)
+        try:
+            cur = conn.cursor()
+            cur.execute("SET statement_timeout = '10s';")
+            cur.execute("""
+                SELECT l.descricao, l.valor, l.data_vencimento, i.id, i.nome
+                FROM admin_lancamento l
+                JOIN admin_imovel i ON i.id = l.imovel_id
+                WHERE l.status = 'pendente' AND l.tipo = 'despesa'
+                  AND l.data_vencimento IS NOT NULL AND l.data_vencimento <= %s
+                UNION ALL
+                SELECT 'Boleto ' || b.descricao, b.valor, b.data_vencimento, i.id, i.nome
+                FROM admin_boleto b
+                JOIN admin_imovel i ON i.id = b.imovel_id
+                WHERE b.status <> 'Pago' AND b.data_vencimento <= %s
+                ORDER BY 3;
+            """, (corte, corte))
+            itens = [
+                {'descricao': d, 'valor': float(v or 0), 'data_vencimento': venc,
+                 'imovel_id': iid, 'imovel_nome': nome}
+                for d, v, venc, iid, nome in cur.fetchall()
+            ]
+            cur.close()
+        finally:
+            conn.close()
+        return itens, None
+    except Exception:
+        logger.exception('admin_read: falha ao listar pendências do banco admin')
+        return [], _AVISO_FALHA
+
+
 def listar_imoveis():
     """Retorna (imoveis, aviso). `imoveis` é lista de dicts; `aviso` é None ou texto."""
     url = os.environ.get('DATABASE_URL_ADMIN')
