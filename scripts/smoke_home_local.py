@@ -215,6 +215,21 @@ with app.app_context():
         r = c.get('/home/obras', headers=h_sem)
         check('sem módulo obras -> 403', r.status_code == 403, f'got {r.status_code}')
 
+        print('\n=== /home/pendencias/export-pdf ===')
+        r = c.get('/home/pendencias/export-pdf?escopo=todas', headers=h_master)
+        check('escopo=todas -> 200 PDF', r.status_code == 200 and r.content_type == 'application/pdf',
+              f'{r.status_code} {r.content_type}')
+        check('escopo=todas -> tem conteúdo PDF', r.data[:4] == b'%PDF', f'{r.data[:20]}')
+        r = c.get('/home/pendencias/export-pdf?escopo=vencidas', headers=h_master)
+        check('escopo=vencidas -> 200 PDF', r.status_code == 200 and r.content_type == 'application/pdf',
+              f'{r.status_code} {r.content_type}')
+        r = c.get('/home/pendencias/export-pdf?escopo=banana', headers=h_master)
+        check('escopo inválido -> 400', r.status_code == 400)
+        r = c.get('/home/pendencias/export-pdf', headers=h_sem)
+        check('sem módulo obras -> 403', r.status_code == 403, f'got {r.status_code}')
+        r = c.get('/home/pendencias/export-pdf')
+        check('sem token -> 401', r.status_code == 401)
+
 print(f'\n{"=" * 40}')
 print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')
 if FAIL:

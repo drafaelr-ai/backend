@@ -6,13 +6,20 @@ das fontes do banco MAIN (módulo Obras) e do banco ADMIN (patrimônio, leitura
 read-only via admin_read_service), respeitando os módulos permitidos do
 usuário e o scoping por obra. Erros de validação sempre 400, nunca 422.
 """
+import io
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, make_response, request
 from flask_jwt_extended import jwt_required
 
 from calendar import monthrange
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from extensions import db
 from models.obra import Obra
@@ -25,6 +32,7 @@ from models.pagamento_servico import PagamentoServico
 from models.servico import Servico
 from services import admin_read_service
 from services import get_current_user, user_tem_modulo
+from utils import formatar_real
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +196,130 @@ def alertas():
     except Exception as e:
         logger.exception("Erro em GET /home/alertas")
         return jsonify({"erro": "Erro ao montar alertas", "detalhe": str(e)}), 500
+
+
+@home_bp.route('/pendencias/export-pdf', methods=['GET'])
+@jwt_required()
+def export_pendencias_pdf():
+    """PDF das pendências de Obras, agrupado por obra.
+
+    ?escopo=vencidas (só o que já venceu) ou todas (vencidas + a vencer até
+    o fim do mês corrente) — default 'todas'. Reusa _pendencias_obras, a
+    mesma fonte de /home/alertas, então o total bate com o que já aparece
+    no dashboard."""
+    try:
+        escopo = request.args.get('escopo', 'todas')
+        if escopo not in ('vencidas', 'todas'):
+            return jsonify({"erro": "escopo inválido (use vencidas ou todas)"}), 400
+
+        user = get_current_user()
+        if not user:
+            return jsonify({"erro": "Usuário não encontrado"}), 401
+        if not user_tem_modulo(user, 'obras'):
+            return jsonify({"erro": "Acesso negado: você não tem permissão para o módulo Obras."}), 403
+
+        hoje = date.today()
+        if escopo == 'todas':
+            corte = date(hoje.year, hoje.month, monthrange(hoje.year, hoje.month)[1])
+        else:
+            corte = hoje
+
+        itens = _pendencias_obras(user, corte, hoje)
+        if escopo == 'vencidas':
+            itens = [i for i in itens if i['situacao'] == 'vencido']
+        itens.sort(key=lambda x: (x['origem'] or '', x['data_vencimento']))
+
+        if not itens:
+            return jsonify({"mensagem": "Nenhuma pendência encontrada para esse filtro"}), 200
+
+        por_obra = {}
+        for it in itens:
+            por_obra.setdefault(it['origem'] or 'Sem obra', []).append(it)
+        total_geral = sum(i['valor'] for i in itens)
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2 * cm, bottomMargin=2 * cm,
+                                leftMargin=2 * cm, rightMargin=2 * cm)
+        elements = []
+        styles = getSampleStyleSheet()
+
+        titulo = ('Relatório de Pendências Vencidas' if escopo == 'vencidas'
+                  else 'Relatório de Pendências (Vencidas + a Vencer no Mês)')
+        elements.append(Paragraph(
+            f"<b>{titulo}</b><br/><br/>Obras: {len(por_obra)} — Total geral: {formatar_real(total_geral)}",
+            styles['Title']))
+        elements.append(Spacer(1, 0.8 * cm))
+
+        _SIT_LABEL = {'vencido': lambda it: f"Vencido há {abs(it['dias'])}d",
+                      'vence_hoje': lambda it: 'Vence hoje',
+                      'a_vencer': lambda it: f"Vence em {it['dias']}d"}
+
+        obras_nomes = list(por_obra.keys())
+        for idx, obra_nome in enumerate(obras_nomes):
+            obra_itens = por_obra[obra_nome]
+            total_obra = sum(i['valor'] for i in obra_itens)
+            elements.append(Paragraph(
+                f"<b>Obra: {obra_nome}</b> | Total: {formatar_real(total_obra)}", styles['Heading2']))
+            elements.append(Spacer(1, 0.3 * cm))
+
+            data = [['Vencimento', 'Situação', 'Descrição', 'Valor']]
+            for it in obra_itens:
+                venc = it['data_vencimento']
+                venc_br = f"{venc[8:10]}/{venc[5:7]}/{venc[0:4]}"
+                sit_fn = _SIT_LABEL.get(it['situacao'])
+                data.append([
+                    venc_br,
+                    sit_fn(it) if sit_fn else it['situacao'],
+                    (it['descricao'] or '')[:50],
+                    formatar_real(it['valor']),
+                ])
+            data.append(['', '', 'SUBTOTAL', formatar_real(total_obra)])
+
+            table = Table(data, colWidths=[2.5 * cm, 2.8 * cm, 8.2 * cm, 3 * cm])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0061FC')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                ('TOPPADDING', (0, 0), (-1, 0), 10),
+                ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8f9fa')]),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#0061FC')),
+                ('TEXTCOLOR', (0, -1), (-1, -1), colors.whitesmoke),
+                ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, -1), (-1, -1), 10),
+                ('ALIGN', (2, -1), (3, -1), 'RIGHT'),
+            ]))
+            elements.append(table)
+            if idx < len(obras_nomes) - 1:
+                elements.append(Spacer(1, 0.8 * cm))
+
+        elements.append(Spacer(1, 1 * cm))
+        elements.append(Paragraph(f"<b>TOTAL GERAL: {formatar_real(total_geral)}</b>", styles['Heading1']))
+        elements.append(Spacer(1, 0.5 * cm))
+        elements.append(Paragraph(f"Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}", styles['Normal']))
+
+        doc.build(elements)
+        buffer.seek(0)
+        pdf_data = buffer.read()
+        buffer.close()
+
+        response = make_response(pdf_data)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = (
+            f'attachment; filename=pendencias_{escopo}_{hoje.isoformat()}.pdf')
+        return response
+    except Exception as e:
+        logger.exception("Erro em GET /home/pendencias/export-pdf")
+        return jsonify({"erro": "Erro ao gerar PDF", "detalhe": str(e)}), 500
 
 
 def _classe_gasto(tipo):
