@@ -254,6 +254,87 @@ def obter_orcamento_eng(obra_id):
         return jsonify({"erro": str(e)}), 500
 
 
+@orcamento_eng_bp.route('/itens/<int:item_id>/pagamentos', methods=['GET'])
+@jwt_required()
+def listar_pagamentos_item(obra_id, item_id):
+    """Lista os pagamentos que compõem o valor pago de um item do orçamento.
+
+    Mesmas 4 fontes da agregação de `obter_orcamento_eng` (lançamentos,
+    pagamentos futuros, parcelas de parcelamento e boletos com status Pago
+    e orcamento_item_id vinculado), porém linha a linha."""
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
+        item = OrcamentoEngItem.query.get_or_404(item_id)
+        etapa = OrcamentoEngEtapa.query.get(item.etapa_id)
+        if not etapa or etapa.obra_id != obra_id:
+            return jsonify({"erro": "Item não pertence a esta obra"}), 400
+
+        pagamentos = []
+
+        for r in db.session.execute(db.text("""
+            SELECT id, descricao, tipo, COALESCE(valor_pago, 0), data, fornecedor
+            FROM lancamento
+            WHERE orcamento_item_id = :iid AND status = 'Pago'
+        """), {"iid": item_id}).fetchall():
+            pagamentos.append({
+                'fonte': 'lancamento', 'id': r[0], 'descricao': r[1], 'tipo': r[2],
+                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'fornecedor': r[5],
+            })
+
+        for r in db.session.execute(db.text("""
+            SELECT id, descricao, tipo, COALESCE(valor, 0), data_vencimento, fornecedor
+            FROM pagamento_futuro
+            WHERE orcamento_item_id = :iid AND status = 'Pago'
+        """), {"iid": item_id}).fetchall():
+            pagamentos.append({
+                'fonte': 'pagamento_futuro', 'id': r[0], 'descricao': r[1], 'tipo': r[2],
+                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'fornecedor': r[5],
+            })
+
+        for r in db.session.execute(db.text("""
+            SELECT pi.id, pp.descricao, pp.segmento, COALESCE(pi.valor_parcela, 0),
+                   COALESCE(pi.data_pagamento, pi.data_vencimento),
+                   pp.fornecedor, pi.numero_parcela, pp.numero_parcelas
+            FROM parcela_individual pi
+            JOIN pagamento_parcelado_v2 pp ON pi.pagamento_parcelado_id = pp.id
+            WHERE pp.orcamento_item_id = :iid AND pi.status = 'Pago'
+        """), {"iid": item_id}).fetchall():
+            pagamentos.append({
+                'fonte': 'parcela', 'id': r[0],
+                'descricao': f"{r[1]} — parcela {r[6]}/{r[7]}", 'tipo': r[2],
+                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'fornecedor': r[5],
+            })
+
+        for r in db.session.execute(db.text("""
+            SELECT id, descricao, beneficiario, COALESCE(valor, 0),
+                   COALESCE(data_pagamento, data_vencimento)
+            FROM boleto
+            WHERE orcamento_item_id = :iid AND status = 'Pago'
+        """), {"iid": item_id}).fetchall():
+            pagamentos.append({
+                'fonte': 'boleto', 'id': r[0],
+                'descricao': 'Boleto ' + (r[1] or r[2] or 's/ descrição'), 'tipo': 'Material',
+                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'fornecedor': r[2],
+            })
+
+        pagamentos.sort(key=lambda p: p['data'] or '', reverse=True)
+        return jsonify({
+            'item_id': item_id,
+            'item_descricao': item.descricao,
+            'total': round(sum(p['valor'] for p in pagamentos), 2),
+            'pagamentos': pagamentos,
+        }), 200
+    except Exception as e:
+        logger.exception("Erro em GET .../orcamento-eng/itens/<id>/pagamentos")
+        return jsonify({"erro": "Erro ao listar pagamentos do item", "detalhe": str(e)}), 500
+
+
 @orcamento_eng_bp.route('/etapas', methods=['POST'])
 @jwt_required()
 def criar_etapa_orcamento(obra_id):

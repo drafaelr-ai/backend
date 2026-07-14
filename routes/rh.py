@@ -111,6 +111,26 @@ def listar_categorias():
         return jsonify({"erro": "Erro ao listar categorias", "detalhe": str(e)}), 500
 
 
+@rh_bp.route('/categorias', methods=['POST'])
+@jwt_required()
+def criar_categoria():
+    """Criação manual de categoria (antes só nascia pelo wizard de CCT)."""
+    try:
+        dados = request.get_json(silent=True) or {}
+        nome = (dados.get('nome') or '').strip()
+        if not nome:
+            return jsonify({"erro": "nome é obrigatório"}), 400
+        cat = _resolver_categoria(nome)
+        if dados.get('descricao') and not cat.descricao:
+            cat.descricao = dados['descricao'].strip()
+        db.session.commit()
+        return jsonify(cat.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Erro em POST /rh/categorias")
+        return jsonify({"erro": "Erro ao criar categoria", "detalhe": str(e)}), 500
+
+
 # ---------------------------------------------------------------- convenções
 
 @rh_bp.route('/convencoes', methods=['GET'])
@@ -430,6 +450,96 @@ def criar_funcionario():
         db.session.rollback()
         logger.exception("Erro em POST /rh/funcionarios")
         return jsonify({"erro": "Erro ao criar funcionário", "detalhe": str(e)}), 500
+
+
+@rh_bp.route('/funcionarios/importar', methods=['POST'])
+@jwt_required()
+def importar_funcionarios():
+    """Importa funcionários de planilha (.xlsx/.csv).
+
+    Colunas (cabeçalho, case-insensitive): nome (obrig.), categoria (obrig.,
+    nome — cria se não existir), cpf, obra (id ou nome), salario, admissao.
+    Linhas inválidas são ignoradas e reportadas. Erros de validação = 400."""
+    try:
+        arquivo = request.files.get('arquivo') or request.files.get('file')
+        if not arquivo:
+            return jsonify({"erro": "arquivo (.xlsx/.csv) é obrigatório"}), 400
+
+        nome_arq = (arquivo.filename or '').lower()
+        linhas = []
+        if nome_arq.endswith('.csv'):
+            texto = arquivo.read().decode('utf-8-sig', errors='replace')
+            linhas = list(csv.DictReader(io.StringIO(texto)))
+        elif nome_arq.endswith('.xlsx'):
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(arquivo.read()), data_only=True)
+            ws = wb.active
+            rows = list(ws.iter_rows(values_only=True))
+            if rows:
+                cab = [str(c).strip().lower() if c is not None else '' for c in rows[0]]
+                for r in rows[1:]:
+                    linhas.append({cab[i]: r[i] for i in range(min(len(cab), len(r)))})
+        else:
+            return jsonify({"erro": "formato não suportado (use .xlsx ou .csv)"}), 400
+
+        current_user = get_current_user()
+        obras_por_nome = {o.nome.strip().lower(): o for o in Obra.query.all()}
+        criados, erros = 0, []
+
+        def _erro(idx, motivo):
+            if len(erros) < 30:
+                erros.append({'linha': idx + 2, 'motivo': motivo})  # +2 = 1-based + cabeçalho
+
+        for idx, ln in enumerate(linhas):
+            ln = {str(k).strip().lower(): v for k, v in ln.items() if k}
+            nome = str(ln.get('nome') or '').strip()
+            cat_nome = str(ln.get('categoria') or '').strip()
+            if not nome:
+                _erro(idx, 'nome vazio')
+                continue
+            if not cat_nome:
+                _erro(idx, 'categoria vazia')
+                continue
+
+            obra = None
+            obra_ref = ln.get('obra') or ln.get('obra_id')
+            if obra_ref not in (None, ''):
+                try:
+                    obra = db.session.get(Obra, int(obra_ref))
+                except (TypeError, ValueError):
+                    obra = obras_por_nome.get(str(obra_ref).strip().lower())
+                if not obra:
+                    _erro(idx, f'obra "{obra_ref}" não encontrada')
+                    continue
+            obra_id = obra.id if obra else None
+            if not user_has_access_to_obra(current_user, obra_id):
+                _erro(idx, 'sem acesso à obra')
+                continue
+
+            categoria = _resolver_categoria(cat_nome)
+            salario = _to_num(ln.get('salario'))
+            if salario is None:
+                uf = obra.uf if obra else None
+                salario = rh_service.piso_vigente(categoria.id, uf) or 0
+
+            db.session.add(Funcionario(
+                nome=nome,
+                cpf=str(ln.get('cpf') or '').strip() or None,
+                categoria_id=categoria.id,
+                obra_id=obra_id,
+                salario=salario,
+                data_admissao=_parse_date(ln.get('admissao') or ln.get('data_admissao')),
+                status='ativo',
+            ))
+            criados += 1
+
+        db.session.commit()
+        return jsonify({"criados": criados, "ignorados": len(linhas) - criados,
+                        "erros": erros}), 201
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Erro em POST /rh/funcionarios/importar")
+        return jsonify({"erro": "Erro ao importar funcionários", "detalhe": str(e)}), 500
 
 
 @rh_bp.route('/funcionarios/<int:func_id>', methods=['GET'])
@@ -784,6 +894,62 @@ def criar_encargo():
         db.session.rollback()
         logger.exception("Erro em POST /rh/encargos")
         return jsonify({"erro": "Erro ao criar encargo", "detalhe": str(e)}), 500
+
+
+@rh_bp.route('/encargos/sugestao', methods=['GET'])
+@jwt_required()
+def sugestao_encargo():
+    """Valor sugerido do encargo a partir da folha da competência.
+
+    ?tipo=fgts|inss_darf|esocial_dae &competencia=YYYY-MM &obra_id=<id|sem>
+    Base = soma dos pagamentos de salário (tipo 'salario') da competência,
+    no escopo da obra (ou geral). Percentuais FEDERAIS (não variam por
+    região — o que varia por região é o piso da CCT, já coberto):
+    FGTS 8%; INSS patronal 20% (sem RAT/terceiros — confira com a
+    contabilidade); eSocial/DAE não tem percentual único → só a base."""
+    _PERCENTUAIS = {'fgts': 0.08, 'inss_darf': 0.20, 'esocial_dae': None}
+    try:
+        tipo = (request.args.get('tipo') or '').strip()
+        if tipo not in _ENCARGO_TIPOS:
+            return jsonify({"erro": f"tipo inválido (use {sorted(_ENCARGO_TIPOS)})"}), 400
+        competencia = (request.args.get('competencia') or '').strip()
+        if not competencia or len(competencia) != 7:
+            return jsonify({"erro": "competencia é obrigatória (YYYY-MM)"}), 400
+
+        user = get_current_user()
+        query = (PagamentoSalario.query
+                 .filter(PagamentoSalario.competencia == competencia,
+                         PagamentoSalario.tipo == 'salario'))
+        obra_arg = request.args.get('obra_id')
+        if obra_arg in ('sem', 'null', 'sem_obra'):
+            query = query.filter(PagamentoSalario.obra_id.is_(None))
+        elif obra_arg:
+            obra_id, erro = _parse_int_arg('obra_id', obra_arg)
+            if erro:
+                return erro
+            if not user_has_access_to_obra(user, obra_id):
+                return jsonify({"erro": "Acesso negado a esta obra"}), 403
+            query = query.filter(PagamentoSalario.obra_id == obra_id)
+        else:
+            query = _restringir_por_obra(query, PagamentoSalario.obra_id, user)
+
+        base = float(query.with_entities(
+            db.func.coalesce(db.func.sum(PagamentoSalario.valor), 0)).scalar() or 0)
+        pct = _PERCENTUAIS.get(tipo)
+        return jsonify({
+            'tipo': tipo,
+            'competencia': competencia,
+            'base_folha': round(base, 2),
+            'percentual': pct,
+            'valor_sugerido': round(base * pct, 2) if pct is not None else None,
+            'nota': ('FGTS 8% sobre a folha da competência' if tipo == 'fgts'
+                     else 'INSS patronal 20% (sem RAT/terceiros) — confirme com a contabilidade'
+                     if tipo == 'inss_darf'
+                     else 'Sem percentual único — informe o valor da guia'),
+        }), 200
+    except Exception as e:
+        logger.exception("Erro em GET /rh/encargos/sugestao")
+        return jsonify({"erro": "Erro ao calcular sugestão", "detalhe": str(e)}), 500
 
 
 @rh_bp.route('/encargos/importar', methods=['POST'])

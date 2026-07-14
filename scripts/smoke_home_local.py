@@ -103,6 +103,8 @@ with app.app_context():
                               valor_total=1500, valor_pago=1500, data=hoje, status='Pago'))
     db.session.add(Lancamento(obra_id=obra2.id, tipo='Material', descricao='Tijolos',
                               valor_total=800, valor_pago=800, data=hoje, status='Pago'))
+    db.session.add(Lancamento(obra_id=obra2.id, tipo='Despesa', descricao='Taxa cartório',
+                              valor_total=400, valor_pago=400, data=hoje, status='Pago'))
     sv = Servico(obra_id=obra2.id, nome='Alvenaria')
     db.session.add(sv)
     db.session.flush()
@@ -153,16 +155,16 @@ with app.app_context():
         check('GET /home/obras -> 200', r.status_code == 200, f'{r.status_code}: {r.data[:300]}')
         body = json.loads(r.data)
         k = body['kpis']
-        check('MO do mês = 1500 + 2500', k['mo_mes'] == 4000.0, f"got {k['mo_mes']}")
-        check('Material do mês = 800 + 2000 (parcela paga)', k['material_mes'] == 2800.0,
-              f"got {k['material_mes']}")
-        check('Saídas = MO + material', k['saidas_mes'] == 6800.0, f"got {k['saidas_mes']}")
+        check('MO total = 1500 + 2500', k['mo_total'] == 4000.0, f"got {k['mo_total']}")
+        check('Material total = 800 + 2000 (parcela paga)', k['material_total'] == 2800.0,
+              f"got {k['material_total']}")
+        check('Saídas do mês = 6800 + 400 Despesa', k['saidas_mes'] == 7200.0, f"got {k['saidas_mes']}")
         # previsão até fim do mês: depende do dia — todos os 4 vencidos/hoje entram; Areia (+5d)
         # e parcela +20d entram se caírem dentro do mês. Valida coerência mínima:
         check('previsão >= soma dos vencidos+hoje (14380)', k['previsao_pagar']['total'] >= 14380,
               f"got {k['previsao_pagar']}")
         o1 = next(o for o in body['obras'] if o['nome'] == 'Obra Smoke 1')
-        check('obra1: mo_mes 1500', o1['mo_mes'] == 1500.0)
+        check('obra1: mo_total 1500', o1['mo_total'] == 1500.0)
         check('obra1: vencidos_qtd 3', o1['vencidos_qtd'] == 3, f"got {o1}")
 
         r = c.get('/home/obras?competencia=1999-01', headers=h_master)

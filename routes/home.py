@@ -175,15 +175,28 @@ def alertas():
         return jsonify({"erro": "Erro ao montar alertas", "detalhe": str(e)}), 500
 
 
+def _classe_gasto(tipo):
+    """Classifica o tipo do lançamento: 'mo', 'material' ou 'outros'.
+
+    lancamento.tipo tem 5 valores em prod: Mão de Obra, Material, Despesa,
+    Serviço, Equipamentos — Despesa/Serviço/Equipamentos contam nas saídas,
+    mas não são MO nem material."""
+    if tipo == 'Mão de Obra':
+        return 'mo'
+    if tipo == 'Material':
+        return 'material'
+    return 'outros'
+
+
 @home_bp.route('/obras', methods=['GET'])
 @jwt_required()
 def home_obras():
     """Agregado da home do módulo Obras (?competencia=YYYY-MM, default mês atual).
 
-    Gastos do mês espelham a lógica do BI (/bi/historico-mensal): lançamentos
-    pagos (tipo MO/Material), pagamentos de serviço (tipo_pagamento) e parcelas
-    pagas (segmento do parcelamento). Previsão a pagar = tudo em aberto com
-    vencimento até o fim do mês (lançamentos, parcelas, boletos, pag. futuros)."""
+    MO e material são TOTAIS ACUMULADOS da obra (pedido do usuário: "total
+    gasto"); saídas e previsão a pagar são do mês. Fontes: lançamentos pagos,
+    pagamentos de serviço e parcelas pagas (mesmas do /bi/historico-mensal).
+    Previsão a pagar = tudo em aberto com vencimento até o fim do mês."""
     try:
         user = get_current_user()
         if not user:
@@ -203,47 +216,42 @@ def home_obras():
         ids = list(obras_map.keys())
         hoje = date.today()
 
-        por_obra = {oid: {'mo_mes': 0.0, 'material_mes': 0.0, 'vencidos_qtd': 0,
+        por_obra = {oid: {'mo_total': 0.0, 'material_total': 0.0, 'vencidos_qtd': 0,
                           'vencidos_valor': 0.0} for oid in ids}
-        mo_mes = material_mes = saidas_mes = 0.0
+        mo_total = material_total = saidas_mes = 0.0
+
+        def _acumula(obra_id, classe, valor, data_ref):
+            nonlocal mo_total, material_total, saidas_mes
+            if data_ref and inicio <= data_ref <= fim:
+                saidas_mes += valor
+            if classe == 'mo':
+                mo_total += valor
+                por_obra[obra_id]['mo_total'] += valor
+            elif classe == 'material':
+                material_total += valor
+                por_obra[obra_id]['material_total'] += valor
 
         if ids:
-            # Lançamentos pagos no mês (data_ref = data ou vencimento — regra do BI)
+            # Lançamentos pagos (todos; data_ref = data ou vencimento — regra do BI)
             lancs = (Lancamento.query
                      .filter(Lancamento.obra_id.in_(ids), Lancamento.status == 'Pago')
                      .all())
             for l in lancs:
-                data_ref = l.data or l.data_vencimento
-                if not data_ref or not (inicio <= data_ref <= fim):
-                    continue
-                valor = l.valor_pago or l.valor_total or 0
-                saidas_mes += valor
-                if l.tipo == 'Mão de Obra':
-                    mo_mes += valor
-                    por_obra[l.obra_id]['mo_mes'] += valor
-                else:
-                    material_mes += valor
-                    por_obra[l.obra_id]['material_mes'] += valor
+                _acumula(l.obra_id, _classe_gasto(l.tipo),
+                         l.valor_pago or l.valor_total or 0,
+                         l.data or l.data_vencimento)
 
-            # Pagamentos de serviço no mês
+            # Pagamentos de serviço
             pagtos = (db.session.query(PagamentoServico, Servico.obra_id)
                       .join(Servico, PagamentoServico.servico_id == Servico.id)
                       .filter(Servico.obra_id.in_(ids),
-                              PagamentoServico.valor_pago > 0,
-                              PagamentoServico.data >= inicio,
-                              PagamentoServico.data <= fim)
+                              PagamentoServico.valor_pago > 0)
                       .all())
             for ps, obra_id in pagtos:
-                valor = ps.valor_pago or 0
-                saidas_mes += valor
-                if ps.tipo_pagamento == 'mao_de_obra':
-                    mo_mes += valor
-                    por_obra[obra_id]['mo_mes'] += valor
-                else:
-                    material_mes += valor
-                    por_obra[obra_id]['material_mes'] += valor
+                classe = 'mo' if ps.tipo_pagamento == 'mao_de_obra' else 'material'
+                _acumula(obra_id, classe, ps.valor_pago or 0, ps.data)
 
-            # Parcelas pagas no mês (split pelo segmento do parcelamento)
+            # Parcelas pagas (split pelo segmento do parcelamento)
             parcelas_pagas = (db.session.query(ParcelaIndividual, PagamentoParcelado)
                               .join(PagamentoParcelado,
                                     ParcelaIndividual.pagamento_parcelado_id == PagamentoParcelado.id)
@@ -251,17 +259,9 @@ def home_obras():
                                       ParcelaIndividual.status == 'Pago')
                               .all())
             for p, pp in parcelas_pagas:
-                data_ref = p.data_pagamento or p.data_vencimento
-                if not data_ref or not (inicio <= data_ref <= fim):
-                    continue
-                valor = p.valor_parcela or 0
-                saidas_mes += valor
-                if (pp.segmento or 'Material') == 'Mão de Obra':
-                    mo_mes += valor
-                    por_obra[pp.obra_id]['mo_mes'] += valor
-                else:
-                    material_mes += valor
-                    por_obra[pp.obra_id]['material_mes'] += valor
+                classe = 'mo' if (pp.segmento or 'Material') == 'Mão de Obra' else 'material'
+                _acumula(pp.obra_id, classe, p.valor_parcela or 0,
+                         p.data_pagamento or p.data_vencimento)
 
         # Previsão a pagar: em aberto com vencimento até o fim do mês
         # (reusa as mesmas fontes do /home/alertas com corte = fim do mês)
@@ -278,8 +278,8 @@ def home_obras():
             obras_out.append({
                 'id': oid,
                 'nome': nome,
-                'mo_mes': round(d['mo_mes'], 2),
-                'material_mes': round(d['material_mes'], 2),
+                'mo_total': round(d['mo_total'], 2),
+                'material_total': round(d['material_total'], 2),
                 'vencidos_qtd': d['vencidos_qtd'],
                 'vencidos_valor': round(d['vencidos_valor'], 2),
             })
@@ -287,8 +287,8 @@ def home_obras():
         return jsonify({
             'competencia': competencia,
             'kpis': {
-                'mo_mes': round(mo_mes, 2),
-                'material_mes': round(material_mes, 2),
+                'mo_total': round(mo_total, 2),
+                'material_total': round(material_total, 2),
                 'saidas_mes': round(saidas_mes, 2),
                 'previsao_pagar': {'total': previsao_total, 'qtd': len(pendencias),
                                    'ate': fim.isoformat()},
