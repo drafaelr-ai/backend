@@ -823,8 +823,9 @@ def run_auto_migration():
         # =================================================================
         # ACESSOS POR MÓDULO (aditivo, idempotente)
         # NULL = todos os módulos (comportamento anterior preservado).
-        # Invariante: admin_principal é o ÚNICO master do sistema — qualquer
-        # outro master é rebaixado a administrador em todo boot.
+        # Invariante: o usuário id=1 (Diego, ex-admin_principal) é o ÚNICO
+        # master do sistema — qualquer outro master é rebaixado a administrador
+        # em todo boot. Amarrado ao id (não ao username) p/ sobreviver a renomes.
         # =================================================================
         # Boletos parcelados: código de barras por parcela (aditivo, idempotente).
         cur.execute("ALTER TABLE parcela_individual ADD COLUMN IF NOT EXISTS codigo_barras VARCHAR(60);")
@@ -833,11 +834,11 @@ def run_auto_migration():
         cur.execute('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS modulos_permitidos JSONB;')
         cur.execute("""
             UPDATE "user" SET role='administrador'
-            WHERE role='master' AND username <> 'admin_principal';
+            WHERE role='master' AND id <> 1;
         """)
         if cur.rowcount:
             logger.warning("⚠️ ACESSOS: %s usuário(s) master rebaixado(s) a administrador "
-                           "(único master é admin_principal)", cur.rowcount)
+                           "(único master é o usuário id=1)", cur.rowcount)
         logger.info("✅ ACESSOS: coluna modulos_permitidos garantida em user")
 
         conn.commit()
