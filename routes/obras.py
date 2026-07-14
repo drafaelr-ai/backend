@@ -387,10 +387,19 @@ def get_obra_detalhes(obra_id):
         ).first()
         total_lancamentos = float(total_lancamentos_query.total_lanc or 0.0)
         
-        # Valor pago dos lançamentos (soma de valor_pago)
+        # Valor pago dos lançamentos (soma de valor_pago). Exclui os
+        # lançamentos-ESPELHO de parcela paga ("<desc> (Parcela X/Y)",
+        # criados em sid.py::marcar_parcela_paga) — a ParcelaIndividual é
+        # sempre a fonte canônica do pagamento (ver total_parcelas_pagas
+        # abaixo), e nem toda parcela paga tem um espelho correspondente
+        # (confirmado: R$83k em parcelas pagas de uma obra sem espelho
+        # algum), então depender do espelho pra representar essas
+        # parcelas SUBCONTA "Valores Pagos" em vez de simplesmente evitar
+        # duplicação.
         lancamentos_valor_pago = db.session.query(
             func.sum(Lancamento.valor_pago).label('valor_pago_lanc')
-        ).filter(Lancamento.obra_id == obra_id).first()
+        ).filter(Lancamento.obra_id == obra_id,
+                 ~Lancamento.descricao.like('%(Parcela %')).first()
         total_pago_lancamentos = float(lancamentos_valor_pago.valor_pago_lanc or 0.0)
         
         # Valor pago dos pagamentos de serviço (soma de valor_pago)
@@ -457,22 +466,20 @@ def get_obra_detalhes(obra_id):
         logger.debug(f"--- [DEBUG KPI] total_futuros_extra (sem serviço): R$ {total_futuros_extra:.2f} ---")
         logger.debug(f"--- [DEBUG KPI] total_parcelas_extra (sem serviço): R$ {total_parcelas_extra:.2f} ---")
         
-        # CORREÇÃO: Buscar parcelas PAGAS com serviço vinculado ANTES dos KPIs
-        # Parcelas sem serviço NÃO devem ser somadas aqui pois já são contabilizadas via Lancamento criado
-        parcelas_pagas_com_servico = db.session.query(
+        # Todas as parcelas PAGAS da obra (com ou sem serviço vinculado) —
+        # a ParcelaIndividual é sempre a fonte canônica do pagamento. Antes
+        # só somava as COM serviço, e as SEM serviço dependiam do
+        # lançamento-espelho (excluído acima de total_pago_lancamentos)
+        # pra aparecer em "Valores Pagos" — nem toda parcela paga tem um
+        # espelho, então isso subcontava o card.
+        parcelas_pagas_query = db.session.query(
             func.sum(ParcelaIndividual.valor_parcela).label('total_parcelas_pagas')
         ).join(PagamentoParcelado).filter(
             PagamentoParcelado.obra_id == obra_id,
             ParcelaIndividual.status == 'Pago',
-            PagamentoParcelado.servico_id.isnot(None)  # COM serviço
         ).first()
-        total_parcelas_pagas_com_servico = float(parcelas_pagas_com_servico.total_parcelas_pagas or 0.0)
-        logger.debug(f"--- [DEBUG KPI] total_parcelas_pagas_com_servico: R$ {total_parcelas_pagas_com_servico:.2f} ---")
-        
-        # NOTA: Parcelas PAGAS SEM serviço NÃO são mais contadas aqui
-        # Elas já são contabilizadas via Lancamento criado em marcar_parcela_paga()
-        # Isso evita DUPLICAÇÃO
-        logger.debug(f"--- [DEBUG KPI] parcelas_pagas_sem_servico: NÃO SOMADO (já está no Lancamento) ---")
+        total_parcelas_pagas = float(parcelas_pagas_query.total_parcelas_pagas or 0.0)
+        logger.debug(f"--- [DEBUG KPI] total_parcelas_pagas (com + sem serviço): R$ {total_parcelas_pagas:.2f} ---")
         
         # === ORÇAMENTO DE ENGENHARIA ===
         # CORREÇÃO: Sempre usar os valores do Orçamento de Engenharia como fonte primária
@@ -539,9 +546,9 @@ def get_obra_detalhes(obra_id):
         logger.debug(f"--- [DEBUG KPI] ✅ ORÇAMENTO TOTAL = Kanban({total_budget_mo_ajustado + total_budget_mat_ajustado:.2f}) + OrcEng({total_orcamento_eng:.2f}) = R$ {kpi_orcamento_total:.2f} ---")
         
         # KPI 2: VALORES EFETIVADOS/PAGOS
-        # Inclui: lançamentos pagos + pagamentos de serviço + parcelas pagas COM serviço
-        # NOTA: Parcelas sem serviço já estão em total_pago_lancamentos (Lancamento criado ao pagar)
-        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas_com_servico
+        # Inclui: lançamentos pagos (sem espelho de parcela) + pagamentos de
+        # serviço + TODAS as parcelas pagas (com ou sem serviço).
+        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas
         logger.debug(f"--- [DEBUG KPI] ✅ VALORES PAGOS = R$ {kpi_valores_pagos:.2f} ---")
         
         # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
