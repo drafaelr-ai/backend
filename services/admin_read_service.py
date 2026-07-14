@@ -85,7 +85,7 @@ def listar_imoveis():
             cur.execute("""
                 SELECT id, nome, endereco, cidade, estado, tipo, status
                 FROM admin_imovel
-                WHERE ativo = TRUE
+                WHERE ativo = TRUE AND tipo <> 'geral'
                 ORDER BY nome;
             """)
             colunas = [d[0] for d in cur.description]
