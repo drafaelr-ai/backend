@@ -284,6 +284,7 @@ def home_obras():
         # Previsão a pagar: em aberto com vencimento até o fim do mês
         # (reusa as mesmas fontes do /home/alertas com corte = fim do mês)
         pendencias = _pendencias_obras(user, fim, hoje) if ids else []
+        pendencias.sort(key=lambda x: (x['situacao'] != 'vencido', x['data_vencimento']))
         previsao_total = round(sum(p['valor'] for p in pendencias), 2)
         for p in pendencias:
             if p['situacao'] == 'vencido' and p['origem_id'] in por_obra:
@@ -309,7 +310,7 @@ def home_obras():
                 'material_total': round(material_total, 2),
                 'saidas_mes': round(saidas_mes, 2),
                 'previsao_pagar': {'total': previsao_total, 'qtd': len(pendencias),
-                                   'ate': fim.isoformat()},
+                                   'ate': fim.isoformat(), 'itens': pendencias},
             },
             'obras': obras_out,
         }), 200
