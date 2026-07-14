@@ -123,6 +123,24 @@ with app.app_context():
         r = c.put(f'/admin/users/{sem_rh_id}/modulos', json={'modulos': ['rh']}, headers=h_comum)
         check('comum chama -> 403', r.status_code == 403)
 
+        print('\n=== PUT /me/senha ===')
+        r = c.put('/me/senha', json={'senha_atual': 'smoke123', 'senha_nova': 'novaSenha456'}, headers=h_comum)
+        check('trocar senha -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:200]}')
+        r = c.post('/login', json={'username': 'comum_smoke', 'password': 'novaSenha456'})
+        check('login com senha nova -> 200', r.status_code == 200)
+        r = c.post('/login', json={'username': 'comum_smoke', 'password': 'smoke123'})
+        check('login com senha antiga -> 401', r.status_code == 401)
+        h_comum = {'Authorization': f'Bearer {json.loads(c.post("/login", json={"username": "comum_smoke", "password": "novaSenha456"}).data)["access_token"]}'}
+
+        r = c.put('/me/senha', json={'senha_atual': 'errada', 'senha_nova': 'outraSenha789'}, headers=h_comum)
+        check('senha atual errada -> 400', r.status_code == 400, f'got {r.status_code}')
+        r = c.put('/me/senha', json={'senha_atual': 'novaSenha456', 'senha_nova': '123'}, headers=h_comum)
+        check('senha nova curta -> 400', r.status_code == 400)
+        r = c.put('/me/senha', json={'senha_atual': 'novaSenha456', 'senha_nova': 'novaSenha456'}, headers=h_comum)
+        check('senha nova igual a atual -> 400', r.status_code == 400)
+        r = c.put('/me/senha', json={'senha_atual': 'novaSenha456', 'senha_nova': 'maisUmaSenha000'})
+        check('sem token -> 401', r.status_code == 401)
+
         print('\n=== único master ===')
         r = c.post('/admin/users', json={'username': 'novo_m', 'password': 'x12345', 'role': 'master'}, headers=h_master)
         check('criar user master -> 400', r.status_code == 400, f'got {r.status_code}')

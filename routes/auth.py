@@ -92,6 +92,40 @@ def me():
         return jsonify({"erro": "Erro ao obter usuário", "detalhe": str(e)}), 500
 
 
+@auth_bp.route('/me/senha', methods=['PUT', 'OPTIONS'])
+@jwt_required()
+def alterar_minha_senha():
+    """Autoatendimento: o próprio usuário troca a senha (exige a senha atual)."""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
+    try:
+        user = get_current_user()
+        if not user:
+            return jsonify({"erro": "Usuário não existe mais"}), 401
+
+        dados = request.get_json(silent=True) or {}
+        senha_atual = dados.get('senha_atual') or ''
+        senha_nova = dados.get('senha_nova') or ''
+
+        if not senha_atual or not senha_nova:
+            return jsonify({"erro": "Senha atual e nova senha são obrigatórias"}), 400
+        if len(senha_nova) < 6:
+            return jsonify({"erro": "A nova senha deve ter pelo menos 6 caracteres"}), 400
+        if not user.check_password(senha_atual):
+            return jsonify({"erro": "Senha atual incorreta"}), 400
+        if senha_atual == senha_nova:
+            return jsonify({"erro": "A nova senha deve ser diferente da atual"}), 400
+
+        user.set_password(senha_nova)
+        db.session.commit()
+        logger.info(f"Senha alterada pelo próprio usuário '{user.username}'")
+        return jsonify({"sucesso": True}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Erro em PUT /me/senha")
+        return jsonify({"erro": "Erro ao alterar senha", "detalhe": str(e)}), 500
+
+
 @auth_bp.route('/', methods=['GET'])
 def home():
     logger.info("--- [LOG] Rota / (home) acessada ---")
