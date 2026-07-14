@@ -826,6 +826,10 @@ def run_auto_migration():
         # Invariante: admin_principal é o ÚNICO master do sistema — qualquer
         # outro master é rebaixado a administrador em todo boot.
         # =================================================================
+        # Boletos parcelados: código de barras por parcela (aditivo, idempotente).
+        cur.execute("ALTER TABLE parcela_individual ADD COLUMN IF NOT EXISTS codigo_barras VARCHAR(60);")
+        logger.info("auto_migration: codigo_barras garantida em parcela_individual")
+
         cur.execute('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS modulos_permitidos JSONB;')
         cur.execute("""
             UPDATE "user" SET role='administrador'

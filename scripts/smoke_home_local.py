@@ -105,6 +105,9 @@ with app.app_context():
                               valor_total=800, valor_pago=800, data=hoje, status='Pago'))
     db.session.add(Lancamento(obra_id=obra2.id, tipo='Despesa', descricao='Taxa cartório',
                               valor_total=400, valor_pago=400, data=hoje, status='Pago'))
+    # lançamento-ESPELHO de parcela paga: NÃO deve somar (a parcela já conta)
+    db.session.add(Lancamento(obra_id=obra1.id, tipo='Despesa', descricao='Esquadrias (Parcela 0/3)',
+                              valor_total=2000, valor_pago=2000, data=hoje, status='Pago'))
     sv = Servico(obra_id=obra2.id, nome='Alvenaria')
     db.session.add(sv)
     db.session.flush()
@@ -158,7 +161,7 @@ with app.app_context():
         check('MO total = 1500 + 2500', k['mo_total'] == 4000.0, f"got {k['mo_total']}")
         check('Material total = 800 + 2000 (parcela paga)', k['material_total'] == 2800.0,
               f"got {k['material_total']}")
-        check('Saídas do mês = 6800 + 400 Despesa', k['saidas_mes'] == 7200.0, f"got {k['saidas_mes']}")
+        check('Saídas do mês = 7200 (espelho de parcela excluído)', k['saidas_mes'] == 7200.0, f"got {k['saidas_mes']}")
         # previsão até fim do mês: depende do dia — todos os 4 vencidos/hoje entram; Areia (+5d)
         # e parcela +20d entram se caírem dentro do mês. Valida coerência mínima:
         check('previsão >= soma dos vencidos+hoje (14380)', k['previsao_pagar']['total'] >= 14380,

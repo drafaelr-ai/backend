@@ -795,9 +795,10 @@ def criar_pagamento_parcelado(obra_id):
         data_entrada = data.get('data_entrada')
         percentual_entrada = float(data.get('percentual_entrada', 0)) if tem_entrada else 0
         
-        # Calcular valor das parcelas (após entrada)
-        valor_restante = valor_total - valor_entrada
-        valor_parcela = valor_restante / numero_parcelas if numero_parcelas > 0 else 0
+        # Calcular valor das parcelas (após entrada) — arredondado; resíduo de
+        # centavos vai para a última parcela no loop de geração.
+        valor_restante = round(valor_total - valor_entrada, 2)
+        valor_parcela = round(valor_restante / numero_parcelas, 2) if numero_parcelas > 0 else 0
         
         # Total de pagamentos = entrada (se houver) + parcelas
         total_pagamentos = numero_parcelas + (1 if tem_entrada else 0)
@@ -898,9 +899,10 @@ def criar_pagamento_parcelado(obra_id):
             novo_pagamento.valor_total = soma_valores + valor_entrada
             
         else:
-            # Criar parcelas com valores iguais
+            # Criar parcelas com valores iguais (última absorve o resíduo de centavos)
             data_primeira = datetime.strptime(data.get('data_primeira_parcela'), '%Y-%m-%d').date()
-            
+
+            soma_geradas = 0.0
             for i in range(numero_parcelas):
                 # Calcular data da parcela
                 if periodicidade == 'Semanal':
@@ -917,11 +919,17 @@ def criar_pagamento_parcelado(obra_id):
                         import calendar
                         ultimo_dia = calendar.monthrange(ano, mes)[1]
                         data_parcela = data_primeira.replace(year=ano, month=mes, day=min(data_primeira.day, ultimo_dia))
-                
+
+                if i < numero_parcelas - 1:
+                    valor_i = valor_parcela
+                else:
+                    valor_i = round(valor_restante - soma_geradas, 2)
+                soma_geradas = round(soma_geradas + valor_i, 2)
+
                 nova_parcela = ParcelaIndividual(
                     pagamento_parcelado_id=novo_pagamento.id,
                     numero_parcela=i + 1,
-                    valor_parcela=valor_parcela,
+                    valor_parcela=valor_i,
                     data_vencimento=data_parcela,
                     status='Previsto',
                     data_pagamento=None,
@@ -1010,25 +1018,83 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         if 'segmento' in data:
             pagamento.segmento = data['segmento']
         
-        if 'parcelas_pagas' in data:
-            pagamento.parcelas_pagas = int(data['parcelas_pagas'])
-            # Atualiza status se todas as parcelas foram pagas
-            if pagamento.parcelas_pagas >= pagamento.numero_parcelas:
-                pagamento.status = 'Concluído'
-        if 'status' in data:
+        # Cancelar/reativar explícitos são permitidos; 'Concluído' e o contador
+        # são SEMPRE derivados das parcelas (nunca aceitos crus do request).
+        if data.get('status') in ('Cancelado', 'Ativo'):
             pagamento.status = data['status']
-        
-        # Recalcula valor_parcela se valor_total ou numero_parcelas mudarem
-        if 'valor_total' in data or 'numero_parcelas' in data:
-            if 'valor_total' in data:
-                pagamento.valor_total = float(data['valor_total'])
-            if 'numero_parcelas' in data:
-                pagamento.numero_parcelas = int(data['numero_parcelas'])
-            pagamento.valor_parcela = pagamento.valor_total / pagamento.numero_parcelas if pagamento.numero_parcelas > 0 else 0
-        
+
+        # Mudanças estruturais (valor/nº de parcelas/data/periodicidade)
+        # REGENERAM as parcelas em aberto — as pagas são preservadas e o
+        # restante é redistribuído (com ajuste de centavos na última).
+        estrutura_mudou = False
+        if 'valor_total' in data:
+            pagamento.valor_total = round(float(data['valor_total']), 2)
+            estrutura_mudou = True
+        if 'numero_parcelas' in data:
+            pagamento.numero_parcelas = int(data['numero_parcelas'])
+            estrutura_mudou = True
         if 'data_primeira_parcela' in data:
             pagamento.data_primeira_parcela = datetime.strptime(data['data_primeira_parcela'], '%Y-%m-%d').date()
-        
+            estrutura_mudou = True
+        if 'periodicidade' in data:
+            pagamento.periodicidade = data['periodicidade']
+            estrutura_mudou = True
+
+        if estrutura_mudou:
+            parcelas = ParcelaIndividual.query.filter_by(
+                pagamento_parcelado_id=pagamento.id).all()
+            pagas = [p for p in parcelas if p.status == 'Pago']
+            soma_pagas = round(sum(p.valor_parcela or 0 for p in pagas), 2)
+            n_novas = int(pagamento.numero_parcelas) - len(pagas)
+            if n_novas < 0:
+                db.session.rollback()
+                return jsonify({"erro": f"numero_parcelas ({pagamento.numero_parcelas}) é menor "
+                                        f"que as parcelas já pagas ({len(pagas)})"}), 400
+            restante = round((pagamento.valor_total or 0) - soma_pagas, 2)
+            if restante < -0.005:
+                db.session.rollback()
+                return jsonify({"erro": f"valor_total (R$ {pagamento.valor_total:.2f}) é menor que a "
+                                        f"soma das parcelas já pagas (R$ {soma_pagas:.2f})"}), 400
+
+            for p in parcelas:
+                if p.status != 'Pago':
+                    db.session.delete(p)
+
+            if n_novas > 0:
+                valor_novo = round(restante / n_novas, 2)
+                max_num = max([p.numero_parcela for p in pagas], default=0)
+                idx_data = len([p for p in pagas if p.numero_parcela > 0])
+                soma_geradas = 0.0
+                for j in range(n_novas):
+                    passo = idx_data + j
+                    base = pagamento.data_primeira_parcela
+                    if pagamento.periodicidade == 'Semanal':
+                        data_venc = base + timedelta(weeks=passo)
+                    elif pagamento.periodicidade == 'Quinzenal':
+                        data_venc = base + timedelta(days=passo * 15)
+                    else:  # Mensal
+                        mes = base.month + passo
+                        ano = base.year + (mes - 1) // 12
+                        mes = ((mes - 1) % 12) + 1
+                        import calendar as _cal
+                        dia = min(base.day, _cal.monthrange(ano, mes)[1])
+                        data_venc = date(ano, mes, dia)
+
+                    valor_j = valor_novo if j < n_novas - 1 else round(restante - soma_geradas, 2)
+                    soma_geradas = round(soma_geradas + valor_j, 2)
+                    db.session.add(ParcelaIndividual(
+                        pagamento_parcelado_id=pagamento.id,
+                        numero_parcela=max_num + 1 + j,
+                        valor_parcela=valor_j,
+                        data_vencimento=data_venc,
+                        status='Previsto',
+                    ))
+                pagamento.valor_parcela = valor_novo
+
+            pagamento.parcelas_pagas = len(pagas)
+            if pagamento.status != 'Cancelado':
+                pagamento.status = 'Concluído' if n_novas == 0 else 'Ativo'
+
         db.session.commit()
         
         logger.info(f"--- [LOG] Pagamento parcelado {pagamento_id} editado na obra {obra_id} ---")

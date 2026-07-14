@@ -747,10 +747,24 @@ def inserir_pagamento(obra_id):
             data_entrada = dados.get('data_entrada')
             percentual_entrada = float(dados.get('percentual_entrada', 0)) if tem_entrada else 0
             
-            # Calcular valor das parcelas (após entrada)
-            valor_restante = valor_total - valor_entrada
-            valor_parcela = valor_restante / numero_parcelas if numero_parcelas > 0 else 0
-            
+            # 🆕 Parcelas customizadas (boletos com valores/códigos por parcela)
+            parcelas_customizadas = dados.get('parcelas_customizadas') or []
+            usar_customizadas = (
+                isinstance(parcelas_customizadas, list)
+                and len(parcelas_customizadas) == numero_parcelas
+                and all(p.get('valor') not in (None, '') for p in parcelas_customizadas)
+            )
+            if usar_customizadas:
+                # valor_total passa a ser a soma real dos boletos + entrada
+                soma_custom = round(sum(float(p['valor']) for p in parcelas_customizadas), 2)
+                valor_total = round(soma_custom + valor_entrada, 2)
+
+            # Calcular valor das parcelas (após entrada) — arredondado; o resíduo
+            # de centavos é ajustado na ÚLTIMA parcela (ex.: 1000/3 = 333.33 +
+            # 333.33 + 333.34).
+            valor_restante = round(valor_total - valor_entrada, 2)
+            valor_parcela = round(valor_restante / numero_parcelas, 2) if numero_parcelas > 0 else 0
+
             # Total de pagamentos = entrada (se houver) + parcelas
             total_pagamentos = numero_parcelas + (1 if tem_entrada and valor_entrada > 0 else 0)
             
@@ -789,36 +803,61 @@ def inserir_pagamento(obra_id):
             from datetime import timedelta
             import calendar
             
-            # 🆕 Criar parcela de ENTRADA (se houver)
+            # 🆕 Criar parcela de ENTRADA (se houver). Se o pagamento já nasce
+            # 'Pago', a entrada também nasce paga (antes ficava 'Previsto' e o
+            # parcelamento ia pra 'Concluído' com pendência fantasma).
             if tem_entrada and valor_entrada > 0:
                 data_entrada_parsed = date.fromisoformat(data_entrada) if data_entrada else data
-                
+
                 parcela_entrada = ParcelaIndividual(
                     pagamento_parcelado_id=novo_parcelado.id,
                     numero_parcela=0,  # Parcela 0 = Entrada
-                    valor_parcela=valor_entrada,
+                    valor_parcela=round(valor_entrada, 2),
                     data_vencimento=data_entrada_parsed,
-                    status='Previsto',
-                    data_pagamento=None,
-                    forma_pagamento=None,
+                    status='Pago' if status == 'Pago' else 'Previsto',
+                    data_pagamento=data_entrada_parsed if status == 'Pago' else None,
+                    forma_pagamento=pix if status == 'Pago' else None,
                     observacao=f'ENTRADA ({percentual_entrada:.0f}%)'
                 )
                 db.session.add(parcela_entrada)
                 logger.info(f"      ✅ ENTRADA: R$ {valor_entrada:.2f} - {data_entrada_parsed}")
-            
+
+            soma_geradas = 0.0
             for i in range(1, numero_parcelas + 1):
-                # Calcular data de vencimento da parcela
-                if periodicidade == 'Semanal':
-                    data_venc = data_primeira + timedelta(days=(i-1) * 7)
-                elif periodicidade == 'Quinzenal':
-                    data_venc = data_primeira + timedelta(days=(i-1) * 15)
-                else:  # Mensal
-                    month = data_primeira.month - 1 + (i-1)
-                    year = data_primeira.year + month // 12
-                    month = month % 12 + 1
-                    day = min(data_primeira.day, calendar.monthrange(year, month)[1])
-                    data_venc = date(year, month, day)
-                
+                if usar_customizadas:
+                    custom = parcelas_customizadas[i - 1]
+                    valor_i = round(float(custom['valor']), 2)
+                    try:
+                        data_venc = date.fromisoformat(str(custom.get('data_vencimento'))[:10])
+                    except (TypeError, ValueError):
+                        data_venc = None
+                    codigo_barras_i = (custom.get('codigo_barras') or '').strip() or None
+                else:
+                    valor_i = None  # calculado abaixo
+                    data_venc = None
+                    codigo_barras_i = None
+
+                if data_venc is None:
+                    # Calcular data de vencimento da parcela
+                    if periodicidade == 'Semanal':
+                        data_venc = data_primeira + timedelta(days=(i-1) * 7)
+                    elif periodicidade == 'Quinzenal':
+                        data_venc = data_primeira + timedelta(days=(i-1) * 15)
+                    else:  # Mensal
+                        month = data_primeira.month - 1 + (i-1)
+                        year = data_primeira.year + month // 12
+                        month = month % 12 + 1
+                        day = min(data_primeira.day, calendar.monthrange(year, month)[1])
+                        data_venc = date(year, month, day)
+
+                if valor_i is None:
+                    if i < numero_parcelas:
+                        valor_i = valor_parcela
+                    else:
+                        # última parcela absorve o resíduo de centavos
+                        valor_i = round(valor_restante - soma_geradas, 2)
+                soma_geradas = round(soma_geradas + valor_i, 2)
+
                 # Status da parcela
                 if status == 'Pago':
                     parcela_status = 'Pago'
@@ -826,18 +865,19 @@ def inserir_pagamento(obra_id):
                 else:
                     parcela_status = 'Previsto'
                     parcela_data_pagamento = None
-                
+
                 nova_parcela = ParcelaIndividual(
                     pagamento_parcelado_id=novo_parcelado.id,
                     numero_parcela=i,
-                    valor_parcela=valor_parcela,
+                    valor_parcela=valor_i,
                     data_vencimento=data_venc,
                     status=parcela_status,
                     data_pagamento=parcela_data_pagamento,
-                    forma_pagamento=pix if status == 'Pago' else None
+                    forma_pagamento=pix if status == 'Pago' else None,
+                    codigo_barras=codigo_barras_i,
                 )
                 db.session.add(nova_parcela)
-                logger.info(f"      ✅ Parcela {i}/{numero_parcelas}: R$ {valor_parcela:.2f} - {data_venc} ({parcela_status})")
+                logger.info(f"      ✅ Parcela {i}/{numero_parcelas}: R$ {valor_i:.2f} - {data_venc} ({parcela_status})")
             
             db.session.flush()
             
@@ -866,8 +906,8 @@ def inserir_pagamento(obra_id):
                     
                     logger.info(f"      ✅ PagamentoServico criado: ID={novo_pag_servico.id}, valor={valor_total}")
                     
-                    # Atualizar parcelas_pagas
-                    novo_parcelado.parcelas_pagas = numero_parcelas
+                    # Atualizar parcelas_pagas (todas as linhas, incluindo a entrada)
+                    novo_parcelado.parcelas_pagas = total_pagamentos
                     novo_parcelado.status = 'Concluído'
                     
                     # Recalcular % do serviço
@@ -887,7 +927,7 @@ def inserir_pagamento(obra_id):
             
             elif status == 'Pago':
                 # Status=Pago mas sem serviço vinculado
-                novo_parcelado.parcelas_pagas = numero_parcelas
+                novo_parcelado.parcelas_pagas = total_pagamentos
                 novo_parcelado.status = 'Concluído'
                 logger.info(f"   ✅ Todas as parcelas marcadas como pagas (sem vínculo ao serviço)")
             

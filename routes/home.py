@@ -232,9 +232,13 @@ def home_obras():
                 por_obra[obra_id]['material_total'] += valor
 
         if ids:
-            # Lançamentos pagos (todos; data_ref = data ou vencimento — regra do BI)
+            # Lançamentos pagos (todos; data_ref = data ou vencimento — regra do BI).
+            # Exclui os lançamentos-ESPELHO criados ao pagar parcela (padrão
+            # "<desc> (Parcela X/Y)" em sid.marcar_parcela_paga) — a parcela é a
+            # fonte canônica; somar os dois duplicaria as saídas.
             lancs = (Lancamento.query
-                     .filter(Lancamento.obra_id.in_(ids), Lancamento.status == 'Pago')
+                     .filter(Lancamento.obra_id.in_(ids), Lancamento.status == 'Pago',
+                             ~Lancamento.descricao.like('%(Parcela %'))
                      .all())
             for l in lancs:
                 _acumula(l.obra_id, _classe_gasto(l.tipo),

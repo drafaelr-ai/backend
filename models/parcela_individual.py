@@ -16,8 +16,7 @@ class ParcelaIndividual(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Previsto', index=True)
     data_pagamento = db.Column(db.Date, nullable=True)
     forma_pagamento = db.Column(db.String(50), nullable=True)
-    # NOTA: Coluna codigo_barras será adicionada após ALTER TABLE no banco
-    # codigo_barras = db.Column(db.String(60), nullable=True)
+    codigo_barras = db.Column(db.String(60), nullable=True)  # boletos parcelados
     observacao = db.Column(db.String(255), nullable=True)
 
     __table_args__ = (
@@ -27,13 +26,7 @@ class ParcelaIndividual(db.Model):
     pagamento_parcelado = db.relationship('PagamentoParcelado', backref=db.backref('parcelas_individuais', cascade='all, delete-orphan'))
 
     def to_dict(self):
-        codigo_barras_value = None
-        try:
-            if hasattr(self, 'codigo_barras'):
-                codigo_barras_value = self.codigo_barras
-        except Exception:
-            logger.warning("Excecao suprimida em to_dict", exc_info=True)
-            pass
+        codigo_barras_value = self.codigo_barras
 
         return {
             "id": self.id,
