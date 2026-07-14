@@ -133,6 +133,9 @@ with app.app_context():
     db.session.add(ParcelaIndividual(pagamento_parcelado_id=pp_equip.id, numero_parcela=0,
                                      valor_parcela=900, data_vencimento=hoje - timedelta(days=5),
                                      status='Pago', data_pagamento=hoje))
+    db.session.add(Boleto(obra_id=obra2.id, descricao='Boleto pago', valor=1200,
+                          data_vencimento=hoje - timedelta(days=10), status='Pago',
+                          data_pagamento=hoje))
     db.session.commit()
 
     h_master = {'Authorization': f'Bearer {create_access_token(identity=str(master.id))}'}
@@ -188,7 +191,9 @@ with app.app_context():
         check('Serviço total = 300', k['servico_total'] == 300.0, f"got {k['servico_total']}")
         check('Despesa total = 400 (espelho de parcela excluído)', k['despesa_total'] == 400.0,
               f"got {k['despesa_total']}")
-        check('Saídas do mês = 9700 (espelho de parcela excluído)', k['saidas_mes'] == 9700.0, f"got {k['saidas_mes']}")
+        check('Boleto total = 1200 (sem tipo, categoria própria)', k['boleto_total'] == 1200.0,
+              f"got {k['boleto_total']}")
+        check('Saídas do mês = 10900 (espelho de parcela excluído)', k['saidas_mes'] == 10900.0, f"got {k['saidas_mes']}")
         # previsão até fim do mês: depende do dia — todos os 4 vencidos/hoje entram; Areia (+5d)
         # e parcela +20d entram se caírem dentro do mês. Valida coerência mínima:
         check('previsão >= soma dos vencidos+hoje (14380)', k['previsao_pagar']['total'] >= 14380,
@@ -200,6 +205,7 @@ with app.app_context():
               o1['equipamento_total'] == 2200.0, f"got {o1}")
         check('obra2: servico_total 300', o2['servico_total'] == 300.0, f"got {o2}")
         check('obra2: despesa_total 400', o2['despesa_total'] == 400.0, f"got {o2}")
+        check('obra2: boleto_total 1200', o2['boleto_total'] == 1200.0, f"got {o2}")
         check('obra1: vencidos_qtd 3', o1['vencidos_qtd'] == 3, f"got {o1}")
 
         r = c.get('/home/obras?competencia=1999-01', headers=h_master)

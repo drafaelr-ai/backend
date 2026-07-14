@@ -239,13 +239,13 @@ def home_obras():
         hoje = date.today()
 
         _ZERO_CATS = {'mo_total': 0.0, 'material_total': 0.0, 'equipamento_total': 0.0,
-                      'servico_total': 0.0, 'despesa_total': 0.0}
+                      'servico_total': 0.0, 'despesa_total': 0.0, 'boleto_total': 0.0}
         por_obra = {oid: {**_ZERO_CATS, 'vencidos_qtd': 0, 'vencidos_valor': 0.0} for oid in ids}
         totais = dict(_ZERO_CATS)
         saidas_mes = 0.0
         _CAMPO_POR_CLASSE = {'mo': 'mo_total', 'material': 'material_total',
                              'equipamento': 'equipamento_total', 'servico': 'servico_total',
-                             'despesa': 'despesa_total'}
+                             'despesa': 'despesa_total', 'boleto': 'boleto_total'}
 
         def _acumula(obra_id, classe, valor, data_ref):
             nonlocal saidas_mes
@@ -297,6 +297,16 @@ def home_obras():
                 _acumula(pp.obra_id, classe, p.valor_parcela or 0,
                          p.data_pagamento or p.data_vencimento)
 
+            # Boletos pagos — o modelo não tem um campo "tipo" (Mão de
+            # Obra/Material/...) pra classificar, então viram sua própria
+            # categoria em vez de forçar um destino adivinhado.
+            boletos_pagos = (Boleto.query
+                             .filter(Boleto.obra_id.in_(ids), Boleto.status == 'Pago')
+                             .all())
+            for b in boletos_pagos:
+                _acumula(b.obra_id, 'boleto', b.valor or 0,
+                         b.data_pagamento or b.data_vencimento)
+
         # Previsão a pagar: em aberto com vencimento até o fim do mês
         # (reusa as mesmas fontes do /home/alertas com corte = fim do mês)
         pendencias = _pendencias_obras(user, fim, hoje) if ids else []
@@ -318,6 +328,7 @@ def home_obras():
                 'equipamento_total': round(d['equipamento_total'], 2),
                 'servico_total': round(d['servico_total'], 2),
                 'despesa_total': round(d['despesa_total'], 2),
+                'boleto_total': round(d['boleto_total'], 2),
                 'vencidos_qtd': d['vencidos_qtd'],
                 'vencidos_valor': round(d['vencidos_valor'], 2),
             })
@@ -330,6 +341,7 @@ def home_obras():
                 'equipamento_total': round(totais['equipamento_total'], 2),
                 'servico_total': round(totais['servico_total'], 2),
                 'despesa_total': round(totais['despesa_total'], 2),
+                'boleto_total': round(totais['boleto_total'], 2),
                 'saidas_mes': round(saidas_mes, 2),
                 'previsao_pagar': {'total': previsao_total, 'qtd': len(pendencias),
                                    'ate': fim.isoformat(), 'itens': pendencias},
