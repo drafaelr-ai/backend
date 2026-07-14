@@ -21,14 +21,14 @@ def register():
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         dados = request.json
-        username = dados.get('username')
+        username = (dados.get('username') or '').strip()
         password = dados.get('password')
         # Segurança: role elevado (master/administrador) NUNCA pode ser definido
         # pelo próprio cliente em auto-registro público. Sempre força 'comum'.
         role = 'comum'
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-        if User.query.filter_by(username=username).first():
+        if User.query.filter(db.func.lower(User.username) == username.lower()).first():
             return jsonify({"erro": "Nome de usuário já existe"}), 409
         novo_usuario = User(username=username, role=role)
         novo_usuario.set_password(password)
@@ -51,11 +51,13 @@ def login():
         return make_response(jsonify({"message": "OPTIONS request allowed"}), 200)
     try:
         dados = request.json
-        username = dados.get('username')
+        username = (dados.get('username') or '').strip()
         password = dados.get('password')
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-        user = User.query.filter_by(username=username).first()
+        # Username case-insensitive (e sem espaços nas pontas) — evita
+        # "credenciais inválidas" por 'Leticiamr' vs 'leticiamr'.
+        user = User.query.filter(db.func.lower(User.username) == username.lower()).first()
         if user and user.check_password(password):
             identity = str(user.id)
             # Claim `modulos` é consumido pelo SSO do backend admin (null = todos).

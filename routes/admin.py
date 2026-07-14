@@ -70,16 +70,16 @@ def create_user():
     logger.info("--- [LOG] Rota /admin/users (POST) acessada ---")
     try:
         dados = request.json
-        username = dados.get('username')
+        username = (dados.get('username') or '').strip()
         password = dados.get('password')
         role = dados.get('role', 'comum')
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-        # Único master do sistema é o admin_principal — nunca criar outro.
+        # Único master do sistema é o Diego (id 1) — nunca criar outro.
         if role not in ['comum', 'administrador']:
              return jsonify({"erro": "Role deve ser 'comum' ou 'administrador'"}), 400
-        if User.query.filter_by(username=username).first():
-            return jsonify({"erro": "Nome de usuário já existe"}), 409
+        if User.query.filter(db.func.lower(User.username) == username.lower()).first():
+            return jsonify({"erro": "Nome de usuário já existe (usuário não diferencia maiúsculas)"}), 409
         novo_usuario = User(username=username, role=role)
         novo_usuario.set_password(password)
         db.session.add(novo_usuario)

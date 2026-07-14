@@ -79,6 +79,10 @@ with app.app_context():
         check('login: claim username no JWT', claims.get('username') == 'comum_smoke')
         token_comum = body['access_token']
 
+        # login case-insensitive + trim
+        r = c.post('/login', json={'username': '  COMUM_smoke ', 'password': 'smoke123'})
+        check('login case-insensitive + trim -> 200', r.status_code == 200, f'got {r.status_code}')
+
         r = c.post('/login', json={'username': 'admin_principal', 'password': 'smoke123'})
         body = json.loads(r.data)
         check('login master: claim modulos null (todos)',
