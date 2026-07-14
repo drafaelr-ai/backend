@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, date
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, verify_jwt_in_request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -21,11 +21,21 @@ from models.pagamento_salario import PagamentoSalario
 from models.encargo import Encargo
 from models.obra import Obra
 from services import cct_parser_service, rh_service, storage_service
-from services import get_current_user, user_has_access_to_obra
+from services import get_current_user, user_has_access_to_obra, user_tem_modulo
 
 logger = logging.getLogger(__name__)
 
 rh_bp = Blueprint('rh', __name__, url_prefix='/rh')
+
+
+@rh_bp.before_request
+def _gate_modulo_rh():
+    """Acesso ao módulo RH exige o módulo liberado (master sempre passa)."""
+    if request.method == 'OPTIONS':
+        return None
+    verify_jwt_in_request()
+    if not user_tem_modulo(get_current_user(), 'rh'):
+        return jsonify({"erro": "Acesso negado: você não tem permissão para o módulo RH."}), 403
 
 _ENCARGO_TIPOS = {'fgts', 'inss_darf', 'esocial_dae', 'outro'}
 _PAG_TIPOS = {'salario', 'vale', 'outro'}

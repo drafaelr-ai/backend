@@ -17,7 +17,7 @@ from calendar import monthrange
 from datetime import datetime, date, timedelta
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, verify_jwt_in_request
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
@@ -32,11 +32,21 @@ from models.frota_multa import FrotaMulta
 from models.funcionario import Funcionario
 from models.obra import Obra
 from services import storage_service, admin_read_service
-from services import get_current_user, user_has_access_to_obra
+from services import get_current_user, user_has_access_to_obra, user_tem_modulo
 
 logger = logging.getLogger(__name__)
 
 frota_bp = Blueprint('frota', __name__, url_prefix='/frota')
+
+
+@frota_bp.before_request
+def _gate_modulo_frota():
+    """Acesso ao módulo Frota exige o módulo liberado (master sempre passa)."""
+    if request.method == 'OPTIONS':
+        return None
+    verify_jwt_in_request()
+    if not user_tem_modulo(get_current_user(), 'frota'):
+        return jsonify({"erro": "Acesso negado: você não tem permissão para o módulo Frota."}), 403
 
 BUCKET_FROTA = 'frota-arquivos'
 

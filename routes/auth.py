@@ -2,10 +2,11 @@ import logging
 import traceback
 
 from flask import Blueprint, request, jsonify, make_response
-from flask_jwt_extended import create_access_token
+from flask_jwt_extended import create_access_token, jwt_required
 
 from extensions import db, limiter
 from models.user import User
+from services.auth_service import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,12 @@ def login():
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password):
             identity = str(user.id)
-            additional_claims = {"username": user.username, "role": user.role}
+            # Claim `modulos` é consumido pelo SSO do backend admin (null = todos).
+            additional_claims = {
+                "username": user.username,
+                "role": user.role,
+                "modulos": user.modulos_permitidos,
+            }
             access_token = create_access_token(identity=identity, additional_claims=additional_claims)
             logger.info(f"Login bem-sucedido para '{username}'")
             return jsonify(access_token=access_token, user=user.to_dict())
@@ -67,6 +73,21 @@ def login():
     except Exception as e:
         logger.exception("Erro em /login")
         return jsonify({"erro": str(e)}), 500
+
+
+@auth_bp.route('/me', methods=['GET'])
+@jwt_required()
+def me():
+    """Dados frescos do usuário logado (o frontend refresca o storage no boot)."""
+    try:
+        user = get_current_user()
+        if not user:
+            # 401 → fetchWithAuth limpa o storage e volta ao login.
+            return jsonify({"erro": "Usuário não existe mais"}), 401
+        return jsonify(user.to_dict()), 200
+    except Exception as e:
+        logger.exception("Erro em GET /me")
+        return jsonify({"erro": "Erro ao obter usuário", "detalhe": str(e)}), 500
 
 
 @auth_bp.route('/', methods=['GET'])

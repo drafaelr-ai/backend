@@ -57,17 +57,27 @@ with app.app_context():
 
     obra1 = Obra(nome='Obra Smoke 1')
     obra2 = Obra(nome='Obra Smoke 2')
-    master = User(username='master_smoke', role='master')
+    # Master com lista restritiva de propósito: master ignora o gating de módulos.
+    master = User(username='master_smoke', role='master', modulos_permitidos=['obras'])
     master.set_password('smoke123')
-    comum = User(username='comum_smoke', role='comum')
+    comum = User(username='comum_smoke', role='comum')  # modulos None = todos
     comum.set_password('smoke123')
     comum.obras_permitidas.append(obra1)
-    db.session.add_all([obra1, obra2, master, comum])
+    restrito = User(username='restrito_smoke', role='comum', modulos_permitidos=['obras'])
+    restrito.set_password('smoke123')
+    liberado = User(username='liberado_smoke', role='comum', modulos_permitidos=['frota'])
+    liberado.set_password('smoke123')
+    adm_restrito = User(username='adm_restrito_smoke', role='administrador', modulos_permitidos=['obras'])
+    adm_restrito.set_password('smoke123')
+    db.session.add_all([obra1, obra2, master, comum, restrito, liberado, adm_restrito])
     db.session.commit()
     obra1_id, obra2_id = obra1.id, obra2.id
 
     h_master = {'Authorization': f'Bearer {create_access_token(identity=str(master.id))}'}
     h_comum = {'Authorization': f'Bearer {create_access_token(identity=str(comum.id))}'}
+    h_restrito = {'Authorization': f'Bearer {create_access_token(identity=str(restrito.id))}'}
+    h_liberado = {'Authorization': f'Bearer {create_access_token(identity=str(liberado.id))}'}
+    h_adm_restrito = {'Authorization': f'Bearer {create_access_token(identity=str(adm_restrito.id))}'}
 
     with app.test_client() as c:
         print('\n=== GETs básicos (master) ===')
@@ -78,6 +88,18 @@ with app.app_context():
 
         r = c.get('/frota/veiculos')
         check('GET /frota/veiculos sem token -> 401', r.status_code == 401)
+
+        print('\n=== gating por módulo ===')
+        r = c.get('/frota/veiculos', headers=h_restrito)
+        check('comum com modulos=[obras] -> 403', r.status_code == 403, f'got {r.status_code}')
+        r = c.get('/frota/veiculos', headers=h_liberado)
+        check('comum com modulos=[frota] -> 200', r.status_code == 200, f'got {r.status_code}')
+        r = c.get('/frota/veiculos', headers=h_comum)
+        check('comum com modulos=None (todos) -> 200', r.status_code == 200)
+        r = c.get('/frota/veiculos', headers=h_master)
+        check('master com lista restritiva -> 200 (bypass)', r.status_code == 200)
+        r = c.get('/frota/veiculos', headers=h_adm_restrito)
+        check('administrador com modulos=[obras] -> 403', r.status_code == 403, f'got {r.status_code}')
 
         print('\n=== imoveis-admin (sem DATABASE_URL_ADMIN) ===')
         r = c.get('/frota/imoveis-admin', headers=h_master)

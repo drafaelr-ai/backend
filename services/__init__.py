@@ -8,4 +8,6 @@ from services.auth_service import (  # noqa: F401
     get_current_user,
     user_has_access_to_obra,
     check_permission,
+    user_tem_modulo,
+    MODULOS_VALIDOS,
 )

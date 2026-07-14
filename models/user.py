@@ -13,6 +13,9 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     role = db.Column(db.String(20), nullable=False, default='comum')
+    # Módulos liberados ('obras','admin','rh','frota'). NULL = todos (default).
+    # Master ignora a lista (sempre tem tudo); ver services.auth_service.user_tem_modulo.
+    modulos_permitidos = db.Column(db.JSON, nullable=True)
     obras_permitidas = db.relationship('Obra', secondary=user_obra_association, lazy='subquery',
         backref=db.backref('usuarios_permitidos', lazy=True))
 
@@ -21,4 +24,9 @@ class User(db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
     def to_dict(self):
-        return { "id": self.id, "username": self.username, "role": self.role }
+        return {
+            "id": self.id,
+            "username": self.username,
+            "role": self.role,
+            "modulos_permitidos": self.modulos_permitidos,
+        }

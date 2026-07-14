@@ -3,7 +3,7 @@ import traceback
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, make_response, current_app
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 
 from sqlalchemy import func
 from extensions import db
@@ -20,7 +20,7 @@ from models.orcamento_eng_etapa import OrcamentoEngEtapa
 from models.orcamento_eng_item import OrcamentoEngItem
 from models.cronograma_etapa import CronogramaEtapa
 from models.cronograma_obra import CronogramaObra
-from services import get_current_user, check_permission, user_has_access_to_obra
+from services import get_current_user, check_permission, user_has_access_to_obra, MODULOS_VALIDOS
 from services.orcamento_service import resolver_orcamento_item_id
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,9 @@ def create_user():
         role = dados.get('role', 'comum')
         if not username or not password:
             return jsonify({"erro": "Usuário e senha são obrigatórios"}), 400
-        if role not in ['master', 'comum']:
-             return jsonify({"erro": "Role deve ser 'master' ou 'comum'"}), 400
+        # Único master do sistema é o admin_principal — nunca criar outro.
+        if role not in ['comum', 'administrador']:
+             return jsonify({"erro": "Role deve ser 'comum' ou 'administrador'"}), 400
         if User.query.filter_by(username=username).first():
             return jsonify({"erro": "Nome de usuário já existe"}), 409
         novo_usuario = User(username=username, role=role)
@@ -141,13 +142,10 @@ def delete_user(user_id):
 
         user = User.query.get_or_404(user_id)
         username_backup = user.username  # Guardar para log
-        
-        # Master pode excluir qualquer usuário (exceto a si mesmo, já verificado acima)
-        claims = get_jwt()
-        current_user_role = claims.get('role')
-        
-        if user.role == 'master' and current_user_role != 'master':
-            return jsonify({"erro": "Apenas usuários MASTER podem excluir outros MASTER."}), 403
+
+        # Único master do sistema (admin_principal) não pode ser excluído.
+        if user.role == 'master':
+            return jsonify({"erro": "O usuário master não pode ser excluído."}), 400
 
         logger.info(f"--- [LOG] Limpando referências do usuário '{username_backup}' (ID: {user_id}) ---")
         
@@ -229,16 +227,19 @@ def alterar_role_usuario(user_id):
         return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
     
     try:
-        current_user_id = int(get_jwt_identity())
         data = request.get_json()
         novo_role = data.get('role')
-        
-        if novo_role not in ['master', 'administrador', 'comum']:
-            return jsonify({"erro": "Role inválido. Use: master, administrador ou comum"}), 400
-        
+
+        # Único master do sistema é o admin_principal: não se promove ninguém
+        # a master, nem se altera o role de quem é master.
+        if novo_role not in ['administrador', 'comum']:
+            return jsonify({"erro": "Role inválido. Use: administrador ou comum"}), 400
+
         user = User.query.get_or_404(user_id)
+        if user.role == 'master':
+            return jsonify({"erro": "O role do usuário master não pode ser alterado."}), 400
         role_anterior = user.role
-        
+
         user.role = novo_role
         db.session.commit()
         
@@ -251,6 +252,42 @@ def alterar_role_usuario(user_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] PATCH /admin/users/{user_id}/role: {e} ---")
+        return jsonify({"erro": str(e)}), 500
+
+# ---------------------------------------------------
+
+# --- ROTA PARA DEFINIR MÓDULOS PERMITIDOS ---
+@admin_bp.route('/admin/users/<int:user_id>/modulos', methods=['PUT', 'OPTIONS'])
+@check_permission(roles=['master'])
+def set_user_modulos(user_id):
+    """Define os módulos que o usuário pode acessar.
+
+    Body: {"modulos": ["obras","rh",...]} ou {"modulos": null} (= todos).
+    Master sempre tem todos os módulos — não é configurável."""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    try:
+        user = User.query.get_or_404(user_id)
+        if user.role == 'master':
+            return jsonify({"erro": "Master sempre tem acesso a todos os módulos."}), 400
+
+        dados = request.get_json(silent=True) or {}
+        modulos = dados.get('modulos', None)
+        if modulos is not None:
+            if not isinstance(modulos, list) or not all(isinstance(m, str) for m in modulos):
+                return jsonify({"erro": "modulos deve ser uma lista de strings ou null"}), 400
+            invalidos = sorted(set(modulos) - set(MODULOS_VALIDOS))
+            if invalidos:
+                return jsonify({"erro": f"Módulos inválidos: {invalidos}. Use {sorted(MODULOS_VALIDOS)}"}), 400
+            modulos = sorted(set(modulos))
+
+        user.modulos_permitidos = modulos
+        db.session.commit()
+        logger.info(f"--- [LOG] Módulos de '{user.username}' definidos: {modulos if modulos is not None else 'todos'} ---")
+        return jsonify({"sucesso": "Módulos atualizados", "user": user.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"--- [ERRO] PUT /admin/users/{user_id}/modulos: {e} ---")
         return jsonify({"erro": str(e)}), 500
 
 # ---------------------------------------------------

@@ -820,6 +820,22 @@ def run_auto_migration():
                     "frota_movimentacao, frota_documento, frota_manutencao, "
                     "frota_abastecimento, frota_multa)")
 
+        # =================================================================
+        # ACESSOS POR MÓDULO (aditivo, idempotente)
+        # NULL = todos os módulos (comportamento anterior preservado).
+        # Invariante: admin_principal é o ÚNICO master do sistema — qualquer
+        # outro master é rebaixado a administrador em todo boot.
+        # =================================================================
+        cur.execute('ALTER TABLE "user" ADD COLUMN IF NOT EXISTS modulos_permitidos JSONB;')
+        cur.execute("""
+            UPDATE "user" SET role='administrador'
+            WHERE role='master' AND username <> 'admin_principal';
+        """)
+        if cur.rowcount:
+            logger.warning("⚠️ ACESSOS: %s usuário(s) master rebaixado(s) a administrador "
+                           "(único master é admin_principal)", cur.rowcount)
+        logger.info("✅ ACESSOS: coluna modulos_permitidos garantida em user")
+
         conn.commit()
         cur.close()
         conn.close()

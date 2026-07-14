@@ -15,6 +15,21 @@ def get_current_user():
     return db.session.get(User, int(user_id_str))
 
 
+MODULOS_VALIDOS = ('obras', 'admin', 'rh', 'frota')
+
+
+def user_tem_modulo(user, modulo):
+    """Acesso por módulo: APENAS master ignora a lista; modulos_permitidos
+    None = todos (default de quem nunca foi configurado)."""
+    if not user:
+        return False
+    if user.role == 'master':
+        return True
+    if user.modulos_permitidos is None:
+        return True
+    return modulo in user.modulos_permitidos
+
+
 def user_has_access_to_obra(user, obra_id):
     if not user:
         return False
