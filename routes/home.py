@@ -191,15 +191,22 @@ def alertas():
 
 
 def _classe_gasto(tipo):
-    """Classifica o tipo do lançamento: 'mo', 'material' ou 'outros'.
-
-    lancamento.tipo tem 5 valores em prod: Mão de Obra, Material, Despesa,
-    Serviço, Equipamentos — Despesa/Serviço/Equipamentos contam nas saídas,
-    mas não são MO nem material."""
+    """Classifica o tipo do lançamento nas 5 categorias reais que existem em
+    produção: Mão de Obra, Material, Equipamentos, Serviço, Despesa. Cada uma
+    vira seu próprio total — nenhuma é forçada dentro de MO/Material (Serviço
+    é misto mão-de-obra/logística e Despesa é majoritariamente material
+    lançado errado na digitação; auditoria real mostrou que "adivinhar" um
+    destino único distorce os totais em vez de corrigi-los)."""
     if tipo == 'Mão de Obra':
         return 'mo'
     if tipo == 'Material':
         return 'material'
+    if tipo == 'Equipamentos':
+        return 'equipamento'
+    if tipo == 'Serviço':
+        return 'servico'
+    if tipo == 'Despesa':
+        return 'despesa'
     return 'outros'
 
 
@@ -231,20 +238,23 @@ def home_obras():
         ids = list(obras_map.keys())
         hoje = date.today()
 
-        por_obra = {oid: {'mo_total': 0.0, 'material_total': 0.0, 'vencidos_qtd': 0,
-                          'vencidos_valor': 0.0} for oid in ids}
-        mo_total = material_total = saidas_mes = 0.0
+        _ZERO_CATS = {'mo_total': 0.0, 'material_total': 0.0, 'equipamento_total': 0.0,
+                      'servico_total': 0.0, 'despesa_total': 0.0}
+        por_obra = {oid: {**_ZERO_CATS, 'vencidos_qtd': 0, 'vencidos_valor': 0.0} for oid in ids}
+        totais = dict(_ZERO_CATS)
+        saidas_mes = 0.0
+        _CAMPO_POR_CLASSE = {'mo': 'mo_total', 'material': 'material_total',
+                             'equipamento': 'equipamento_total', 'servico': 'servico_total',
+                             'despesa': 'despesa_total'}
 
         def _acumula(obra_id, classe, valor, data_ref):
-            nonlocal mo_total, material_total, saidas_mes
+            nonlocal saidas_mes
             if data_ref and inicio <= data_ref <= fim:
                 saidas_mes += valor
-            if classe == 'mo':
-                mo_total += valor
-                por_obra[obra_id]['mo_total'] += valor
-            elif classe == 'material':
-                material_total += valor
-                por_obra[obra_id]['material_total'] += valor
+            campo = _CAMPO_POR_CLASSE.get(classe)
+            if campo:
+                totais[campo] += valor
+                por_obra[obra_id][campo] += valor
 
         if ids:
             # Lançamentos pagos (todos; data_ref = data ou vencimento — regra do BI).
@@ -267,7 +277,9 @@ def home_obras():
                               PagamentoServico.valor_pago > 0)
                       .all())
             for ps, obra_id in pagtos:
-                classe = 'mo' if ps.tipo_pagamento == 'mao_de_obra' else 'material'
+                classe = ('mo' if ps.tipo_pagamento == 'mao_de_obra'
+                          else 'equipamento' if ps.tipo_pagamento == 'equipamento'
+                          else 'material')
                 _acumula(obra_id, classe, ps.valor_pago or 0, ps.data)
 
             # Parcelas pagas (split pelo segmento do parcelamento)
@@ -278,7 +290,10 @@ def home_obras():
                                       ParcelaIndividual.status == 'Pago')
                               .all())
             for p, pp in parcelas_pagas:
-                classe = 'mo' if (pp.segmento or 'Material') == 'Mão de Obra' else 'material'
+                segmento = pp.segmento or 'Material'
+                classe = ('mo' if segmento == 'Mão de Obra'
+                          else 'equipamento' if segmento == 'Equipamento'
+                          else 'material')
                 _acumula(pp.obra_id, classe, p.valor_parcela or 0,
                          p.data_pagamento or p.data_vencimento)
 
@@ -300,6 +315,9 @@ def home_obras():
                 'nome': nome,
                 'mo_total': round(d['mo_total'], 2),
                 'material_total': round(d['material_total'], 2),
+                'equipamento_total': round(d['equipamento_total'], 2),
+                'servico_total': round(d['servico_total'], 2),
+                'despesa_total': round(d['despesa_total'], 2),
                 'vencidos_qtd': d['vencidos_qtd'],
                 'vencidos_valor': round(d['vencidos_valor'], 2),
             })
@@ -307,8 +325,11 @@ def home_obras():
         return jsonify({
             'competencia': competencia,
             'kpis': {
-                'mo_total': round(mo_total, 2),
-                'material_total': round(material_total, 2),
+                'mo_total': round(totais['mo_total'], 2),
+                'material_total': round(totais['material_total'], 2),
+                'equipamento_total': round(totais['equipamento_total'], 2),
+                'servico_total': round(totais['servico_total'], 2),
+                'despesa_total': round(totais['despesa_total'], 2),
                 'saidas_mes': round(saidas_mes, 2),
                 'previsao_pagar': {'total': previsao_total, 'qtd': len(pendencias),
                                    'ate': fim.isoformat(), 'itens': pendencias},

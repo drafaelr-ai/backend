@@ -639,8 +639,13 @@ def get_obra_detalhes(obra_id):
             logger.warning("Falha ao montar mapa de itens de orçamento para histórico", exc_info=True)
 
         # OTIMIZAÇÃO: Buscar todos os lançamentos com orcamento_item_id em uma única query
+        # Exclui lançamentos-espelho de parcela ("<desc> (Parcela X/Y)", criados em
+        # sid.py::marcar_parcela_paga) — a ParcelaIndividual é sempre a fonte canônica
+        # do pagamento; sem esse filtro, uma parcela vinculada a orcamento_item_id (mas
+        # sem servico_id) entrava duas vezes no histórico (mesmo bug corrigido em
+        # home.py, replicado aqui pro extrato "Histórico de Pagamentos").
         lancamentos_com_item = db.session.execute(db.text("""
-            SELECT l.id, l.obra_id, l.tipo, l.descricao, l.valor_total, l.valor_pago, 
+            SELECT l.id, l.obra_id, l.tipo, l.descricao, l.valor_total, l.valor_pago,
                    l.data, l.data_vencimento, l.status, l.pix, l.prioridade, l.fornecedor, l.servico_id,
                    l.orcamento_item_id, s.nome as servico_nome,
                    oei.codigo || ' - ' || oei.descricao as orcamento_item_nome
@@ -648,6 +653,7 @@ def get_obra_detalhes(obra_id):
             LEFT JOIN servico s ON l.servico_id = s.id
             LEFT JOIN orcamento_eng_item oei ON l.orcamento_item_id = oei.id
             WHERE l.obra_id = :obra_id
+              AND l.descricao NOT LIKE '%(Parcela %'
         """), {"obra_id": obra_id}).fetchall()
         
         for lanc in lancamentos_com_item:

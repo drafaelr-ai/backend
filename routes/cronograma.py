@@ -888,8 +888,10 @@ def inserir_pagamento(obra_id):
                 servico = Servico.query.get(servico_id)
                 if servico:
                     # Determinar tipo_pagamento
-                    tipo_pagamento = 'mao_de_obra' if tipo == 'Mão de Obra' else 'material'
-                    
+                    tipo_pagamento = ('mao_de_obra' if tipo == 'Mão de Obra'
+                                       else 'equipamento' if tipo == 'Equipamentos'
+                                       else 'material')
+
                     # Criar UM PagamentoServico com valor total
                     novo_pag_servico = PagamentoServico(
                         servico_id=servico_id,
@@ -949,8 +951,10 @@ def inserir_pagamento(obra_id):
             # CASO 1: STATUS "PAGO" COM SERVIÇO VINCULADO
             if servico_id and status == 'Pago':
                 servico = Servico.query.get_or_404(servico_id)
-                tipo_pagamento = 'mao_de_obra' if tipo == 'Mão de Obra' else 'material'
-                
+                tipo_pagamento = ('mao_de_obra' if tipo == 'Mão de Obra'
+                                   else 'equipamento' if tipo == 'Equipamentos'
+                                   else 'material')
+
                 novo_pagamento = PagamentoServico(
                     servico_id=servico_id,
                     tipo_pagamento=tipo_pagamento,
@@ -1177,11 +1181,13 @@ def marcar_multiplos_como_pago(obra_id):
                         # Determinar tipo_pagamento
                         if pagamento.tipo == 'Mão de Obra':
                             tipo_pagamento = 'mao_de_obra'
+                        elif pagamento.tipo == 'Equipamentos':
+                            tipo_pagamento = 'equipamento'
                         elif pagamento.tipo == 'Material':
                             tipo_pagamento = 'material'
                         else:
                             tipo_pagamento = 'material'  # default
-                        
+
                         # Criar PagamentoServico
                         novo_pag_servico = PagamentoServico(
                             servico_id=pagamento.servico_id,

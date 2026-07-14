@@ -110,14 +110,29 @@ with app.app_context():
                               valor_total=800, valor_pago=800, data=hoje, status='Pago'))
     db.session.add(Lancamento(obra_id=obra2.id, tipo='Despesa', descricao='Taxa cartório',
                               valor_total=400, valor_pago=400, data=hoje, status='Pago'))
+    db.session.add(Lancamento(obra_id=obra1.id, tipo='Equipamentos', descricao='Aluguel andaime',
+                              valor_total=600, valor_pago=600, data=hoje, status='Pago'))
+    db.session.add(Lancamento(obra_id=obra2.id, tipo='Serviço', descricao='Empreita pintura',
+                              valor_total=300, valor_pago=300, data=hoje, status='Pago'))
     # lançamento-ESPELHO de parcela paga: NÃO deve somar (a parcela já conta)
     db.session.add(Lancamento(obra_id=obra1.id, tipo='Despesa', descricao='Esquadrias (Parcela 0/3)',
                               valor_total=2000, valor_pago=2000, data=hoje, status='Pago'))
     sv = Servico(obra_id=obra2.id, nome='Alvenaria')
-    db.session.add(sv)
+    sv_equip = Servico(obra_id=obra1.id, nome='Locação de equipamentos')
+    db.session.add_all([sv, sv_equip])
     db.session.flush()
     db.session.add(PagamentoServico(servico_id=sv.id, data=hoje, valor_total=2500,
                                     valor_pago=2500, status='Pago', tipo_pagamento='mao_de_obra'))
+    db.session.add(PagamentoServico(servico_id=sv_equip.id, data=hoje, valor_total=700,
+                                    valor_pago=700, status='Pago', tipo_pagamento='equipamento'))
+    pp_equip = PagamentoParcelado(obra_id=obra1.id, descricao='Guindaste', segmento='Equipamento',
+                                  valor_total=900, numero_parcelas=1, valor_parcela=900,
+                                  data_primeira_parcela=hoje - timedelta(days=5))
+    db.session.add(pp_equip)
+    db.session.flush()
+    db.session.add(ParcelaIndividual(pagamento_parcelado_id=pp_equip.id, numero_parcela=0,
+                                     valor_parcela=900, data_vencimento=hoje - timedelta(days=5),
+                                     status='Pago', data_pagamento=hoje))
     db.session.commit()
 
     h_master = {'Authorization': f'Bearer {create_access_token(identity=str(master.id))}'}
@@ -168,13 +183,23 @@ with app.app_context():
         check('MO total = 1500 + 2500', k['mo_total'] == 4000.0, f"got {k['mo_total']}")
         check('Material total = 800 + 2000 (parcela paga)', k['material_total'] == 2800.0,
               f"got {k['material_total']}")
-        check('Saídas do mês = 7200 (espelho de parcela excluído)', k['saidas_mes'] == 7200.0, f"got {k['saidas_mes']}")
+        check('Equipamento total = 600 (lancamento) + 700 (pag.serviço) + 900 (parcela)',
+              k['equipamento_total'] == 2200.0, f"got {k['equipamento_total']}")
+        check('Serviço total = 300', k['servico_total'] == 300.0, f"got {k['servico_total']}")
+        check('Despesa total = 400 (espelho de parcela excluído)', k['despesa_total'] == 400.0,
+              f"got {k['despesa_total']}")
+        check('Saídas do mês = 9700 (espelho de parcela excluído)', k['saidas_mes'] == 9700.0, f"got {k['saidas_mes']}")
         # previsão até fim do mês: depende do dia — todos os 4 vencidos/hoje entram; Areia (+5d)
         # e parcela +20d entram se caírem dentro do mês. Valida coerência mínima:
         check('previsão >= soma dos vencidos+hoje (14380)', k['previsao_pagar']['total'] >= 14380,
               f"got {k['previsao_pagar']}")
         o1 = next(o for o in body['obras'] if o['nome'] == 'Obra Smoke 1')
+        o2 = next(o for o in body['obras'] if o['nome'] == 'Obra Smoke 2')
         check('obra1: mo_total 1500', o1['mo_total'] == 1500.0)
+        check('obra1: equipamento_total 2200 (lancamento + pag.serviço + parcela)',
+              o1['equipamento_total'] == 2200.0, f"got {o1}")
+        check('obra2: servico_total 300', o2['servico_total'] == 300.0, f"got {o2}")
+        check('obra2: despesa_total 400', o2['despesa_total'] == 400.0, f"got {o2}")
         check('obra1: vencidos_qtd 3', o1['vencidos_qtd'] == 3, f"got {o1}")
 
         r = c.get('/home/obras?competencia=1999-01', headers=h_master)

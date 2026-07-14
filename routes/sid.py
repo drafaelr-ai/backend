@@ -123,11 +123,13 @@ def criar_pagamento_futuro(obra_id):
                 # Determinar tipo_pagamento
                 if tipo == 'Mão de Obra':
                     tipo_pagamento = 'mao_de_obra'
+                elif tipo == 'Equipamentos':
+                    tipo_pagamento = 'equipamento'
                 elif tipo == 'Material':
                     tipo_pagamento = 'material'
                 else:
                     tipo_pagamento = 'material'  # default
-                
+
                 # Criar PagamentoServico
                 novo_pag_servico = PagamentoServico(
                     servico_id=servico_id,
@@ -601,11 +603,13 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
                 # Determinar tipo_pagamento
                 if pagamento.tipo == 'Mão de Obra':
                     tipo_pagamento = 'mao_de_obra'
+                elif pagamento.tipo == 'Equipamentos':
+                    tipo_pagamento = 'equipamento'
                 elif pagamento.tipo == 'Material':
                     tipo_pagamento = 'material'
                 else:
                     tipo_pagamento = 'material'  # default
-                
+
                 logger.info(f"      - tipo_pagamento determinado: {tipo_pagamento}")
                 
                 # Criar PagamentoServico
