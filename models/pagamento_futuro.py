@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from extensions import db
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,14 @@ class PagamentoFuturo(db.Model):
             if item:
                 orcamento_item_nome = f"{item.codigo} - {item.descricao}"
 
+        # "vencido" é calculado na hora (não existe um job que muda o status
+        # armazenado pra 'Vencido' como acontece com Boleto) — sem isso o
+        # frontend não tinha como saber que um pagamento "Previsto" já
+        # passou da data, e mostrava só "Pendente" mesmo pra algo vencido
+        # há semanas.
+        dias_para_vencer = (self.data_vencimento - date.today()).days if self.data_vencimento else None
+        vencido = self.status not in ('Pago', 'Cancelado') and dias_para_vencer is not None and dias_para_vencer < 0
+
         return {
             "id": self.id,
             "obra_id": self.obra_id,
@@ -42,6 +51,8 @@ class PagamentoFuturo(db.Model):
             "valor": self.valor,
             "data_vencimento": self.data_vencimento.isoformat(),
             "status": self.status,
+            "dias_para_vencer": dias_para_vencer,
+            "vencido": vencido,
             "fornecedor": self.fornecedor,
             "pix": self.pix,
             "codigo_barras": self.codigo_barras,

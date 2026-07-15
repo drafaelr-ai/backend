@@ -58,9 +58,11 @@ def listar_pagamentos_futuros(obra_id):
             PagamentoServico.data_vencimento.isnot(None)
         ).all()
         
+        hoje = date.today()
         for pag_serv, servico_nome in pagamentos_servico_pendentes:
             valor_pendente = pag_serv.valor_total - pag_serv.valor_pago
             if valor_pendente > 0:
+                dias_para_vencer = (pag_serv.data_vencimento - hoje).days
                 resultado.append({
                     'id': f'servico-{pag_serv.id}',
                     'tipo_origem': 'servico',
@@ -72,6 +74,8 @@ def listar_pagamentos_futuros(obra_id):
                     'valor': valor_pendente,
                     'data_vencimento': pag_serv.data_vencimento.isoformat(),
                     'status': 'Previsto',
+                    'dias_para_vencer': dias_para_vencer,
+                    'vencido': dias_para_vencer < 0,
                     'periodicidade': None
                 })
         
