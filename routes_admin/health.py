@@ -65,4 +65,4 @@ def init_db():
         })
     except Exception as e:
         logger.exception("Erro ao inicializar DB")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return jsonify({'status': 'error'}), 500

@@ -78,8 +78,8 @@ def add_lancamento(obra_id):
             else:
                 data_registro = date.today()
                 
-        except ValueError as e:
-            return jsonify({"erro": f"Formato de data inválido: {str(e)}"}), 400
+        except ValueError:
+            return jsonify({"erro": "Formato de data inválido"}), 400
         
         logger.info(f"--- [LOG] Status='{status}', Valor={valor_total}, Data Vencimento={data_vencimento_obj} ---")
 
@@ -211,7 +211,7 @@ def add_lancamento(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/lancamentos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @lancamentos_bp.route('/lancamentos/<int:lancamento_id>/pago', methods=['PATCH', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -237,7 +237,7 @@ def marcar_como_pago(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id}/pago (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @lancamentos_bp.route('/lancamentos/<int:lancamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -277,7 +277,7 @@ def editar_lancamento(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id} (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @lancamentos_bp.route('/lancamentos/<int:lancamento_id>', methods=['PATCH', 'OPTIONS'])
 @jwt_required()
@@ -326,7 +326,7 @@ def atualizar_lancamento_parcial(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id} (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @lancamentos_bp.route('/lancamentos/<int:lancamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
@@ -386,7 +386,7 @@ def deletar_lancamento(lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos/{lancamento_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 
@@ -442,7 +442,7 @@ def listar_lancamentos_pendentes(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /lancamentos-pendentes: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---
 
 
@@ -485,7 +485,7 @@ def excluir_lancamento_pendente(obra_id, lancamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /excluir-pendente: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---
 
 
@@ -543,7 +543,7 @@ def excluir_todos_lancamentos_pendentes(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /excluir-todos-pendentes: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---
 
 
@@ -626,5 +626,5 @@ def excluir_todos_lancamentos_pendentes_global():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---

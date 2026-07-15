@@ -3,6 +3,27 @@ backups/
 backup_*.sql
 backup_*.json
 
+# Scripts operacionais que podem conter credenciais reais em variáveis locais
+# (mesmo lendo de env var, evita que alguém cole uma senha ali e commite sem querer)
+_backup_admin.py
+_post_deploy_admin.py
+_check_col.py
+_diag_boleto.py
+_verify_deploy.py
+aplicar_vinculos.py
+check_cols.py
+check_itens_obra2.py
+diagnostico_alphaville.py
+gerar_planilha.py
+grupo_lancamentos.py
+ler_planilha.py
+relatorio_alphaville.py
+smoke_egress.py
+*.xlsx
+
+# Supabase CLI local state
+supabase/.temp/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

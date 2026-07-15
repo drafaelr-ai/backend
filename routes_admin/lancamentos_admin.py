@@ -144,7 +144,7 @@ def criar_lancamento():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao criar lancamento")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @lancamentos_admin_bp.route('/alertas-vencimento', methods=['GET'])
@@ -200,7 +200,7 @@ def alertas_vencimento():
 
     except Exception as e:
         logger.exception("Erro ao buscar alertas")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @lancamentos_admin_bp.route('/lancamentos/<int:lancamento_id>', methods=['PUT'])
@@ -249,7 +249,7 @@ def atualizar_lancamento(lancamento_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao atualizar lancamento")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @lancamentos_admin_bp.route('/lancamentos/<int:lancamento_id>', methods=['DELETE'])
@@ -269,7 +269,7 @@ def deletar_lancamento(lancamento_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao deletar lancamento")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @lancamentos_admin_bp.route('/lancamentos/<int:lancamento_id>/pagar', methods=['POST'])
@@ -295,7 +295,7 @@ def marcar_pago(lancamento_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao marcar pago")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @lancamentos_admin_bp.route('/lancamentos/<int:lancamento_id>/comprovante', methods=['POST'])
@@ -324,7 +324,7 @@ def upload_comprovante(lancamento_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao salvar comprovante")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @lancamentos_admin_bp.route('/lancamentos/<int:lancamento_id>/comprovante', methods=['DELETE'])
@@ -344,4 +344,4 @@ def remover_comprovante(lancamento_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao remover comprovante")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500

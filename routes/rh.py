@@ -108,7 +108,7 @@ def listar_categorias():
         return jsonify([c.to_dict() for c in cats]), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/categorias")
-        return jsonify({"erro": "Erro ao listar categorias", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar categorias"}), 500
 
 
 @rh_bp.route('/categorias', methods=['POST'])
@@ -128,7 +128,7 @@ def criar_categoria():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/categorias")
-        return jsonify({"erro": "Erro ao criar categoria", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar categoria"}), 500
 
 
 # ---------------------------------------------------------------- convenções
@@ -151,7 +151,7 @@ def listar_convencoes():
         return jsonify(out), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/convencoes")
-        return jsonify({"erro": "Erro ao listar convenções", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar convenções"}), 500
 
 
 @rh_bp.route('/convencoes/extrair', methods=['POST'])
@@ -266,7 +266,7 @@ def criar_convencao():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/convencoes")
-        return jsonify({"erro": "Erro ao salvar convenção", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao salvar convenção"}), 500
 
 
 @rh_bp.route('/convencoes/<int:conv_id>', methods=['GET'])
@@ -282,7 +282,7 @@ def obter_convencao(conv_id):
         return jsonify(d), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/convencoes/<id>")
-        return jsonify({"erro": "Erro ao obter convenção", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter convenção"}), 500
 
 
 @rh_bp.route('/convencoes/<int:conv_id>', methods=['PUT'])
@@ -328,7 +328,7 @@ def editar_convencao(conv_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /rh/convencoes/<id>")
-        return jsonify({"erro": "Erro ao editar convenção", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar convenção"}), 500
 
 
 @rh_bp.route('/convencoes/<int:conv_id>', methods=['DELETE'])
@@ -344,7 +344,7 @@ def remover_convencao(conv_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /rh/convencoes/<id>")
-        return jsonify({"erro": "Erro ao remover convenção", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover convenção"}), 500
 
 
 # ---------------------------------------------------------------- funcionários
@@ -382,7 +382,7 @@ def listar_funcionarios():
         return jsonify([f.to_dict(piso_lookup=piso_lookup) for f in funcs]), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/funcionarios")
-        return jsonify({"erro": "Erro ao listar funcionários", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar funcionários"}), 500
 
 
 @rh_bp.route('/funcionarios/piso-sugerido', methods=['GET'])
@@ -401,7 +401,7 @@ def piso_sugerido():
         return jsonify({"piso_sugerido": piso, "uf": uf}), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/funcionarios/piso-sugerido")
-        return jsonify({"erro": "Erro ao sugerir piso", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao sugerir piso"}), 500
 
 
 @rh_bp.route('/funcionarios', methods=['POST'])
@@ -449,7 +449,7 @@ def criar_funcionario():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/funcionarios")
-        return jsonify({"erro": "Erro ao criar funcionário", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar funcionário"}), 500
 
 
 @rh_bp.route('/funcionarios/importar', methods=['POST'])
@@ -539,7 +539,7 @@ def importar_funcionarios():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/funcionarios/importar")
-        return jsonify({"erro": "Erro ao importar funcionários", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao importar funcionários"}), 500
 
 
 @rh_bp.route('/funcionarios/<int:func_id>', methods=['GET'])
@@ -554,7 +554,7 @@ def obter_funcionario(func_id):
         return jsonify(func.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/funcionarios/<id>")
-        return jsonify({"erro": "Erro ao obter funcionário", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter funcionário"}), 500
 
 
 @rh_bp.route('/funcionarios/<int:func_id>', methods=['PUT'])
@@ -599,7 +599,7 @@ def editar_funcionario(func_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /rh/funcionarios/<id>")
-        return jsonify({"erro": "Erro ao editar funcionário", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar funcionário"}), 500
 
 
 @rh_bp.route('/funcionarios/<int:func_id>/obra', methods=['PATCH'])
@@ -627,7 +627,7 @@ def migrar_obra_funcionario(func_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PATCH /rh/funcionarios/<id>/obra")
-        return jsonify({"erro": "Erro ao migrar obra", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao migrar obra"}), 500
 
 
 @rh_bp.route('/funcionarios/<int:func_id>', methods=['DELETE'])
@@ -646,7 +646,7 @@ def inativar_funcionario(func_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /rh/funcionarios/<id>")
-        return jsonify({"erro": "Erro ao inativar funcionário", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao inativar funcionário"}), 500
 
 
 # ---------------------------------------------------------------- pagamentos
@@ -681,7 +681,7 @@ def listar_pagamentos():
         return jsonify([p.to_dict() for p in pags]), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/pagamentos")
-        return jsonify({"erro": "Erro ao listar pagamentos", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar pagamentos"}), 500
 
 
 @rh_bp.route('/pagamentos', methods=['POST'])
@@ -741,7 +741,7 @@ def criar_pagamento():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/pagamentos")
-        return jsonify({"erro": "Erro ao criar pagamento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar pagamento"}), 500
 
 
 @rh_bp.route('/pagamentos/<int:pag_id>', methods=['GET'])
@@ -756,7 +756,7 @@ def obter_pagamento(pag_id):
         return jsonify(pag.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/pagamentos/<id>")
-        return jsonify({"erro": "Erro ao obter pagamento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter pagamento"}), 500
 
 
 @rh_bp.route('/pagamentos/<int:pag_id>', methods=['PUT'])
@@ -786,7 +786,7 @@ def editar_pagamento(pag_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /rh/pagamentos/<id>")
-        return jsonify({"erro": "Erro ao editar pagamento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar pagamento"}), 500
 
 
 @rh_bp.route('/pagamentos/<int:pag_id>', methods=['DELETE'])
@@ -804,7 +804,7 @@ def remover_pagamento(pag_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /rh/pagamentos/<id>")
-        return jsonify({"erro": "Erro ao remover pagamento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover pagamento"}), 500
 
 
 # ---------------------------------------------------------------- encargos
@@ -835,7 +835,7 @@ def listar_encargos():
         return jsonify([e.to_dict() for e in encargos]), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/encargos")
-        return jsonify({"erro": "Erro ao listar encargos", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar encargos"}), 500
 
 
 @rh_bp.route('/encargos', methods=['POST'])
@@ -893,7 +893,7 @@ def criar_encargo():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/encargos")
-        return jsonify({"erro": "Erro ao criar encargo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar encargo"}), 500
 
 
 @rh_bp.route('/encargos/sugestao', methods=['GET'])
@@ -949,7 +949,7 @@ def sugestao_encargo():
         }), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/encargos/sugestao")
-        return jsonify({"erro": "Erro ao calcular sugestão", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao calcular sugestão"}), 500
 
 
 @rh_bp.route('/encargos/importar', methods=['POST'])
@@ -1010,7 +1010,7 @@ def importar_encargos():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /rh/encargos/importar")
-        return jsonify({"erro": "Erro ao importar encargos", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao importar encargos"}), 500
 
 
 @rh_bp.route('/encargos/<int:enc_id>', methods=['GET'])
@@ -1025,7 +1025,7 @@ def obter_encargo(enc_id):
         return jsonify(enc.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/encargos/<id>")
-        return jsonify({"erro": "Erro ao obter encargo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter encargo"}), 500
 
 
 @rh_bp.route('/encargos/<int:enc_id>', methods=['PUT'])
@@ -1065,7 +1065,7 @@ def editar_encargo(enc_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /rh/encargos/<id>")
-        return jsonify({"erro": "Erro ao editar encargo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar encargo"}), 500
 
 
 @rh_bp.route('/encargos/<int:enc_id>', methods=['DELETE'])
@@ -1083,7 +1083,7 @@ def remover_encargo(enc_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /rh/encargos/<id>")
-        return jsonify({"erro": "Erro ao remover encargo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover encargo"}), 500
 
 
 # ---------------------------------------------------------------- arquivo / dashboard
@@ -1117,10 +1117,10 @@ def obter_arquivo(tipo, item_id):
             return jsonify({"erro": "Arquivo não encontrado"}), 404
         return jsonify({"url": storage_service.signed_url(path)}), 200
     except RuntimeError as e:
-        return jsonify({"erro": str(e)}), 503
+        return jsonify({"erro": "Erro interno no servidor"}), 503
     except Exception as e:
         logger.exception("Erro em GET /rh/arquivo/<tipo>/<id>")
-        return jsonify({"erro": "Erro ao obter arquivo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter arquivo"}), 500
 
 
 @rh_bp.route('/dashboard', methods=['GET'])
@@ -1133,4 +1133,4 @@ def obter_dashboard():
         return jsonify(rh_service.dashboard(competencia)), 200
     except Exception as e:
         logger.exception("Erro em GET /rh/dashboard")
-        return jsonify({"erro": "Erro ao montar dashboard", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao montar dashboard"}), 500

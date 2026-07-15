@@ -5,7 +5,7 @@ from flask import Flask
 
 from auto_migration_admin import run_auto_migration_admin
 from config_admin import DevelopmentConfig, ProductionConfig
-from extensions_admin import db, jwt, cors, apply_cors_headers
+from extensions_admin import db, jwt, cors, limiter, apply_cors_headers, ALLOWED_ORIGINS
 from logging_setup import setup_logging
 from routes_admin import (
     health_bp,
@@ -53,7 +53,8 @@ def create_app(config=None):
 
     db.init_app(app)
     jwt.init_app(app)
-    cors.init_app(app, resources={r'/*': {'origins': '*'}}, supports_credentials=False)
+    limiter.init_app(app)
+    cors.init_app(app, resources={r'/*': {'origins': ALLOWED_ORIGINS}}, supports_credentials=False)
 
     with app.app_context():
         _run_migrations()

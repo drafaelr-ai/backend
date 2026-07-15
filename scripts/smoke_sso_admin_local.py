@@ -21,10 +21,16 @@ import jwt as pyjwt
 
 from app_admin import create_app
 from config_admin import DevelopmentConfig
-from extensions_admin import db
+from extensions_admin import db, limiter
 from models_admin import Usuario
 
 app = create_app(DevelopmentConfig.from_env())
+# Este smoke dispara muitas chamadas /sso seguidas do mesmo IP de teste —
+# desliga o rate limit (testado separadamente, ver smoke_rate_limit_admin_local.py)
+# pra não confundir os dois. app.config['RATELIMIT_ENABLED'] só é lido em
+# init_app(), que já rodou dentro de create_app() — setar aqui é tarde demais,
+# por isso desligamos via o atributo runtime do próprio Limiter.
+limiter.enabled = False
 
 PASS = []
 FAIL = []
@@ -74,7 +80,9 @@ with app.app_context():
         check('master -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:200]}')
         body = json.loads(r.data)
         check('retorna access_token', bool(body.get('access_token')))
-        check('auto-criado com role admin', body['user']['role'] == 'admin')
+        # SSO auto-cria com role='operador' (escopo restrito) — promoção pra
+        # 'admin' é manual, feita por um admin existente no painel de usuários.
+        check('auto-criado com role operador', body['user']['role'] == 'operador')
         tok_admin = body['access_token']
 
         r = c.get('/me', headers={'Authorization': f'Bearer {tok_admin}'})

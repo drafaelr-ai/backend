@@ -108,7 +108,7 @@ def add_servico(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/servicos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @servicos_bp.route('/obras/<int:obra_id>/servicos-nomes', methods=['GET', 'OPTIONS'])
 @jwt_required()
@@ -139,7 +139,7 @@ def listar_servicos_nomes(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/servicos-nomes (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @servicos_bp.route('/servicos/<int:servico_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -175,7 +175,7 @@ def editar_servico(servico_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/{servico_id} (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @servicos_bp.route('/servicos/<int:servico_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master']) 
@@ -191,7 +191,7 @@ def deletar_servico(servico_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/{servico_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @servicos_bp.route('/servicos/<int:servico_id>/concluir', methods=['PATCH', 'OPTIONS'])
@@ -240,7 +240,7 @@ def toggle_servico_concluido(servico_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/{servico_id}/concluir (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # ===== ROTA PARA DELETAR PAGAMENTO DE SERVIÇO =====
@@ -301,7 +301,7 @@ def deletar_pagamento_servico(servico_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /servicos/.../pagamentos (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # ===============================================================================
 
 
@@ -472,7 +472,7 @@ def exportar_servicos_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] ao gerar PDF de serviços: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @servicos_bp.route('/servicos-usuario', methods=['GET'])
@@ -505,7 +505,7 @@ def listar_servicos_usuario():
         })
         
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @servicos_bp.route('/servicos-usuario', methods=['POST'])
@@ -540,7 +540,7 @@ def criar_servico_usuario():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @servicos_bp.route('/servicos-autocomplete', methods=['GET'])
@@ -577,4 +577,4 @@ def autocomplete_servicos():
     except Exception as e:
         logger.exception(f"[AUTOCOMPLETE] Erro: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500

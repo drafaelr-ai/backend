@@ -39,7 +39,7 @@ def listar_boletos_admin(imovel_id):
         return jsonify([b.to_dict() for b in boletos])
     except Exception as e:
         logger.exception("Erro ao listar boletos")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @boletos_admin_bp.route('/imoveis/<int:imovel_id>/boletos', methods=['POST'])
@@ -84,7 +84,7 @@ def criar_boleto_admin(imovel_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao criar boleto")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @boletos_admin_bp.route('/imoveis/<int:imovel_id>/boletos/extrair-pdf', methods=['POST'])
@@ -104,7 +104,7 @@ def extrair_pdf_boleto_admin(imovel_id):
         return jsonify(resultado)
     except Exception as e:
         logger.exception("Erro ao extrair PDF de boleto")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @boletos_admin_bp.route('/imoveis/<int:imovel_id>/boletos/<int:boleto_id>', methods=['PUT'])
@@ -132,7 +132,7 @@ def editar_boleto_admin(imovel_id, boleto_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao editar boleto")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @boletos_admin_bp.route('/imoveis/<int:imovel_id>/boletos/<int:boleto_id>/pagar', methods=['POST'])
@@ -155,7 +155,7 @@ def pagar_boleto_admin(imovel_id, boleto_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao pagar boleto")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @boletos_admin_bp.route('/imoveis/<int:imovel_id>/boletos/<int:boleto_id>', methods=['DELETE'])
@@ -174,7 +174,7 @@ def deletar_boleto_admin(imovel_id, boleto_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao deletar boleto")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @boletos_admin_bp.route('/imoveis/<int:imovel_id>/boletos/<int:boleto_id>/arquivo', methods=['GET'])
@@ -216,4 +216,4 @@ def resumo_boletos_admin(imovel_id):
         })
     except Exception as e:
         logger.exception("Erro ao obter resumo de boletos")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500

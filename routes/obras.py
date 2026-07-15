@@ -315,7 +315,7 @@ def get_obras():
 
     except Exception as e:
         logger.exception("--- [ERRO] /obras (GET): falha ao listar obras ---")
-        return jsonify({"erro": "Erro ao listar obras", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar obras"}), 500
 # --- FIM DA ROTA ---
 
 
@@ -348,7 +348,7 @@ def add_obra():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # --- ROTA /obras/<id> (Dashboard Interno) ---
 @obras_bp.route('/obras/<int:obra_id>', methods=['GET', 'OPTIONS'])
@@ -946,7 +946,7 @@ def get_obra_detalhes(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO GERAL] /obras/{obra_id} (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DA ROTA ---
 
 @obras_bp.route('/obras/<int:obra_id>', methods=['DELETE', 'OPTIONS'])
@@ -980,7 +980,7 @@ def deletar_obra(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/obras/<int:obra_id>/concluir', methods=['PATCH', 'OPTIONS'])
@@ -1019,7 +1019,7 @@ def concluir_obra(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/concluir: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 
@@ -1056,7 +1056,7 @@ def arquivar_obra(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] /obras/{obra_id}/arquivar: {str(e)} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/obras/<int:obra_id>/desarquivar', methods=['PATCH', 'OPTIONS'])
@@ -1092,7 +1092,7 @@ def desarquivar_obra(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] /obras/{obra_id}/desarquivar: {str(e)} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/obras/<int:obra_id>', methods=['PATCH', 'OPTIONS'])
@@ -1136,7 +1136,7 @@ def atualizar_obra(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.exception(f"--- [ERRO] /obras/{obra_id} (PATCH): {str(e)} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
@@ -1254,7 +1254,7 @@ def limpar_pagamentos_parcelas_duplicados(obra_id):
     except Exception as e:
         db.session.rollback()
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 
@@ -1291,7 +1291,7 @@ def atualizar_pagamento_servico(pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @obras_bp.route('/pagamentos-servico/<int:pagamento_id>', methods=['DELETE', 'OPTIONS'])
 @jwt_required()
@@ -1354,7 +1354,7 @@ def deletar_pagamento_servico_por_id(pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos-servico/{pagamento_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # Rota alternativa para deletar pagamento de serviço (usada pelo histórico)
 # ===== ROTA DESABILITADA - PAGAMENTOS AGORA SÓ VIA CRONOGRAMA FINANCEIRO =====
@@ -1598,7 +1598,7 @@ def pagar_item_parcial(item_type, item_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos/.../pagar (PATCH): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DA NOVA ROTA ---
 
 
@@ -1647,7 +1647,7 @@ def get_orcamentos_obra(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/orcamentos (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @obras_bp.route('/obras/<int:obra_id>/orcamentos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master', 'comum'])  # Operador e Admin podem cadastrar
@@ -1722,7 +1722,7 @@ def add_orcamento(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/orcamentos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @obras_bp.route('/orcamentos/<int:orcamento_id>', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -1756,7 +1756,7 @@ def editar_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id} (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DA ROTA ---
 
 @obras_bp.route('/orcamentos/<int:orcamento_id>/aprovar', methods=['POST', 'OPTIONS'])
@@ -1918,7 +1918,7 @@ def aprovar_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/aprovar (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @obras_bp.route('/orcamentos/<int:orcamento_id>/converter_para_servico', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -1987,7 +1987,7 @@ def converter_orcamento_para_servico(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/converter_para_servico (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @obras_bp.route('/orcamentos/<int:orcamento_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -2048,7 +2048,7 @@ def rejeitar_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # ---------------------------------------------------
 
 # <--- MUDANÇA: Novas Rotas para Anexos ---
@@ -2069,7 +2069,7 @@ def get_orcamento_anexos(orcamento_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @obras_bp.route('/orcamentos/<int:orcamento_id>/anexos', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -2103,7 +2103,7 @@ def add_anexos_orcamento(orcamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /orcamentos/{orcamento_id}/anexos (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/anexos/<int:anexo_id>', methods=['GET', 'OPTIONS'])
@@ -2132,7 +2132,7 @@ def get_anexo_data(anexo_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /anexos/{anexo_id} (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @obras_bp.route('/anexos/<int:anexo_id>', methods=['DELETE', 'OPTIONS'])
 @check_permission(roles=['administrador', 'master'])
@@ -2155,7 +2155,7 @@ def delete_anexo(anexo_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /anexos/{anexo_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # ---------------------------------------------------
 
 
@@ -2189,7 +2189,7 @@ def export_csv(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /export/csv: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
 # @obras_bp.route('/obras/<int:obra_id>/export/pdf_pendentes', methods=['GET', 'OPTIONS'])
@@ -2305,7 +2305,7 @@ def export_pdf_pendentes_DESATIVADO(obra_id):
         logger.info(f"Traceback completo:")
         logger.error(error_details)
         logger.info(f"=" * 80)
-        return jsonify({ "erro": "Erro ao gerar PDF", "mensagem": str(e), "obra_id": obra_id }), 500
+        return jsonify({ "erro": "Erro ao gerar PDF", "obra_id": obra_id }), 500
         
 # MUDANÇA 4: Endpoint removido - Relatório de pendências substituído pelo Cronograma Financeiro
 # @obras_bp.route('/export/pdf_pendentes_todas_obras', methods=['GET', 'OPTIONS'])
@@ -2504,8 +2504,7 @@ def export_pdf_pendentes_todas_obras_DESATIVADO():
         logger.error(error_details)
         logger.info(f"=" * 80)
         return jsonify({
-            "erro": "Erro ao gerar PDF",
-            "mensagem": str(e)
+            "erro": "Erro ao gerar PDF"
         }), 500
 
 @obras_bp.route('/obras/<int:obra_id>/notas-fiscais', methods=['POST', 'OPTIONS'])
@@ -2556,7 +2555,7 @@ def upload_nota_fiscal(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/obras/<int:obra_id>/notas-fiscais', methods=['GET', 'OPTIONS'])
@@ -2577,7 +2576,7 @@ def listar_notas_fiscais(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/notas-fiscais (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/notas-fiscais/<int:nf_id>', methods=['GET', 'OPTIONS'])
@@ -2604,7 +2603,7 @@ def download_nota_fiscal(nf_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /notas-fiscais/{nf_id} (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/notas-fiscais/<int:nf_id>', methods=['DELETE', 'OPTIONS'])
@@ -2634,7 +2633,7 @@ def deletar_nota_fiscal(nf_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /notas-fiscais/{nf_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DAS ROTAS DE NOTAS FISCAIS ---
 
 
@@ -2677,7 +2676,7 @@ def export_notas_fiscais_zip(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/notas-fiscais/export/zip (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/obras/<int:obra_id>/relatorio/resumo-completo', methods=['GET', 'OPTIONS'])
@@ -3164,7 +3163,7 @@ def relatorio_resumo_completo(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/relatorio/resumo-completo (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # --- RELATÓRIO DE PAGAMENTOS PDF ---
@@ -3653,7 +3652,7 @@ def gerar_relatorio_pagamentos_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /obras/{obra_id}/relatorio/pagamentos-pdf (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # --- FIM DAS ROTAS DE RELATÓRIOS ---
 
@@ -3703,7 +3702,7 @@ def get_pagamentos_servico_pendentes(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos-servico-pendentes: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---
 
 
@@ -3772,7 +3771,7 @@ def excluir_pagamentos_servico_pendentes(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---
 
 
@@ -3863,7 +3862,7 @@ def excluir_pagamentos_servico_pendentes_global():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /pagamentos-servico/excluir-todos-pendentes-global: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---
 
 
@@ -3979,7 +3978,7 @@ def limpar_tudo_pendente_global():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /limpar-tudo-pendente-global: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT ---
 
 
@@ -4166,7 +4165,7 @@ def popular_servicos_base():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @obras_bp.route('/categorias-servico', methods=['GET'])

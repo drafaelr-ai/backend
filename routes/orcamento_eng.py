@@ -72,7 +72,7 @@ def listar_itens_orcamento_simplificado(obra_id):
         return jsonify(resultado)
         
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('', methods=['GET'])
@@ -262,7 +262,7 @@ def obter_orcamento_eng(obra_id):
     except Exception as e:
         logger.exception(f"[ORCAMENTO-ENG] Erro: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/itens/<int:item_id>/pagamentos', methods=['GET'])
@@ -343,7 +343,7 @@ def listar_pagamentos_item(obra_id, item_id):
         }), 200
     except Exception as e:
         logger.exception("Erro em GET .../orcamento-eng/itens/<id>/pagamentos")
-        return jsonify({"erro": "Erro ao listar pagamentos do item", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar pagamentos do item"}), 500
 
 
 @orcamento_eng_bp.route('/etapas', methods=['POST'])
@@ -407,7 +407,7 @@ def criar_etapa_orcamento(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /obras/%s/orcamento-eng/etapas", obra_id)
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/etapas/<int:etapa_id>', methods=['PUT'])
@@ -441,7 +441,7 @@ def editar_etapa_orcamento(obra_id, etapa_id):
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/reordenar-etapas', methods=['POST'])
@@ -473,7 +473,7 @@ def reordenar_etapas_orcamento(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/etapas/<int:etapa_id>', methods=['DELETE'])
@@ -512,7 +512,7 @@ def deletar_etapa_orcamento(obra_id, etapa_id):
     except Exception as e:
         db.session.rollback()
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/itens', methods=['POST'])
@@ -648,7 +648,7 @@ def criar_item_orcamento(obra_id):
         db.session.rollback()
         logger.error(f"[ORCAMENTO-ENG] Erro ao criar item: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/itens/<int:item_id>', methods=['PUT'])
@@ -718,7 +718,7 @@ def editar_item_orcamento(obra_id, item_id):
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/itens/<int:item_id>', methods=['DELETE'])
@@ -769,7 +769,7 @@ def deletar_item_orcamento(obra_id, item_id):
     except Exception as e:
         db.session.rollback()
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/sincronizar-servicos', methods=['POST'])
@@ -847,7 +847,7 @@ def sincronizar_servicos_com_orcamento(obra_id):
     except Exception as e:
         db.session.rollback()
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/apagar-tudo', methods=['DELETE'])
@@ -907,7 +907,7 @@ def apagar_orcamento_completo(obra_id):
         db.session.rollback()
         logger.error(f"Erro ao apagar orçamento: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/sincronizar-pagamentos', methods=['POST'])
@@ -978,7 +978,7 @@ def sincronizar_pagamentos_orcamento(obra_id):
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # ==============================================================================
 # GERAÇÃO DE ORÇAMENTO POR PLANTA BAIXA (CLAUDE VISION)
 # ==============================================================================
@@ -1432,7 +1432,6 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
             logger.info(f"[PLANTA-IA] Texto recebido: {texto_resposta[:500]}...")
             return jsonify({
                 "erro": "Erro ao processar resposta da IA",
-                "detalhes": str(e),
                 "resposta_raw": texto_resposta[:1000]
             }), 500
         
@@ -1511,7 +1510,7 @@ Adapte os quantitativos conforme o que você identificar na planta. Se a planta 
     except Exception as e:
         logger.exception(f"[PLANTA-IA] Erro: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @orcamento_eng_bp.route('/importar-gerado', methods=['POST'])
@@ -1611,4 +1610,4 @@ def importar_orcamento_gerado(obra_id):
         db.session.rollback()
         logger.error(f"[IMPORTAR-ORC] Erro: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500

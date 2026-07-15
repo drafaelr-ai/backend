@@ -57,7 +57,7 @@ def get_all_users():
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @admin_bp.route('/admin/users', methods=['POST', 'OPTIONS'])
 @check_permission(roles=['master'])
@@ -90,7 +90,7 @@ def create_user():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @admin_bp.route('/admin/users/<int:user_id>/permissions', methods=['GET', 'OPTIONS'])
 @check_permission(roles=['master'])
@@ -104,7 +104,7 @@ def get_user_permissions(user_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users/{user_id}/permissions (GET): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @admin_bp.route('/admin/users/<int:user_id>/permissions', methods=['PUT', 'OPTIONS'])
 @check_permission(roles=['master'])
@@ -124,7 +124,7 @@ def set_user_permissions(user_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users/{user_id}/permissions (PUT): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # --- NOVA ROTA PARA DELETAR USUÁRIO ---
 @admin_bp.route('/admin/users/<int:user_id>', methods=['DELETE', 'OPTIONS'])
@@ -215,7 +215,7 @@ def delete_user(user_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /admin/users/{user_id} (DELETE): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DA NOVA ROTA ---
 # ---------------------------------------------------
 # --- ROTA PARA ALTERAR ROLE DE USUÁRIO ---
@@ -252,7 +252,7 @@ def alterar_role_usuario(user_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] PATCH /admin/users/{user_id}/role: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # ---------------------------------------------------
 
@@ -288,7 +288,7 @@ def set_user_modulos(user_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] PUT /admin/users/{user_id}/modulos: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # ---------------------------------------------------
 
@@ -362,7 +362,7 @@ def migrar_lancamentos_para_futuros(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /admin/migrar-lancamentos-para-futuros/{obra_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # --- FIM DAS ROTAS DO DIÁRIO DE OBRAS ---
 
@@ -510,7 +510,7 @@ def migrar_pagamentos_antigos():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"❌ ERRO CRÍTICO na migração: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # ==============================================================================
 
@@ -595,7 +595,7 @@ def setup_migrate_cronograma_orcamento():
 
     except Exception as e:
         logger.exception("Erro na rota de migracao vinculacao automatica")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 # ==============================================================================
@@ -705,7 +705,7 @@ def setup_migrate_servicos_para_orcamento():
     except Exception as e:
         db.session.rollback()
         traceback.print_exc()
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @admin_bp.route('/setup/migrate-servicos-para-orcamento/<int:obra_id>', methods=['GET'])
@@ -809,7 +809,7 @@ def setup_migrate_servicos_para_orcamento_obra(obra_id):
     except Exception as e:
         db.session.rollback()
         traceback.print_exc()
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 # ==============================================================================
@@ -948,7 +948,7 @@ def setup_migrate_pagamentos_orcamento():
 
     except Exception as e:
         logger.exception("Erro na rota de migracao pagamentos")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 # ==============================================================================
@@ -1025,7 +1025,7 @@ def sincronizar_cronograma_orcamento(cronograma_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] sincronizar_cronograma_orcamento: {e}")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @admin_bp.route('/cronograma/<int:cronograma_id>/vincular-orcamento', methods=['POST', 'OPTIONS'])
@@ -1088,7 +1088,7 @@ def vincular_cronograma_orcamento(cronograma_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] vincular_cronograma_orcamento: {e}")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 # ==============================================================================
@@ -1261,7 +1261,7 @@ def setup_migrate_etapas_hierarquia():
     except Exception as e:
         logger.exception("Erro na rota de migracao hierarquia etapas")
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Erro interno no servidor"}), 500
 
 
 # ROTA SEM AUTENTICAÇÃO - Use uma única vez e depois remova!
@@ -1323,7 +1323,7 @@ def setup_create_cronograma_etapa():
     except Exception as e:
         logger.exception("Erro em rota admin de migration")
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Erro interno no servidor"}), 500
 
 
 @admin_bp.route('/admin/migrate-create-cronograma-etapa', methods=['GET'])
@@ -1384,7 +1384,7 @@ def migrate_create_cronograma_etapa():
     except Exception as e:
         logger.exception("Erro em rota admin de migration cronograma-etapa")
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Erro interno no servidor"}), 500
 
 
 # ==============================================================================
@@ -1481,8 +1481,7 @@ def migrate_add_servico_id():
         logger.error(f"[ERRO] migrate_add_servico_id: {str(e)}\n{error_details}")
         return jsonify({
             'success': False,
-            'error': str(e),
-            'details': error_details
+            'error': "Erro interno no servidor"
         }), 500
 
 # ==============================================================================
@@ -1512,7 +1511,7 @@ def check_pagamento_info():
         }), 200
     except Exception as e:
         logger.exception("Erro em rota admin de diagnostico pagamento-parcelado")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': "Erro interno no servidor"}), 500
 
 
 @admin_bp.route('/admin/limpar-pagamento-parcelado-e-adicionar-coluna', methods=['POST'])
@@ -1547,7 +1546,7 @@ def limpar_e_adicionar_coluna():
     except Exception as e:
         logger.exception("Erro em rota admin limpar-pagamento-parcelado")
         db.session.rollback()
-        return jsonify({'error': str(e), 'success': False}), 500
+        return jsonify({'error': "Erro interno no servidor", 'success': False}), 500
 
 
 @admin_bp.route('/admin/recuperar-parcelas-pagas', methods=['POST', 'GET'])
@@ -1826,7 +1825,7 @@ def debug_kpi(obra_id):
         
         return jsonify(resultado)
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # ==============================================================================
@@ -1932,7 +1931,7 @@ def limpar_lancamentos_duplicados():
         
     except Exception as e:
         db.session.rollback()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # ==============================================================================

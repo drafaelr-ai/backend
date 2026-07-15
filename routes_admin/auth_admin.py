@@ -6,7 +6,7 @@ import jwt as pyjwt
 from flask import Blueprint, jsonify, request, make_response
 from flask_jwt_extended import create_access_token, jwt_required
 
-from extensions_admin import db
+from extensions_admin import db, limiter
 from models_admin import Usuario
 from services_admin import get_current_user
 
@@ -16,6 +16,7 @@ auth_admin_bp = Blueprint('auth_admin', __name__)
 
 
 @auth_admin_bp.route('/sso', methods=['POST', 'OPTIONS'])
+@limiter.limit("10 per minute", methods=["POST"])
 def sso():
     """Login único central: troca um token do backend MAIN por um token_admin.
 
@@ -62,11 +63,16 @@ def sso():
         if usuario and not usuario.ativo:
             return jsonify({'erro': 'Usuário inativo no módulo Administração'}), 403
         if not usuario:
-            usuario = Usuario(username=username, nome=username, role='admin')
+            # role='operador' (escopo restrito ao próprio usuário, igual ao /register) —
+            # o SSO só valida acesso ao MÓDULO "admin" no app principal, não deve
+            # conceder automaticamente visibilidade irrestrita sobre TODOS os
+            # imóveis/lançamentos/boletos. Promoção pra 'admin' é manual, feita
+            # por um admin existente no painel de usuários.
+            usuario = Usuario(username=username, nome=username, role='operador')
             usuario.set_password(secrets.token_urlsafe(32))
             db.session.add(usuario)
             db.session.commit()
-            logger.info(f"SSO: usuário patrimonial '{username}' auto-criado")
+            logger.info(f"SSO: usuário patrimonial '{username}' auto-criado (role=operador)")
 
         access_token = create_access_token(identity=str(usuario.id))
         logger.info(f"SSO: login de '{username}' via token principal")
@@ -79,6 +85,7 @@ def sso():
 
 
 @auth_admin_bp.route('/login', methods=['POST', 'OPTIONS'])
+@limiter.limit("10 per minute", methods=["POST"])
 def login():
     if request.method == 'OPTIONS':
         return make_response(jsonify({}), 200)

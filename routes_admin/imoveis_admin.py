@@ -83,7 +83,7 @@ def criar_imovel():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao criar imovel")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @imoveis_admin_bp.route('/imoveis/<int:imovel_id>', methods=['GET'])
@@ -129,7 +129,7 @@ def atualizar_imovel(imovel_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao atualizar imovel")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @imoveis_admin_bp.route('/imoveis/<int:imovel_id>', methods=['DELETE'])
@@ -150,4 +150,4 @@ def deletar_imovel(imovel_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao deletar imovel")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500

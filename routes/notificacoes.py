@@ -26,7 +26,7 @@ def listar_notificacoes():
         return jsonify([n.to_dict() for n in notificacoes]), 200
     except Exception as e:
         logger.exception(f"--- [ERRO] GET /notificacoes: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @notificacoes_bp.route('/count', methods=['GET', 'OPTIONS'])
@@ -44,7 +44,7 @@ def contar_notificacoes():
         return jsonify({"count": count}), 200
     except Exception as e:
         logger.exception(f"--- [ERRO] GET /notificacoes/count: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @notificacoes_bp.route('/<int:notificacao_id>/lida', methods=['PATCH', 'OPTIONS'])
@@ -65,7 +65,7 @@ def marcar_notificacao_lida(notificacao_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] PATCH /notificacoes/{notificacao_id}/lida: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @notificacoes_bp.route('/marcar-todas-lidas', methods=['POST', 'OPTIONS'])
@@ -85,7 +85,7 @@ def marcar_todas_lidas():
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] POST /notificacoes/marcar-todas-lidas: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @notificacoes_bp.route('/limpar-lidas', methods=['DELETE', 'OPTIONS'])
@@ -105,7 +105,7 @@ def limpar_notificacoes_lidas():
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] DELETE /notificacoes/limpar-lidas: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @notificacoes_bp.route('/limpar-todas', methods=['DELETE', 'OPTIONS'])
@@ -124,7 +124,7 @@ def limpar_todas_notificacoes():
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] DELETE /notificacoes/limpar-todas: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @notificacoes_bp.route('/<int:notificacao_id>', methods=['DELETE', 'OPTIONS'])
@@ -144,4 +144,4 @@ def deletar_notificacao(notificacao_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"--- [ERRO] DELETE /notificacoes/{notificacao_id}: {e} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500

@@ -44,7 +44,7 @@ def listar_diario_obra(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/obras/<int:obra_id>/diario', methods=['POST', 'OPTIONS'])
@@ -101,7 +101,7 @@ def criar_entrada_diario(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /obras/{obra_id}/diario: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/diario/<int:entrada_id>', methods=['GET', 'OPTIONS'])
@@ -124,7 +124,7 @@ def obter_entrada_diario(entrada_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /diario/{entrada_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/diario/<int:entrada_id>', methods=['PUT', 'OPTIONS'])
@@ -177,7 +177,7 @@ def atualizar_entrada_diario(entrada_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] PUT /diario/{entrada_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/diario/<int:entrada_id>', methods=['DELETE', 'OPTIONS'])
@@ -205,7 +205,7 @@ def deletar_entrada_diario(entrada_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] DELETE /diario/{entrada_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/diario/<int:entrada_id>/imagens', methods=['POST', 'OPTIONS'])
@@ -248,7 +248,7 @@ def adicionar_imagem_diario(entrada_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /diario/{entrada_id}/imagens: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/diario/imagens/<int:imagem_id>', methods=['GET', 'OPTIONS'])
@@ -272,7 +272,7 @@ def get_imagem_diario(imagem_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/diario/imagens/<int:imagem_id>', methods=['DELETE', 'OPTIONS'])
@@ -301,7 +301,7 @@ def deletar_imagem_diario(imagem_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] DELETE /diario/imagens/{imagem_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @diario_bp.route('/obras/<int:obra_id>/diario/relatorio', methods=['GET', 'OPTIONS'])
@@ -457,4 +457,4 @@ def gerar_relatorio_diario(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /obras/{obra_id}/diario/relatorio: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500

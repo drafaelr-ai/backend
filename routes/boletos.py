@@ -264,7 +264,7 @@ def listar_boletos(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] listar_boletos: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/obras/<int:obra_id>/boletos', methods=['POST'])
@@ -322,7 +322,7 @@ def criar_boleto(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] criar_boleto: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/obras/<int:obra_id>/boletos/extrair-pdf', methods=['POST'])
@@ -351,7 +351,7 @@ def extrair_pdf_boleto(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] extrair_pdf_boleto: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/obras/<int:obra_id>/boletos/<int:boleto_id>', methods=['PUT'])
@@ -396,7 +396,7 @@ def editar_boleto(obra_id, boleto_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] editar_boleto: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/obras/<int:obra_id>/boletos/<int:boleto_id>/pagar', methods=['POST'])
@@ -426,7 +426,7 @@ def pagar_boleto(obra_id, boleto_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] pagar_boleto: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/obras/<int:obra_id>/boletos/<int:boleto_id>', methods=['DELETE'])
@@ -452,7 +452,7 @@ def deletar_boleto(obra_id, boleto_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] deletar_boleto: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/obras/<int:obra_id>/boletos/<int:boleto_id>/arquivo', methods=['GET'])
@@ -479,7 +479,7 @@ def obter_arquivo_boleto(obra_id, boleto_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] obter_arquivo_boleto: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/boletos/verificar-alertas', methods=['POST'])
@@ -565,7 +565,7 @@ def verificar_alertas_boletos():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] verificar_alertas_boletos: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @boletos_bp.route('/obras/<int:obra_id>/boletos/resumo', methods=['GET'])
@@ -602,4 +602,4 @@ def resumo_boletos(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] resumo_boletos: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500

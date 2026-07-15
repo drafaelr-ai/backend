@@ -40,7 +40,7 @@ def register():
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] /register (POST): {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @auth_bp.route('/login', methods=['POST', 'OPTIONS'])
@@ -74,7 +74,7 @@ def login():
             return jsonify({"erro": "Credenciais inválidas"}), 401
     except Exception as e:
         logger.exception("Erro em /login")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @auth_bp.route('/me', methods=['GET'])
@@ -89,7 +89,7 @@ def me():
         return jsonify(user.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /me")
-        return jsonify({"erro": "Erro ao obter usuário", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter usuário"}), 500
 
 
 @auth_bp.route('/me/senha', methods=['PUT', 'OPTIONS'])
@@ -123,7 +123,7 @@ def alterar_minha_senha():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /me/senha")
-        return jsonify({"erro": "Erro ao alterar senha", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao alterar senha"}), 500
 
 
 @auth_bp.route('/', methods=['GET'])

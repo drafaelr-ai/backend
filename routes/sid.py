@@ -87,7 +87,7 @@ def listar_pagamentos_futuros(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-futuros', methods=['POST', 'OPTIONS'])
 @jwt_required()
@@ -224,7 +224,7 @@ def criar_pagamento_futuro(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] ❌ POST /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['PUT', 'OPTIONS'])
 @jwt_required()
@@ -295,7 +295,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] ❌ PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
@@ -320,7 +320,7 @@ def deletar_pagamento_futuro(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] DELETE /sid/cronograma-financeiro/{obra_id}/pagamentos-futuros/{pagamento_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # ===================================================================================
@@ -396,7 +396,7 @@ def diagnostico_pagamentos(obra_id):
         
     except Exception as e:
         logger.exception(f"[ERRO] Diagnóstico pagamentos: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @sid_bp.route('/obras/<int:obra_id>/corrigir-pagamento/<int:pagamento_id>', methods=['PUT'])
@@ -465,7 +465,7 @@ def corrigir_tipo_pagamento(obra_id, pagamento_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] Corrigir pagamento: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @sid_bp.route('/obras/<int:obra_id>/corrigir-pagamentos-lote', methods=['POST'])
@@ -565,7 +565,7 @@ def corrigir_pagamentos_lote(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] Correção em lote: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-futuros/<int:pagamento_id>/marcar-pago', methods=['POST'])
@@ -727,7 +727,7 @@ def marcar_pagamento_futuro_pago(obra_id, pagamento_id):
         logger.info(f"\nStack trace:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # --- PAGAMENTOS PARCELADOS ---
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['GET'])
@@ -779,7 +779,7 @@ def listar_pagamentos_parcelados(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados', methods=['POST'])
 @jwt_required()
@@ -961,7 +961,7 @@ def criar_pagamento_parcelado(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] POST /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['PUT'])
 @jwt_required()
@@ -1112,7 +1112,7 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] PUT /sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{pagamento_id}: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>', methods=['DELETE'])
 @jwt_required()
@@ -1209,7 +1209,7 @@ def deletar_pagamento_parcelado(obra_id, pagamento_id):
         logger.info(f"\nStack trace:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # --- TABELA DE PREVISÕES (CÁLCULO) ---
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/previsoes', methods=['GET'])
@@ -1284,7 +1284,7 @@ def calcular_previsoes(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET previsões: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # ========================================
 # ENDPOINTS: PARCELAS INDIVIDUAIS (NOVO!)
@@ -1389,7 +1389,7 @@ def listar_parcelas_individuais(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] listar_parcelas_individuais: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": f"Erro interno: {str(e)}"}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>', methods=['PUT'])
 @jwt_required()
@@ -1504,7 +1504,7 @@ def editar_parcela_individual(obra_id, pagamento_id, parcela_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] PUT parcela individual: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/pagar', methods=['POST', 'OPTIONS'])
@@ -1651,7 +1651,7 @@ def marcar_parcela_paga(obra_id, pagamento_id, parcela_id):
         logger.info(f"\nStack trace completo:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/pagamentos-parcelados/<int:pagamento_id>/parcelas/<int:parcela_id>/desfazer', methods=['POST', 'OPTIONS'])
@@ -1790,7 +1790,7 @@ def desfazer_pagamento_parcela(obra_id, pagamento_id, parcela_id):
         logger.info(f"\nStack trace completo:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @sid_bp.route('/cronograma-financeiro/<int:obra_id>/alertas-vencimento', methods=['GET'])
@@ -1971,7 +1971,7 @@ def obter_alertas_vencimento(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] GET alertas vencimento: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # --- ENDPOINT PARA GERAR RELATÓRIO DO CRONOGRAMA FINANCEIRO (PDF) ---
 
@@ -2014,7 +2014,7 @@ def deletar_pagamento_futuro_servico(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] deletar_pagamento_futuro_servico: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # -----------------------------------------------------------------------------
@@ -2068,7 +2068,7 @@ def editar_pagamento_futuro_servico(obra_id, pagamento_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] editar_pagamento_futuro_servico: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 # ==================== ENDPOINTS AGENDA DE DEMANDAS ====================

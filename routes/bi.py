@@ -94,7 +94,7 @@ def bi_vencimentos():
         })
     except Exception as e:
         logger.exception(f"[BI] Erro ao buscar vencimentos: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @bi_bp.route('/historico-mensal', methods=['GET'])
@@ -192,7 +192,7 @@ def bi_historico_mensal():
         })
     except Exception as e:
         logger.exception(f"[BI] Erro ao buscar histórico mensal: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @bi_bp.route('/projecao', methods=['GET'])
@@ -236,4 +236,4 @@ def bi_projecao():
         })
     except Exception as e:
         logger.exception(f"[BI] Erro ao buscar projeção: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500

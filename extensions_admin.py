@@ -2,10 +2,13 @@ from flask import request
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 db = SQLAlchemy()
 jwt = JWTManager()
 cors = CORS()
+limiter = Limiter(key_func=get_remote_address, default_limits=[], storage_uri="memory://")
 
 # Mesma whitelist do app principal (app.py) — o painel admin roda no mesmo
 # domínio front-end (obraly.uk), então usamos a mesma lista de origens.

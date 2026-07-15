@@ -195,7 +195,7 @@ def alertas():
         }), 200
     except Exception as e:
         logger.exception("Erro em GET /home/alertas")
-        return jsonify({"erro": "Erro ao montar alertas", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao montar alertas"}), 500
 
 
 @home_bp.route('/pendencias/export-pdf', methods=['GET'])
@@ -319,7 +319,7 @@ def export_pendencias_pdf():
         return response
     except Exception as e:
         logger.exception("Erro em GET /home/pendencias/export-pdf")
-        return jsonify({"erro": "Erro ao gerar PDF", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao gerar PDF"}), 500
 
 
 def _classe_gasto(tipo):
@@ -482,4 +482,4 @@ def home_obras():
         }), 200
     except Exception as e:
         logger.exception("Erro em GET /home/obras")
-        return jsonify({"erro": "Erro ao montar home de obras", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao montar home de obras"}), 500

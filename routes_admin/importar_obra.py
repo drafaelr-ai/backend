@@ -61,4 +61,4 @@ def importar_obra():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao importar obra")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500

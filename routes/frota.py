@@ -246,7 +246,7 @@ def listar_veiculos():
         return jsonify([v.to_dict() for v in veiculos]), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/veiculos")
-        return jsonify({"erro": "Erro ao listar veículos", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar veículos"}), 500
 
 
 @frota_bp.route('/veiculos', methods=['POST'])
@@ -311,7 +311,7 @@ def criar_veiculo():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/veiculos")
-        return jsonify({"erro": "Erro ao criar veículo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar veículo"}), 500
 
 
 @frota_bp.route('/veiculos/<int:veiculo_id>', methods=['GET'])
@@ -326,7 +326,7 @@ def obter_veiculo(veiculo_id):
         return jsonify(veiculo.to_dict()), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/veiculos/<id>")
-        return jsonify({"erro": "Erro ao obter veículo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter veículo"}), 500
 
 
 @frota_bp.route('/veiculos/<int:veiculo_id>', methods=['PUT'])
@@ -378,7 +378,7 @@ def editar_veiculo(veiculo_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /frota/veiculos/<id>")
-        return jsonify({"erro": "Erro ao editar veículo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar veículo"}), 500
 
 
 @frota_bp.route('/veiculos/<int:veiculo_id>', methods=['DELETE'])
@@ -397,7 +397,7 @@ def remover_veiculo(veiculo_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /frota/veiculos/<id>")
-        return jsonify({"erro": "Erro ao remover veículo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover veículo"}), 500
 
 
 @frota_bp.route('/veiculos/<int:veiculo_id>/condutor', methods=['PATCH'])
@@ -426,7 +426,7 @@ def atribuir_condutor(veiculo_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PATCH /frota/veiculos/<id>/condutor")
-        return jsonify({"erro": "Erro ao atribuir condutor", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao atribuir condutor"}), 500
 
 
 # ---------------------------------------------------------------- movimentações
@@ -448,7 +448,7 @@ def listar_movimentacoes(veiculo_id):
         return jsonify([m.to_dict() for m in movs]), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/veiculos/<id>/movimentacoes")
-        return jsonify({"erro": "Erro ao listar movimentações", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar movimentações"}), 500
 
 
 @frota_bp.route('/veiculos/<int:veiculo_id>/movimentacoes', methods=['POST'])
@@ -484,7 +484,7 @@ def criar_movimentacao(veiculo_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/veiculos/<id>/movimentacoes")
-        return jsonify({"erro": "Erro ao movimentar veículo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao movimentar veículo"}), 500
 
 
 # ---------------------------------------------------------------- condutores
@@ -514,7 +514,7 @@ def listar_condutores():
         return jsonify(out), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/condutores")
-        return jsonify({"erro": "Erro ao listar condutores", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar condutores"}), 500
 
 
 @frota_bp.route('/condutores', methods=['POST'])
@@ -545,7 +545,7 @@ def criar_condutor():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/condutores")
-        return jsonify({"erro": "Erro ao criar condutor", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar condutor"}), 500
 
 
 @frota_bp.route('/condutores/<int:condutor_id>', methods=['PUT'])
@@ -585,7 +585,7 @@ def editar_condutor(condutor_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /frota/condutores/<id>")
-        return jsonify({"erro": "Erro ao editar condutor", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar condutor"}), 500
 
 
 @frota_bp.route('/condutores/<int:condutor_id>', methods=['DELETE'])
@@ -609,7 +609,7 @@ def remover_condutor(condutor_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /frota/condutores/<id>")
-        return jsonify({"erro": "Erro ao remover condutor", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover condutor"}), 500
 
 
 # ---------------------------------------------------------------- documentos
@@ -630,7 +630,7 @@ def listar_documentos(veiculo_id):
         return jsonify([d.to_dict() for d in docs]), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/veiculos/<id>/documentos")
-        return jsonify({"erro": "Erro ao listar documentos", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar documentos"}), 500
 
 
 @frota_bp.route('/veiculos/<int:veiculo_id>/documentos', methods=['POST'])
@@ -667,7 +667,7 @@ def criar_documento(veiculo_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/veiculos/<id>/documentos")
-        return jsonify({"erro": "Erro ao criar documento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar documento"}), 500
 
 
 @frota_bp.route('/documentos/<int:doc_id>', methods=['PUT'])
@@ -710,7 +710,7 @@ def editar_documento(doc_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /frota/documentos/<id>")
-        return jsonify({"erro": "Erro ao editar documento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar documento"}), 500
 
 
 @frota_bp.route('/documentos/<int:doc_id>', methods=['DELETE'])
@@ -728,7 +728,7 @@ def remover_documento(doc_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /frota/documentos/<id>")
-        return jsonify({"erro": "Erro ao remover documento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover documento"}), 500
 
 
 # ---------------------------------------------------------------- manutenções
@@ -768,7 +768,7 @@ def listar_manutencoes():
         return jsonify([m.to_dict() for m in itens]), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/manutencoes")
-        return jsonify({"erro": "Erro ao listar manutenções", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar manutenções"}), 500
 
 
 @frota_bp.route('/manutencoes', methods=['POST'])
@@ -818,7 +818,7 @@ def criar_manutencao():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/manutencoes")
-        return jsonify({"erro": "Erro ao criar manutenção", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar manutenção"}), 500
 
 
 @frota_bp.route('/manutencoes/<int:item_id>', methods=['PUT'])
@@ -868,7 +868,7 @@ def editar_manutencao(item_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /frota/manutencoes/<id>")
-        return jsonify({"erro": "Erro ao editar manutenção", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar manutenção"}), 500
 
 
 @frota_bp.route('/manutencoes/<int:item_id>', methods=['DELETE'])
@@ -886,7 +886,7 @@ def remover_manutencao(item_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /frota/manutencoes/<id>")
-        return jsonify({"erro": "Erro ao remover manutenção", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover manutenção"}), 500
 
 
 # ---------------------------------------------------------------- abastecimentos
@@ -902,7 +902,7 @@ def listar_abastecimentos():
         return jsonify([a.to_dict() for a in itens]), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/abastecimentos")
-        return jsonify({"erro": "Erro ao listar abastecimentos", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar abastecimentos"}), 500
 
 
 @frota_bp.route('/abastecimentos', methods=['POST'])
@@ -948,7 +948,7 @@ def criar_abastecimento():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/abastecimentos")
-        return jsonify({"erro": "Erro ao criar abastecimento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar abastecimento"}), 500
 
 
 @frota_bp.route('/abastecimentos/<int:item_id>', methods=['PUT'])
@@ -990,7 +990,7 @@ def editar_abastecimento(item_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /frota/abastecimentos/<id>")
-        return jsonify({"erro": "Erro ao editar abastecimento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar abastecimento"}), 500
 
 
 @frota_bp.route('/abastecimentos/<int:item_id>', methods=['DELETE'])
@@ -1008,7 +1008,7 @@ def remover_abastecimento(item_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /frota/abastecimentos/<id>")
-        return jsonify({"erro": "Erro ao remover abastecimento", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover abastecimento"}), 500
 
 
 # ---------------------------------------------------------------- multas
@@ -1034,7 +1034,7 @@ def listar_multas():
         return jsonify([m.to_dict() for m in itens]), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/multas")
-        return jsonify({"erro": "Erro ao listar multas", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao listar multas"}), 500
 
 
 @frota_bp.route('/multas', methods=['POST'])
@@ -1084,7 +1084,7 @@ def criar_multa():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/multas")
-        return jsonify({"erro": "Erro ao criar multa", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao criar multa"}), 500
 
 
 @frota_bp.route('/multas/<int:item_id>', methods=['PUT'])
@@ -1141,7 +1141,7 @@ def editar_multa(item_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /frota/multas/<id>")
-        return jsonify({"erro": "Erro ao editar multa", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao editar multa"}), 500
 
 
 @frota_bp.route('/multas/<int:item_id>', methods=['DELETE'])
@@ -1159,7 +1159,7 @@ def remover_multa(item_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /frota/multas/<id>")
-        return jsonify({"erro": "Erro ao remover multa", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao remover multa"}), 500
 
 
 # ---------------------------------------------------------------- imóveis / arquivo / dashboard
@@ -1194,10 +1194,10 @@ def obter_arquivo(tipo, item_id):
             return jsonify({"erro": "Arquivo não encontrado"}), 404
         return jsonify({"url": storage_service.signed_url(path, bucket=BUCKET_FROTA)}), 200
     except RuntimeError as e:
-        return jsonify({"erro": str(e)}), 503
+        return jsonify({"erro": "Erro interno no servidor"}), 503
     except Exception as e:
         logger.exception("Erro em GET /frota/arquivo/<tipo>/<id>")
-        return jsonify({"erro": "Erro ao obter arquivo", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao obter arquivo"}), 500
 
 
 @frota_bp.route('/dashboard', methods=['GET'])
@@ -1293,4 +1293,4 @@ def obter_dashboard():
         }), 200
     except Exception as e:
         logger.exception("Erro em GET /frota/dashboard")
-        return jsonify({"erro": "Erro ao montar dashboard", "detalhe": str(e)}), 500
+        return jsonify({"erro": "Erro ao montar dashboard"}), 500

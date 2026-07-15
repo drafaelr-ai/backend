@@ -133,4 +133,4 @@ def dashboard():
 
     except Exception as e:
         logger.exception("Erro no dashboard")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500

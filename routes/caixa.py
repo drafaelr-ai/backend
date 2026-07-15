@@ -100,7 +100,7 @@ def gerenciar_caixa_obra(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] gerenciar_caixa_obra: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @caixa_bp.route('/movimentacoes', methods=['GET', 'POST'])
@@ -183,7 +183,7 @@ def gerenciar_movimentacoes_caixa(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] gerenciar_movimentacoes_caixa: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @caixa_bp.route('/movimentacoes/<int:mov_id>', methods=['PUT', 'DELETE'])
@@ -261,7 +261,7 @@ def editar_deletar_movimentacao(obra_id, mov_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] editar_deletar_movimentacao: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @caixa_bp.route('/upload-comprovante', methods=['POST'])
@@ -289,7 +289,7 @@ def upload_comprovante_caixa(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] upload_comprovante_caixa: {str(e)}\n{error_details}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @caixa_bp.route('/relatorio-pdf', methods=['POST'])
@@ -587,6 +587,5 @@ def gerar_relatorio_caixa_pdf(obra_id):
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] gerar_relatorio_caixa_pdf: {str(e)}\n{error_details}")
         return jsonify({
-            "erro": "Erro ao gerar relatorio PDF",
-            "mensagem": str(e)
+            "erro": "Erro ao gerar relatorio PDF"
         }), 500

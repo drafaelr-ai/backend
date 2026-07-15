@@ -659,7 +659,7 @@ def gerar_relatorio_cronograma_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] ao gerar PDF do cronograma: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT DE RELATÓRIO DO CRONOGRAMA ---
 
 
@@ -1089,7 +1089,7 @@ def inserir_pagamento(obra_id):
         logger.info(f"\nStack trace:")
         logger.error(error_details)
         logger.info(f"{'='*80}\n")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT INSERIR PAGAMENTO ---
 
 
@@ -1470,7 +1470,7 @@ def marcar_multiplos_como_pago(obra_id):
                     "tipo": tipo_item,
                     "id": item_id,
                     "status": "error",
-                    "mensagem": f"Erro: {str(e)}"
+                    "mensagem": "Erro ao processar item"
                 })
         
         db.session.commit()
@@ -1495,7 +1495,7 @@ def marcar_multiplos_como_pago(obra_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO FATAL] marcar-multiplos-pagos: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 # --- FIM DO ENDPOINT MARCAR MÚLTIPLOS COMO PAGO ---
 
 
@@ -2284,7 +2284,7 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] gerar_relatorio_cronograma_obra_pdf: {str(e)}\n{error_details}")
-        return jsonify({'error': f'Erro ao gerar PDF: {str(e)}'}), 500
+        return jsonify({'error': 'Erro ao gerar PDF'}), 500
 
 
 @cronograma_bp.route('/cronograma', methods=['POST', 'OPTIONS'])
@@ -2808,7 +2808,7 @@ def create_etapa_cronograma(cronograma_id):
         db.session.rollback()
         error_details = traceback.format_exc()
         logger.error(f"[ERRO] create_etapa_cronograma: {str(e)}\n{error_details}")
-        return jsonify({'error': f'Erro ao criar etapa: {str(e)}'}), 500
+        return jsonify({'error': 'Erro ao criar etapa'}), 500
 
 
 def recalcular_subetapas_cascata(etapa_pai_id):
@@ -3060,7 +3060,7 @@ def listar_etapas_orcamento_para_cronograma(obra_id):
     except Exception as e:
         logger.exception(f"[ERRO] listar_etapas_orcamento_para_cronograma: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/cronograma/importar-orcamento', methods=['POST', 'OPTIONS'])
@@ -3190,7 +3190,7 @@ def importar_orcamento_para_cronograma(obra_id):
         db.session.rollback()
         logger.error(f"[ERRO] importar_orcamento_para_cronograma: {e}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 def _buscar_orfaos_cronograma_orcamento(obra_id):
@@ -3244,7 +3244,7 @@ def listar_orfaos_cronograma_orcamento(obra_id):
         return jsonify({"orfaos": orfaos, "total": len(orfaos)})
     except Exception as e:
         logger.exception(f"[ERRO] listar_orfaos_cronograma_orcamento: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/cronograma/sincronizar-orcamento', methods=['POST', 'OPTIONS'])
@@ -3282,7 +3282,7 @@ def sincronizar_cronograma_com_orcamento(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.exception(f"[ERRO] sincronizar_cronograma_com_orcamento: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/cronograma/limpar', methods=['DELETE', 'OPTIONS'])
@@ -3314,7 +3314,7 @@ def limpar_cronograma(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.exception(f"[ERRO] limpar_cronograma: {e}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @jwt_required()
@@ -3414,7 +3414,7 @@ def exportar_servicos_csv(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] exportar_servicos_csv: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/cronograma-financeiro/exportar-csv', methods=['GET'])
@@ -3571,7 +3571,7 @@ def exportar_cronograma_csv(obra_id):
     except Exception as e:
         error_details = traceback.format_exc()
         logger.error(f"--- [ERRO] exportar_cronograma_csv: {str(e)}\n{error_details} ---")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 # ==============================================================================
 
@@ -3613,7 +3613,7 @@ def get_agenda_demandas(obra_id):
         
     except Exception as e:
         logger.exception(f"[ERRO] get_agenda_demandas: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda', methods=['POST', 'OPTIONS'])
@@ -3664,7 +3664,7 @@ def criar_agenda_demanda(obra_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] criar_agenda_demanda: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/<int:demanda_id>', methods=['PUT', 'OPTIONS'])
@@ -3710,7 +3710,7 @@ def atualizar_agenda_demanda(obra_id, demanda_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] atualizar_agenda_demanda: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/<int:demanda_id>/concluir', methods=['PUT', 'OPTIONS'])
@@ -3747,7 +3747,7 @@ def concluir_agenda_demanda(obra_id, demanda_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] concluir_agenda_demanda: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/<int:demanda_id>/reabrir', methods=['PUT', 'OPTIONS'])
@@ -3782,7 +3782,7 @@ def reabrir_agenda_demanda(obra_id, demanda_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] reabrir_agenda_demanda: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/<int:demanda_id>', methods=['DELETE', 'OPTIONS'])
@@ -3812,7 +3812,7 @@ def excluir_agenda_demanda(obra_id, demanda_id):
     except Exception as e:
         db.session.rollback()
         logger.error(f"[ERRO] excluir_agenda_demanda: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/importar/pagamentos', methods=['GET'])
@@ -3908,7 +3908,7 @@ def listar_pagamentos_para_importar(obra_id):
         
     except Exception as e:
         logger.exception(f"[ERRO] listar_pagamentos_para_importar: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/importar/orcamento', methods=['GET'])
@@ -3954,7 +3954,7 @@ def listar_orcamento_para_importar(obra_id):
         
     except Exception as e:
         logger.exception(f"[ERRO] listar_orcamento_para_importar: {str(e)}")
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/importar/servicos', methods=['GET'])
@@ -4007,7 +4007,7 @@ def listar_servicos_para_importar(obra_id):
     except Exception as e:
         logger.exception(f"[ERRO] listar_servicos_para_importar: {str(e)}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 @cronograma_bp.route('/obras/<int:obra_id>/agenda/sincronizar-cronograma', methods=['POST'])
@@ -4075,7 +4075,7 @@ def sincronizar_cronograma_agenda(obra_id):
         db.session.rollback()
         logger.error(f"[ERRO] sincronizar_cronograma_agenda: {str(e)}")
         traceback.print_exc()
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
 
@@ -4116,5 +4116,5 @@ def listar_servicos_base():
         })
         
     except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Erro interno no servidor"}), 500
 

@@ -63,7 +63,7 @@ def criar_usuario():
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao criar usuário")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @usuarios_admin_bp.route('/usuarios/<int:usuario_id>', methods=['PUT'])
@@ -102,7 +102,7 @@ def atualizar_usuario(usuario_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao atualizar usuário")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @usuarios_admin_bp.route('/usuarios/<int:usuario_id>', methods=['DELETE'])
@@ -125,7 +125,7 @@ def deletar_usuario(usuario_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao desativar usuário")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
 
 
 @usuarios_admin_bp.route('/usuarios/<int:usuario_id>/reset-senha', methods=['POST'])
@@ -150,4 +150,4 @@ def reset_senha_usuario(usuario_id):
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro ao resetar senha")
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': "Erro interno no servidor"}), 500
