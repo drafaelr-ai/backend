@@ -1986,8 +1986,8 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
         total_servicos = len(cronograma_items)
         concluidos = sum(1 for s in cronograma_items if s.percentual_conclusao >= 100)
         hoje_date = date.today()
-        atrasados = sum(1 for s in cronograma_items if s.data_fim_prevista and s.data_fim_prevista < hoje_date and s.percentual_conclusao < 100)
-        em_andamento = sum(1 for s in cronograma_items if s.data_inicio_real and s.percentual_conclusao < 100 and (not s.data_fim_prevista or s.data_fim_prevista >= hoje_date))
+        atrasados = sum(1 for s in cronograma_items if s.data_fim_prevista and s.data_fim_prevista <= hoje_date and s.percentual_conclusao < 100)
+        em_andamento = sum(1 for s in cronograma_items if s.data_inicio_real and s.percentual_conclusao < 100 and (not s.data_fim_prevista or s.data_fim_prevista > hoje_date))
         a_iniciar = total_servicos - concluidos - atrasados - em_andamento
         
         # Progresso geral
@@ -2027,7 +2027,7 @@ def gerar_relatorio_cronograma_obra_pdf(obra_id):
             if percentual >= 100:
                 status = "✅ CONCLUÍDO"
                 status_color = colors.HexColor('#28a745')
-            elif servico.data_fim_prevista and servico.data_fim_prevista < hoje_date:
+            elif servico.data_fim_prevista and servico.data_fim_prevista <= hoje_date:
                 status = "⚠️ ATRASADO"
                 status_color = colors.HexColor('#dc3545')
             elif servico.data_inicio_real:
@@ -3190,6 +3190,125 @@ def importar_orcamento_para_cronograma(obra_id):
         db.session.rollback()
         logger.error(f"[ERRO] importar_orcamento_para_cronograma: {e}")
         traceback.print_exc()
+        return jsonify({"erro": str(e)}), 500
+
+
+@cronograma_bp.route('/obras/<int:obra_id>/cronograma/sincronizar-orcamento', methods=['GET'])
+@jwt_required()
+def listar_orfaos_cronograma_orcamento(obra_id):
+    """
+    Lista itens do cronograma vinculados ao orçamento (orcamento_etapa_id) cuja
+    etapa de origem não existe mais no Orçamento de Engenharia (foi apagada lá).
+    Não considera itens criados manualmente (orcamento_etapa_id IS NULL).
+    """
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
+
+        etapas_validas_ids = {
+            row[0] for row in db.session.execute(db.text(
+                "SELECT id FROM orcamento_eng_etapa WHERE obra_id = :obra_id"
+            ), {"obra_id": obra_id}).fetchall()
+        }
+
+        vinculados = db.session.execute(db.text("""
+            SELECT id, servico_nome, orcamento_etapa_id
+            FROM cronograma_obra
+            WHERE obra_id = :obra_id AND orcamento_etapa_id IS NOT NULL
+        """), {"obra_id": obra_id}).fetchall()
+
+        orfaos = [
+            {"id": row[0], "nome": row[1]}
+            for row in vinculados
+            if row[2] not in etapas_validas_ids
+        ]
+
+        return jsonify({"orfaos": orfaos, "total": len(orfaos)})
+    except Exception as e:
+        logger.exception(f"[ERRO] listar_orfaos_cronograma_orcamento: {e}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@cronograma_bp.route('/obras/<int:obra_id>/cronograma/sincronizar-orcamento', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def sincronizar_cronograma_com_orcamento(obra_id):
+    """
+    Remove do cronograma os itens vinculados ao orçamento cuja etapa de origem
+    não existe mais (foi apagada no Orçamento de Engenharia). Não toca em itens
+    criados manualmente no cronograma (orcamento_etapa_id IS NULL).
+    """
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
+
+        etapas_validas_ids = {
+            row[0] for row in db.session.execute(db.text(
+                "SELECT id FROM orcamento_eng_etapa WHERE obra_id = :obra_id"
+            ), {"obra_id": obra_id}).fetchall()
+        }
+
+        vinculados = db.session.execute(db.text("""
+            SELECT id, orcamento_etapa_id
+            FROM cronograma_obra
+            WHERE obra_id = :obra_id AND orcamento_etapa_id IS NOT NULL
+        """), {"obra_id": obra_id}).fetchall()
+
+        orfaos_ids = [row[0] for row in vinculados if row[1] not in etapas_validas_ids]
+
+        removidos = 0
+        for cid in orfaos_ids:
+            item = CronogramaObra.query.get(cid)
+            if item:
+                db.session.delete(item)
+                removidos += 1
+
+        db.session.commit()
+        return jsonify({"message": f"{removidos} item(ns) órfão(s) removido(s)", "removidos": removidos})
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"[ERRO] sincronizar_cronograma_com_orcamento: {e}")
+        return jsonify({"erro": str(e)}), 500
+
+
+@cronograma_bp.route('/obras/<int:obra_id>/cronograma/limpar', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def limpar_cronograma(obra_id):
+    """Remove TODOS os itens do cronograma da obra. Ação explícita "Limpar", restrita a master/administrador."""
+    if request.method == 'OPTIONS':
+        response = make_response('', 200)
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Authorization, Content-Type')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+
+    try:
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
+        if user.role not in ['master', 'administrador']:
+            return jsonify({"erro": "Apenas administradores podem limpar o cronograma"}), 403
+
+        itens = CronogramaObra.query.filter_by(obra_id=obra_id).all()
+        total = len(itens)
+        for item in itens:
+            db.session.delete(item)
+        db.session.commit()
+
+        return jsonify({"message": f"{total} item(ns) removido(s) do cronograma", "removidos": total})
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"[ERRO] limpar_cronograma: {e}")
         return jsonify({"erro": str(e)}), 500
 
 

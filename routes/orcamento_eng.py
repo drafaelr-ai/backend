@@ -154,26 +154,30 @@ def obter_orcamento_eng(obra_id):
         total_mo = 0
         total_mat = 0
         total_servico = 0
+        total_fornecimento = 0
         total_pago_mo = 0
         total_pago_mat = 0
         total_pago_servico = 0
+        total_pago_fornecimento = 0
         total_itens = 0
         itens_vinculados = 0
-        
+
         etapas_dict = []
         for etapa in etapas:
             etapa_mo = 0
             etapa_mat = 0
             etapa_servico = 0
+            etapa_fornecimento = 0
             etapa_pago_mo = 0
             etapa_pago_mat = 0
-            
+
             itens_dict = []
             for item in etapa.itens:
                 totais = item.calcular_totais()
                 etapa_mo += totais['total_mao_obra']
                 etapa_mat += totais['total_material']
                 etapa_servico += totais.get('total_servico', 0)
+                etapa_fornecimento += totais.get('total_fornecimento', 0)
 
                 pago = pago_por_item.get(item.id, {'mo': 0.0, 'mat': 0.0})
                 item_pago_mo = pago['mo']
@@ -185,46 +189,51 @@ def obter_orcamento_eng(obra_id):
                 total_itens += 1
                 if item.servico_id:
                     itens_vinculados += 1
-                
+
                 item_dict = item.to_dict()
                 item_dict['total_pago'] = item_pago
                 item_dict['valor_pago_mo'] = item_pago_mo
                 item_dict['valor_pago_mat'] = item_pago_mat
                 item_dict['percentual_executado'] = round((item_pago / totais['total'] * 100) if totais['total'] > 0 else 0, 1)
                 itens_dict.append(item_dict)
-            
+
             total_mo += etapa_mo
             total_mat += etapa_mat
             total_servico += etapa_servico
-            etapa_total = etapa_mo + etapa_mat + etapa_servico
+            total_fornecimento += etapa_fornecimento
+            etapa_total = etapa_mo + etapa_mat + etapa_servico + etapa_fornecimento
             etapa_pago = etapa_pago_mo + etapa_pago_mat
 
             etapa_pago_servico = (etapa_pago * (etapa_servico / etapa_total)) if etapa_total > 0 and etapa_servico > 0 else 0
-            
+            etapa_pago_fornecimento = (etapa_pago * (etapa_fornecimento / etapa_total)) if etapa_total > 0 and etapa_fornecimento > 0 else 0
+
             total_pago_mo += etapa_pago_mo
             total_pago_mat += etapa_pago_mat
             total_pago_servico += etapa_pago_servico
-            
+            total_pago_fornecimento += etapa_pago_fornecimento
+
             etapas_dict.append({
                 **etapa.to_dict(include_itens=False),
                 'itens': itens_dict,
                 'total_mao_obra': etapa_mo,
                 'total_material': etapa_mat,
                 'total_servico': etapa_servico,  # NOVO
+                'total_fornecimento': etapa_fornecimento,
                 'total': etapa_total,
                 'total_pago_mo': etapa_pago_mo,
                 'total_pago_mat': etapa_pago_mat,
                 'total_pago_servico': etapa_pago_servico,  # NOVO
+                'total_pago_fornecimento': etapa_pago_fornecimento,
                 'total_pago': etapa_pago,
                 'percentual': round((etapa_pago / etapa_total * 100) if etapa_total > 0 else 0, 1)
             })
-        
-        subtotal = total_mo + total_mat + total_servico  # MODIFICADO: incluir serviço
-        total_pago = total_pago_mo + total_pago_mat + total_pago_servico  # MODIFICADO
+
+        subtotal = total_mo + total_mat + total_servico + total_fornecimento  # MODIFICADO: incluir serviço + fornecimento
+        total_pago = total_pago_mo + total_pago_mat + total_pago_servico + total_pago_fornecimento  # MODIFICADO
         bdi = obra.bdi if hasattr(obra, 'bdi') else 0
         valor_bdi = subtotal * (bdi / 100) if bdi else 0
         total_geral = subtotal + valor_bdi
-        
+
         return jsonify({
             'obra_id': obra_id,
             'obra_nome': obra.nome,
@@ -233,6 +242,7 @@ def obter_orcamento_eng(obra_id):
                 'total_mao_obra': total_mo,
                 'total_material': total_mat,
                 'total_servico': total_servico,  # NOVO
+                'total_fornecimento': total_fornecimento,
                 'subtotal': subtotal,
                 'bdi': bdi,
                 'valor_bdi': valor_bdi,
@@ -240,6 +250,7 @@ def obter_orcamento_eng(obra_id):
                 'total_pago_mo': total_pago_mo,
                 'total_pago_mat': total_pago_mat,
                 'total_pago_servico': total_pago_servico,  # NOVO
+                'total_pago_fornecimento': total_pago_fornecimento,
                 'total_pago': total_pago,
                 'percentual_executado': round((total_pago / subtotal * 100) if subtotal > 0 else 0, 1),
                 'total_etapas': len(etapas),
@@ -567,29 +578,32 @@ def criar_item_orcamento(obra_id):
         if opcao_servico == 'criar':
             # Criar serviço automaticamente no Kanban
             totais = item.calcular_totais()
-            
+            # Fornecimento/locação (sem mão de obra própria) é contabilizado como
+            # Material no card do Kanban, já que o Servico não tem bucket próprio.
+            valor_mat_card = totais['total_material'] + totais.get('total_fornecimento', 0)
+
             servico = Servico(
                 obra_id=obra_id,
                 nome=dados['descricao'],
                 responsavel=dados.get('responsavel'),
                 valor_global_mao_de_obra=totais['total_mao_obra'],
-                valor_global_material=totais['total_material']
+                valor_global_material=valor_mat_card
             )
             db.session.add(servico)
             db.session.flush()
-            
+
             item.servico_id = servico.id
-            
+
         elif opcao_servico == 'vincular' and dados.get('servico_id'):
             # Vincular a serviço existente
             servico_existente = Servico.query.get(dados['servico_id'])
             if servico_existente and servico_existente.obra_id == obra_id:
                 item.servico_id = servico_existente.id
-                
+
                 # Atualizar valores do serviço (somar)
                 totais = item.calcular_totais()
                 servico_existente.valor_global_mao_de_obra += totais['total_mao_obra']
-                servico_existente.valor_global_material += totais['total_material']
+                servico_existente.valor_global_material += totais['total_material'] + totais.get('total_fornecimento', 0)
         
         # Salvar na biblioteca do usuário (opcional)
         if dados.get('salvar_biblioteca'):
@@ -685,11 +699,12 @@ def editar_item_orcamento(obra_id, item_id):
             servico = Servico.query.get(item.servico_id)
             if servico:
                 totais_novos = item.calcular_totais()
-                
+
                 # Definir valores diretamente (não apenas diferença)
                 # Se o serviço estava zerado, isso corrige o problema
+                # Fornecimento/locação (sem mão de obra própria) entra no bucket de Material.
                 servico.valor_global_mao_de_obra = totais_novos['total_mao_obra']
-                servico.valor_global_material = totais_novos['total_material']
+                servico.valor_global_material = totais_novos['total_material'] + totais_novos.get('total_fornecimento', 0)
                 
                 # Atualizar nome do serviço se descrição mudou
                 if 'descricao' in dados:
@@ -738,7 +753,7 @@ def deletar_item_orcamento(obra_id, item_id):
                         # Outros itens usam este serviço, apenas desvincular
                         totais = item.calcular_totais()
                         servico.valor_global_mao_de_obra = max(0, (servico.valor_global_mao_de_obra or 0) - totais['total_mao_obra'])
-                        servico.valor_global_material = max(0, (servico.valor_global_material or 0) - totais['total_material'])
+                        servico.valor_global_material = max(0, (servico.valor_global_material or 0) - totais['total_material'] - totais.get('total_fornecimento', 0))
                     else:
                         # Nenhum outro item usa, deletar serviço
                         db.session.delete(servico)

@@ -18,7 +18,7 @@ class OrcamentoEngItem(db.Model):
     quantidade = db.Column(db.Float, default=0)
 
     # Tipo de composição
-    tipo_composicao = db.Column(db.String(20), default='separado')  # separado | composto
+    tipo_composicao = db.Column(db.String(20), default='separado')  # separado | composto | fornecimento
 
     # Se separado
     preco_mao_obra = db.Column(db.Float, nullable=True)
@@ -48,16 +48,27 @@ class OrcamentoEngItem(db.Model):
             total_mo = 0
             total_mat = 0
             total_servico = total
+            total_fornecimento = 0
+        elif self.tipo_composicao == 'fornecimento':
+            total = (self.preco_unitario or 0) * (self.quantidade or 0)
+            # Fornecimento/locação: sem mão de obra própria da obra (ex: aluguel de andaime).
+            # Bucket próprio, separado de "Serviço" (empreitada) e de MO/Material rateado.
+            total_mo = 0
+            total_mat = 0
+            total_servico = 0
+            total_fornecimento = total
         else:
             total_mo = (self.preco_mao_obra or 0) * (self.quantidade or 0)
             total_mat = (self.preco_material or 0) * (self.quantidade or 0)
             total_servico = 0
+            total_fornecimento = 0
             total = total_mo + total_mat
 
         return {
             'total_mao_obra': total_mo,
             'total_material': total_mat,
             'total_servico': total_servico,
+            'total_fornecimento': total_fornecimento,
             'total': total
         }
 
@@ -86,6 +97,7 @@ class OrcamentoEngItem(db.Model):
             'total_mao_obra': totais['total_mao_obra'],
             'total_material': totais['total_material'],
             'total_servico': totais['total_servico'],
+            'total_fornecimento': totais['total_fornecimento'],
             'total': totais['total'],
             'total_pago': total_pago,
             'percentual_executado': round(percentual, 1),
