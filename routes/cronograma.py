@@ -3193,37 +3193,54 @@ def importar_orcamento_para_cronograma(obra_id):
         return jsonify({"erro": str(e)}), 500
 
 
+def _buscar_orfaos_cronograma_orcamento(obra_id):
+    """
+    Candidatos a órfão: itens do cronograma que vieram do orçamento (via
+    orcamento_etapa_id OU pela marca "Importado ... do Orçamento" deixada em
+    observacoes na criação) e cujo nome não bate com nenhuma etapa atual do
+    orçamento.
+
+    NÃO dá pra confiar só em orcamento_etapa_id apontar para uma etapa
+    inexistente: a coluna tem `ON DELETE SET NULL`, então o Postgres já zera
+    a referência no instante em que a etapa é apagada — o "órfão" nunca fica
+    com um ID pendurado pra gente encontrar depois. observacoes sobrevive a
+    esse SET NULL e é o único sinal que resta.
+    """
+    etapas_validas_nomes = {
+        (row[0] or '').lower().strip()
+        for row in db.session.execute(db.text(
+            "SELECT nome FROM orcamento_eng_etapa WHERE obra_id = :obra_id"
+        ), {"obra_id": obra_id}).fetchall()
+    }
+
+    candidatos = db.session.execute(db.text("""
+        SELECT id, servico_nome
+        FROM cronograma_obra
+        WHERE obra_id = :obra_id
+          AND (orcamento_etapa_id IS NOT NULL OR observacoes LIKE '%Orçamento%')
+    """), {"obra_id": obra_id}).fetchall()
+
+    return [
+        {"id": row[0], "nome": row[1]}
+        for row in candidatos
+        if (row[1] or '').lower().strip() not in etapas_validas_nomes
+    ]
+
+
 @cronograma_bp.route('/obras/<int:obra_id>/cronograma/sincronizar-orcamento', methods=['GET'])
 @jwt_required()
 def listar_orfaos_cronograma_orcamento(obra_id):
     """
-    Lista itens do cronograma vinculados ao orçamento (orcamento_etapa_id) cuja
-    etapa de origem não existe mais no Orçamento de Engenharia (foi apagada lá).
-    Não considera itens criados manualmente (orcamento_etapa_id IS NULL).
+    Lista itens do cronograma que vieram do orçamento (import ou auto-sync)
+    e cuja etapa de origem não existe mais lá (foi apagada). Não considera
+    itens criados manualmente no cronograma.
     """
     try:
         user = get_current_user()
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
 
-        etapas_validas_ids = {
-            row[0] for row in db.session.execute(db.text(
-                "SELECT id FROM orcamento_eng_etapa WHERE obra_id = :obra_id"
-            ), {"obra_id": obra_id}).fetchall()
-        }
-
-        vinculados = db.session.execute(db.text("""
-            SELECT id, servico_nome, orcamento_etapa_id
-            FROM cronograma_obra
-            WHERE obra_id = :obra_id AND orcamento_etapa_id IS NOT NULL
-        """), {"obra_id": obra_id}).fetchall()
-
-        orfaos = [
-            {"id": row[0], "nome": row[1]}
-            for row in vinculados
-            if row[2] not in etapas_validas_ids
-        ]
-
+        orfaos = _buscar_orfaos_cronograma_orcamento(obra_id)
         return jsonify({"orfaos": orfaos, "total": len(orfaos)})
     except Exception as e:
         logger.exception(f"[ERRO] listar_orfaos_cronograma_orcamento: {e}")
@@ -3234,9 +3251,9 @@ def listar_orfaos_cronograma_orcamento(obra_id):
 @jwt_required()
 def sincronizar_cronograma_com_orcamento(obra_id):
     """
-    Remove do cronograma os itens vinculados ao orçamento cuja etapa de origem
-    não existe mais (foi apagada no Orçamento de Engenharia). Não toca em itens
-    criados manualmente no cronograma (orcamento_etapa_id IS NULL).
+    Remove do cronograma os itens que vieram do orçamento (import ou
+    auto-sync) cuja etapa de origem não existe mais lá. Não toca em itens
+    criados manualmente no cronograma.
     """
     if request.method == 'OPTIONS':
         response = make_response('', 200)
@@ -3251,19 +3268,7 @@ def sincronizar_cronograma_com_orcamento(obra_id):
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Sem permissão para acessar esta obra"}), 403
 
-        etapas_validas_ids = {
-            row[0] for row in db.session.execute(db.text(
-                "SELECT id FROM orcamento_eng_etapa WHERE obra_id = :obra_id"
-            ), {"obra_id": obra_id}).fetchall()
-        }
-
-        vinculados = db.session.execute(db.text("""
-            SELECT id, orcamento_etapa_id
-            FROM cronograma_obra
-            WHERE obra_id = :obra_id AND orcamento_etapa_id IS NOT NULL
-        """), {"obra_id": obra_id}).fetchall()
-
-        orfaos_ids = [row[0] for row in vinculados if row[1] not in etapas_validas_ids]
+        orfaos_ids = [o['id'] for o in _buscar_orfaos_cronograma_orcamento(obra_id)]
 
         removidos = 0
         for cid in orfaos_ids:

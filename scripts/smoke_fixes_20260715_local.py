@@ -129,6 +129,7 @@ with app.app_context():
             obra_id=obra_id, servico_nome='FUNDACAO', ordem=1,
             data_inicio=hoje, data_fim_prevista=hoje + timedelta(days=10),
             tipo_medicao='percentual', percentual_conclusao=0,
+            observacoes='Importado do Orçamento de Engenharia - 02',
         )
         cron_manual = CronogramaObra(
             obra_id=obra_id, servico_nome='Servico manual sem vinculo', ordem=2,
@@ -142,8 +143,17 @@ with app.app_context():
         ), {"eid": etapa2.id, "cid": cron_vinculado.id})
         db.session.commit()
 
-        # Apaga a etapa de origem no orcamento -> cron_vinculado fica orfao
+        # Apaga a etapa de origem no orcamento -> em prod o FK real (ON DELETE
+        # SET NULL) zera orcamento_etapa_id NO MESMO INSTANTE em que a etapa e
+        # apagada -- SQLite no smoke nao aplica isso sozinho (a coluna foi
+        # criada sem FK de verdade), entao simulamos manualmente o SET NULL
+        # pra exercitar exatamente o cenario real (o bug so aparece assim:
+        # o "orfao" nunca fica com um orcamento_etapa_id pendurado).
         db.session.delete(etapa2)
+        db.session.commit()
+        db.session.execute(db.text(
+            "UPDATE cronograma_obra SET orcamento_etapa_id = NULL WHERE id = :cid"
+        ), {"cid": cron_vinculado.id})
         db.session.commit()
 
         r = c.get(f'/obras/{obra_id}/cronograma/sincronizar-orcamento', headers=h_master)
