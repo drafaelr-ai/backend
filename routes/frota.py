@@ -120,6 +120,22 @@ def _veiculo_visivel(veiculo, user):
     return obra_ids is None or veiculo.obra_id is None or veiculo.obra_id in obra_ids
 
 
+def _condutor_visivel(condutor, user):
+    """Condutor não tem obra_id próprio — herda visibilidade do veículo ao qual
+    está atribuído atualmente (mesma regra de _veiculo_visivel). Sem veículo
+    atribuído = visível pra todo mundo (mesmo padrão de veículo sem local)."""
+    obra_ids = _obra_ids_permitidos(user)
+    if obra_ids is None:
+        return True
+    veiculo_atual = (FrotaVeiculo.query
+                      .filter(FrotaVeiculo.condutor_atual_id == condutor.id,
+                              FrotaVeiculo.status != 'inativo')
+                      .first())
+    if not veiculo_atual:
+        return True
+    return veiculo_atual.obra_id is None or veiculo_atual.obra_id in obra_ids
+
+
 def _normalizar_placa(placa):
     """Uppercase, só letras/dígitos (aceita formato antigo e Mercosul)."""
     return re.sub(r'[^A-Z0-9]', '', str(placa or '').upper())
@@ -493,6 +509,7 @@ def criar_movimentacao(veiculo_id):
 @jwt_required()
 def listar_condutores():
     try:
+        user = get_current_user()
         query = FrotaCondutor.query
         status = request.args.get('status')
         if status:
@@ -508,6 +525,8 @@ def listar_condutores():
         )
         out = []
         for c in condutores:
+            if not _condutor_visivel(c, user):
+                continue
             d = c.to_dict()
             d['veiculo_atual_placa'] = veiculos.get(c.id)
             out.append(d)
@@ -555,6 +574,8 @@ def editar_condutor(condutor_id):
         condutor = db.session.get(FrotaCondutor, condutor_id)
         if not condutor:
             return jsonify({"erro": "Condutor não encontrado"}), 404
+        if not _condutor_visivel(condutor, get_current_user()):
+            return jsonify({"erro": "Acesso negado"}), 403
 
         dados = request.get_json(silent=True) or {}
         if 'nome' in dados:
@@ -596,6 +617,8 @@ def remover_condutor(condutor_id):
         condutor = db.session.get(FrotaCondutor, condutor_id)
         if not condutor:
             return jsonify({"erro": "Condutor não encontrado"}), 404
+        if not _condutor_visivel(condutor, get_current_user()):
+            return jsonify({"erro": "Acesso negado"}), 403
         em_uso = (FrotaVeiculo.query
                   .filter(FrotaVeiculo.condutor_atual_id == condutor_id,
                           FrotaVeiculo.status != 'inativo')
@@ -1246,12 +1269,15 @@ def obter_dashboard():
         docs_vencidos = [d for d in docs_alerta if d.data_vencimento < hoje]
         docs_a_vencer = [d for d in docs_alerta if d.data_vencimento >= hoje]
 
-        cnhs_alerta = (FrotaCondutor.query
-                       .filter(FrotaCondutor.status == 'ativo',
-                               FrotaCondutor.cnh_validade.isnot(None),
-                               FrotaCondutor.cnh_validade <= limite_30d)
-                       .order_by(FrotaCondutor.cnh_validade)
-                       .all())
+        cnhs_alerta = [
+            c for c in (FrotaCondutor.query
+                        .filter(FrotaCondutor.status == 'ativo',
+                                FrotaCondutor.cnh_validade.isnot(None),
+                                FrotaCondutor.cnh_validade <= limite_30d)
+                        .order_by(FrotaCondutor.cnh_validade)
+                        .all())
+            if _condutor_visivel(c, user)
+        ]
 
         # Custo por local (snapshot) na competência: manutenções + abastecimentos.
         custo_local = {}

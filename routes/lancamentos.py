@@ -345,11 +345,15 @@ def deletar_lancamento(lancamento_id):
     try:
         # Buscar o lançamento
         lancamento = Lancamento.query.get_or_404(lancamento_id)
-        
+
+        user = get_current_user()
+        if not user_has_access_to_obra(user, lancamento.obra_id):
+            return jsonify({"erro": "Acesso negado a esta obra."}), 403
+
         # Obter o papel do usuário
         claims = get_jwt()
         user_role = claims.get('role')
-        
+
         # Verificar se o lançamento está PAGO (executado)
         is_pago = lancamento.status == 'Pago'
         

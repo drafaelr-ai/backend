@@ -313,7 +313,11 @@ def get_servicos_obra(obra_id):
         obra = Obra.query.get(obra_id)
         if not obra:
             return jsonify({'error': 'Obra não encontrada'}), 404
-        
+
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({'error': 'Acesso negado a esta obra.'}), 403
+
         servicos = Servico.query.filter_by(obra_id=obra_id).all()
         return jsonify([{
             'id': s.id,

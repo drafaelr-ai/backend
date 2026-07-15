@@ -2106,6 +2106,17 @@ def add_anexos_orcamento(orcamento_id):
         return jsonify({"erro": "Erro interno no servidor"}), 500
 
 
+# Anexo é upload livre (qualquer extensão/mimetype, vindo do client) — servir
+# como as_attachment=False (inline) com um mimetype arbitrário permite stored
+# XSS (ex: um .html ou .svg com script sobe como "anexo" e executa no
+# navegador de quem abrir). Só serve inline os tipos realmente seguros de
+# renderizar; qualquer outro força download.
+_MIMETYPES_INLINE_SEGUROS = {
+    'image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp',
+    'application/pdf',
+}
+
+
 @obras_bp.route('/anexos/<int:anexo_id>', methods=['GET', 'OPTIONS'])
 @jwt_required()
 def get_anexo_data(anexo_id):
@@ -2118,15 +2129,16 @@ def get_anexo_data(anexo_id):
         user = get_current_user()
         anexo = AnexoOrcamento.query.get_or_404(anexo_id)
         orcamento = Orcamento.query.get(anexo.orcamento_id)
-        
+
         if not user_has_access_to_obra(user, orcamento.obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
-            
+
+        mimetype_seguro = (anexo.mimetype or '').lower() in _MIMETYPES_INLINE_SEGUROS
         return send_file(
             io.BytesIO(anexo.data),
             mimetype=anexo.mimetype,
-            as_attachment=False, 
-            download_name=anexo.filename 
+            as_attachment=not mimetype_seguro,
+            download_name=anexo.filename
         )
         
     except Exception as e:

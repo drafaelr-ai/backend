@@ -1783,7 +1783,11 @@ def get_cronograma_obra_by_obra(obra_id):
         obra = Obra.query.get(obra_id)
         if not obra:
             return jsonify({'error': 'Obra não encontrada'}), 404
-        
+
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({'error': 'Acesso negado a esta obra.'}), 403
+
         cronograma_items = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
         return jsonify([item.to_dict() for item in cronograma_items]), 200
     except Exception as e:
@@ -1795,11 +1799,14 @@ def get_cronograma_obra_by_obra(obra_id):
 @jwt_required()
 def get_cronograma_obra(obra_id):
     try:
-        # Simplificar: só verificar se obra existe
         obra = Obra.query.get(obra_id)
         if not obra:
             return jsonify({'error': 'Obra não encontrada'}), 404
-        
+
+        user = get_current_user()
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({'error': 'Acesso negado a esta obra.'}), 403
+
         cronograma_items = CronogramaObra.query.filter_by(obra_id=obra_id).order_by(CronogramaObra.ordem).all()
         return jsonify([item.to_dict() for item in cronograma_items]), 200
     except Exception as e:

@@ -1514,39 +1514,12 @@ def check_pagamento_info():
         return jsonify({'error': "Erro interno no servidor"}), 500
 
 
-@admin_bp.route('/admin/limpar-pagamento-parcelado-e-adicionar-coluna', methods=['POST'])
-@check_permission(roles=["master"])
-def limpar_e_adicionar_coluna():
-    """ATENÇÃO: APAGA TODOS os pagamentos parcelados e adiciona a coluna"""
-    try:
-        resultados = []
-        
-        # TRUNCATE (limpar tabela)
-        db.session.execute(db.text("TRUNCATE TABLE pagamento_parcelado CASCADE;"))
-        db.session.commit()
-        resultados.append("✅ Tabela pagamento_parcelado limpa")
-        
-        # ADD COLUMN
-        db.session.execute(db.text("ALTER TABLE pagamento_parcelado ADD COLUMN servico_id INTEGER;"))
-        db.session.commit()
-        resultados.append("✅ Coluna servico_id adicionada")
-        
-        # VALIDAR
-        result = db.session.execute(db.text("""
-            SELECT column_name FROM information_schema.columns 
-            WHERE table_name = 'pagamento_parcelado' AND column_name = 'servico_id';
-        """))
-        
-        if result.fetchone():
-            resultados.append("✅ VALIDAÇÃO OK!")
-            resultados.append("🎉 MIGRATION CONCLUÍDA!")
-        
-        return jsonify({'success': True, 'detalhes': resultados}), 200
-
-    except Exception as e:
-        logger.exception("Erro em rota admin limpar-pagamento-parcelado")
-        db.session.rollback()
-        return jsonify({'error': "Erro interno no servidor", 'success': False}), 500
+# Rota '/admin/limpar-pagamento-parcelado-e-adicionar-coluna' REMOVIDA (auditoria
+# de segurança 2026-07-15): fazia TRUNCATE TABLE pagamento_parcelado CASCADE
+# incondicional em qualquer POST — a coluna servico_id já existe (ver
+# /admin/migrate-add-servico-id), então a rota só sobrava como endpoint de
+# apagar todos os pagamentos parcelados da produção pra quem tivesse um JWT
+# master. Não é usada pelo frontend.
 
 
 @admin_bp.route('/admin/recuperar-parcelas-pagas', methods=['POST', 'GET'])

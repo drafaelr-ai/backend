@@ -6,7 +6,9 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from extensions_admin import db
+from models_admin import Imovel
 from models_admin.superlink_admin import SuperlinkAdmin
+from services_admin import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,14 @@ def criar_superlink_admin():
             return jsonify({'erro': 'titulo obrigatório'}), 400
         if not itens or not isinstance(itens, list):
             return jsonify({'erro': 'itens deve ser lista não vazia'}), 400
+
+        if imovel_id:
+            user = get_current_user()
+            imovel = Imovel.query.get(int(imovel_id))
+            if not imovel:
+                return jsonify({'erro': 'Imóvel não encontrado'}), 404
+            if user.role != 'admin' and imovel.usuario_id != user.id:
+                return jsonify({'erro': 'Acesso negado a este imóvel.'}), 403
 
         for item in itens:
             descricao = (item.get('descricao') or '').strip()

@@ -1,5 +1,4 @@
 import io
-import os
 import base64
 import logging
 import traceback
@@ -23,6 +22,14 @@ from services import get_current_user, user_has_access_to_obra
 logger = logging.getLogger(__name__)
 
 caixa_bp = Blueprint('caixa', __name__, url_prefix='/obras/<int:obra_id>/caixa')
+
+
+def _comprovante_url_valido(url):
+    """Único formato legítimo de comprovante_url é uma data URI de imagem em
+    base64 (é assim que upload_comprovante_caixa sempre gera). Qualquer outro
+    valor (caminho local, URL http) não tem produtor real no código e serviria
+    só como vetor de path traversal / SSRF em gerar_relatorio_caixa_pdf."""
+    return isinstance(url, str) and url.startswith('data:image/')
 
 
 @caixa_bp.route('', methods=['GET', 'POST'])
@@ -149,6 +156,9 @@ def gerenciar_movimentacoes_caixa(obra_id):
             if 'descricao' not in data or not data['descricao'].strip():
                 return jsonify({"erro": "Descrição é obrigatória"}), 400
 
+            if data.get('comprovante_url') and not _comprovante_url_valido(data['comprovante_url']):
+                return jsonify({"erro": "comprovante_url inválido"}), 400
+
             data_movimentacao = datetime.now()
             if 'data' in data and data['data']:
                 try:
@@ -230,6 +240,8 @@ def editar_deletar_movimentacao(obra_id, mov_id):
                     logger.warning("Excecao suprimida em ", exc_info=True)
 
             if 'comprovante_url' in data:
+                if data['comprovante_url'] and not _comprovante_url_valido(data['comprovante_url']):
+                    return jsonify({"erro": "comprovante_url inválido"}), 400
                 movimentacao.comprovante_url = data['comprovante_url']
 
             if 'observacoes' in data:
@@ -527,23 +539,9 @@ def gerar_relatorio_caixa_pdf(obra_id):
                                 img_data = io.BytesIO(base64.b64decode(base64_data))
                             except Exception as e:
                                 logger.exception(f"[WARN] Erro ao decodificar base64 do comprovante {comprovante_num}: {e}")
-
-                        elif m.comprovante_url.startswith('/uploads/') or m.comprovante_url.startswith('uploads/'):
-                            try:
-                                file_path = m.comprovante_url.lstrip('/')
-                                if os.path.exists(file_path):
-                                    with open(file_path, 'rb') as f:
-                                        img_data = io.BytesIO(f.read())
-                            except Exception as e:
-                                logger.exception(f"[WARN] Erro ao carregar arquivo do comprovante {comprovante_num}: {e}")
-
-                        elif m.comprovante_url.startswith('http'):
-                            try:
-                                import urllib.request
-                                with urllib.request.urlopen(m.comprovante_url, timeout=10) as response:
-                                    img_data = io.BytesIO(response.read())
-                            except Exception as e:
-                                logger.exception(f"[WARN] Erro ao baixar comprovante {comprovante_num}: {e}")
+                        # Nenhum outro formato é gravado por nenhum endpoint (ver
+                        # _comprovante_url_valido) — não ler arquivo local nem
+                        # buscar URL arbitrária aqui (isso era path traversal/SSRF).
 
                         if img_data:
                             try:
