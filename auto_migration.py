@@ -821,6 +821,80 @@ def run_auto_migration():
                     "frota_abastecimento, frota_multa)")
 
         # =================================================================
+        # MÓDULO SOLICITAÇÕES (compras) — 4 tabelas (aditivo, idempotente)
+        # Ordem: solicitacao_compra → solicitacao_item / solicitacao_cotacao
+        # → solicitacao_config (singleton id=1, criada sob demanda pela API).
+        # obra_id: ON DELETE CASCADE (Obra não tem relationship ORM p/ cá —
+        # o CASCADE no banco evita quebrar a exclusão de obra).
+        # cotacao_aprovada_id / pagamento_futuro_id / aprovador_id são
+        # referências FRACAS (sem FK) — nenhuma tabela existente é alterada.
+        # =================================================================
+        logger.info("📝 SOLICITAÇÕES: garantindo tabelas do módulo Solicitações...")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS solicitacao_compra (
+                id                  SERIAL PRIMARY KEY,
+                obra_id             INTEGER NOT NULL REFERENCES obra(id) ON DELETE CASCADE,
+                solicitante_id      INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                data_criacao        TIMESTAMP DEFAULT NOW(),
+                data_necessidade    DATE,
+                tipo                VARCHAR(30) NOT NULL DEFAULT 'Material',
+                status              VARCHAR(30) NOT NULL DEFAULT 'Aberta',
+                observacao          TEXT,
+                token_publico       VARCHAR(64) NOT NULL,
+                cotacao_aprovada_id INTEGER,
+                pagamento_futuro_id INTEGER,
+                aprovador_id        INTEGER,
+                data_decisao        TIMESTAMP,
+                motivo_rejeicao     VARCHAR(300)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_solicitacao_token ON solicitacao_compra (token_publico);
+            CREATE INDEX IF NOT EXISTS idx_solicitacao_obra ON solicitacao_compra (obra_id);
+            CREATE INDEX IF NOT EXISTS idx_solicitacao_status ON solicitacao_compra (status);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS solicitacao_item (
+                id             SERIAL PRIMARY KEY,
+                solicitacao_id INTEGER NOT NULL REFERENCES solicitacao_compra(id) ON DELETE CASCADE,
+                descricao      VARCHAR(300) NOT NULL,
+                quantidade     NUMERIC(12,2) NOT NULL,
+                unidade        VARCHAR(20),
+                observacao     VARCHAR(300)
+            );
+            CREATE INDEX IF NOT EXISTS idx_solicitacao_item_sol ON solicitacao_item (solicitacao_id);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS solicitacao_cotacao (
+                id                 SERIAL PRIMARY KEY,
+                solicitacao_id     INTEGER NOT NULL REFERENCES solicitacao_compra(id) ON DELETE CASCADE,
+                fornecedor         VARCHAR(150) NOT NULL,
+                valor_total        NUMERIC(12,2) NOT NULL,
+                condicao_pagamento VARCHAR(200),
+                prazo_entrega      VARCHAR(100),
+                observacao         VARCHAR(300),
+                arquivo_url        VARCHAR(500),
+                criado_por_id      INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                data_criacao       TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_solicitacao_cot_sol ON solicitacao_cotacao (solicitacao_id);
+        """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS solicitacao_config (
+                id             INTEGER PRIMARY KEY,
+                alertados_ids  JSONB,
+                aprovadores_ids JSONB,
+                limite_valor   DOUBLE PRECISION,
+                atualizado_em  TIMESTAMP
+            );
+        """)
+
+        logger.info("✅ SOLICITAÇÕES: 4 tabelas garantidas (solicitacao_compra, "
+                    "solicitacao_item, solicitacao_cotacao, solicitacao_config)")
+
+        # =================================================================
         # ACESSOS POR MÓDULO (aditivo, idempotente)
         # NULL = todos os módulos (comportamento anterior preservado).
         # Invariante: o usuário id=1 (Diego, ex-admin_principal) é o ÚNICO

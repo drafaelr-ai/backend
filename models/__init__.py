@@ -39,3 +39,8 @@ from .frota_documento import FrotaDocumento  # noqa: F401
 from .frota_manutencao import FrotaManutencao  # noqa: F401
 from .frota_abastecimento import FrotaAbastecimento  # noqa: F401
 from .frota_multa import FrotaMulta  # noqa: F401
+# --- Módulo Solicitações (compras) ---
+from .solicitacao_compra import SolicitacaoCompra  # noqa: F401
+from .solicitacao_item import SolicitacaoItem  # noqa: F401
+from .solicitacao_cotacao import SolicitacaoCotacao  # noqa: F401
+from .solicitacao_config import SolicitacaoConfig  # noqa: F401
