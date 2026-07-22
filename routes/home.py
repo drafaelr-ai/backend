@@ -19,7 +19,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from extensions import db
 from models.obra import Obra
@@ -244,10 +244,17 @@ def export_pendencias_pdf():
         elements = []
         styles = getSampleStyleSheet()
 
+        def desenhar_rodape(canvas, documento):
+            canvas.saveState()
+            canvas.setFont('Helvetica', 8)
+            canvas.setFillColor(colors.HexColor('#6B7280'))
+            canvas.drawRightString(A4[0] - 2 * cm, 1 * cm, f'Página {documento.page}')
+            canvas.restoreState()
+
         titulo = ('Relatório de Pendências Vencidas' if escopo == 'vencidas'
                   else 'Relatório de Pendências (Vencidas + a Vencer no Mês)')
         elements.append(Paragraph(
-            f"<b>{titulo}</b><br/><br/>Obras: {len(por_obra)} — Total geral: {formatar_real(total_geral)}",
+            f"<b>{titulo}</b><br/><br/>Pendências: {len(itens)} | Obras: {len(por_obra)} — Total geral: {formatar_real(total_geral)}",
             styles['Title']))
         elements.append(Spacer(1, 0.8 * cm))
 
@@ -260,7 +267,7 @@ def export_pendencias_pdf():
             obra_itens = por_obra[obra_nome]
             total_obra = sum(i['valor'] for i in obra_itens)
             elements.append(Paragraph(
-                f"<b>Obra: {obra_nome}</b> | Total: {formatar_real(total_obra)}", styles['Heading2']))
+                f"<b>Obra: {obra_nome}</b> | Pendências: {len(obra_itens)} | Total: {formatar_real(total_obra)}", styles['Heading2']))
             elements.append(Spacer(1, 0.3 * cm))
 
             data = [['Vencimento', 'Situação', 'Descrição', 'Valor']]
@@ -276,7 +283,9 @@ def export_pendencias_pdf():
                 ])
             data.append(['', '', 'SUBTOTAL', formatar_real(total_obra)])
 
-            table = Table(data, colWidths=[2.5 * cm, 2.8 * cm, 8.2 * cm, 3 * cm])
+            # LongTable divide listas extensas entre páginas sem perder linhas
+            # e repete o cabeçalho em cada página do relatório.
+            table = LongTable(data, colWidths=[2.5 * cm, 2.8 * cm, 8.2 * cm, 3 * cm], repeatRows=1)
             table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0061FC')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -308,7 +317,7 @@ def export_pendencias_pdf():
         elements.append(Spacer(1, 0.5 * cm))
         elements.append(Paragraph(f"Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}", styles['Normal']))
 
-        doc.build(elements)
+        doc.build(elements, onFirstPage=desenhar_rodape, onLaterPages=desenhar_rodape)
         buffer.seek(0)
         pdf_data = buffer.read()
         buffer.close()

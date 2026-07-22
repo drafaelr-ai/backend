@@ -5,6 +5,10 @@ Uso: cd backend && python scripts/smoke_almoxarifado_ponto_local.py
 """
 import os
 import sys
+from datetime import date, timedelta
+from io import BytesIO
+
+from pypdf import PdfReader
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,6 +17,7 @@ from flask_jwt_extended import create_access_token
 
 from extensions import db, jwt, limiter
 import models  # noqa: F401  # Registra os modelos no metadata do SQLAlchemy.
+from models.boleto import Boleto
 from models.categoria_mo import CategoriaMO
 from models.funcionario import Funcionario
 from models.lancamento import Lancamento
@@ -20,6 +25,8 @@ from models.obra import Obra
 from models.orcamento_eng_etapa import OrcamentoEngEtapa
 from models.orcamento_eng_item import OrcamentoEngItem
 from models.pagamento_futuro import PagamentoFuturo
+from models.pagamento_parcelado import PagamentoParcelado
+from models.parcela_individual import ParcelaIndividual
 from models.user import User
 from routes.almoxarifado import almoxarifado_bp
 from routes.cronograma import cronograma_bp
@@ -243,6 +250,54 @@ with app.app_context():
         check('locação ativa preserva quantidade fora do estoque', resumo['locacoes_ativas'] == 2, resumo['locacoes_ativas'])
         check('valor mensal de locação é calculado', resumo['valor_locacao_mensal'] == 500, resumo['valor_locacao_mensal'])
         check('equipamento alocado reduz o estoque disponível', resumo['equipamentos_estoque'] == 1, resumo['equipamentos_estoque'])
+
+        # O quadro de atenção e o PDF devem conter todas as pendências
+        # vencidas, inclusive quando ocupam mais de uma página e vêm de
+        # origens financeiras distintas.
+        vencimento_pdf = date.today() - timedelta(days=2)
+        lancamentos_pdf = [
+            Lancamento(
+                obra_id=obra_a.id, tipo='Despesa', descricao=f'PDF vencida {indice:02d}',
+                valor_total=100 + indice, valor_pago=0, data=vencimento_pdf,
+                data_vencimento=vencimento_pdf, status='A Pagar',
+            )
+            for indice in range(55)
+        ]
+        db.session.add_all(lancamentos_pdf)
+        futuro_pdf = PagamentoFuturo(
+            obra_id=obra_a.id, descricao='PDF pagamento futuro vencido', valor=250,
+            data_vencimento=vencimento_pdf, status='Previsto', tipo='Despesa',
+        )
+        boleto_pdf = Boleto(
+            obra_id=obra_a.id, descricao='PDF boleto vencido', valor=350,
+            data_vencimento=vencimento_pdf, status='Pendente',
+        )
+        parcelado_pdf = PagamentoParcelado(
+            obra_id=obra_a.id, descricao='PDF parcelado vencido', valor_total=450,
+            numero_parcelas=1, valor_parcela=450, data_primeira_parcela=vencimento_pdf,
+        )
+        db.session.add_all([futuro_pdf, boleto_pdf, parcelado_pdf])
+        db.session.flush()
+        db.session.add(ParcelaIndividual(
+            pagamento_parcelado_id=parcelado_pdf.id, numero_parcela=1,
+            valor_parcela=450, data_vencimento=vencimento_pdf, status='Previsto',
+        ))
+        db.session.commit()
+        response = client.get('/home/pendencias/export-pdf?escopo=vencidas', headers=headers_almox)
+        check('PDF de vencidas é gerado', response.status_code == 200 and response.content_type == 'application/pdf', response.status_code)
+        pdf_saida = os.environ.get('SMOKE_PDF_OUTPUT')
+        if pdf_saida:
+            os.makedirs(os.path.dirname(os.path.abspath(pdf_saida)), exist_ok=True)
+            with open(pdf_saida, 'wb') as arquivo_pdf:
+                arquivo_pdf.write(response.data)
+        leitor_pdf = PdfReader(BytesIO(response.data))
+        texto_pdf = '\n'.join(pagina.extract_text() or '' for pagina in leitor_pdf.pages)
+        descricoes_pdf = [
+            *(f'PDF vencida {indice:02d}' for indice in range(55)),
+            'PDF pagamento futuro vencido', 'PDF boleto vencido', 'PDF parcelado vencido',
+        ]
+        check('PDF exporta todas as vencidas', all(descricao in texto_pdf for descricao in descricoes_pdf), len(descricoes_pdf))
+        check('PDF extenso mantém todas as páginas', len(leitor_pdf.pages) > 1, len(leitor_pdf.pages))
 
         response = client.post('/rh/ponto/marcacoes', headers=headers_rh, json={
             'funcionario_id': funcionario_a.id, 'data_hora': '2026-07-22T08:00',
