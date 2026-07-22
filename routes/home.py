@@ -32,6 +32,7 @@ from models.pagamento_servico import PagamentoServico
 from models.servico import Servico
 from services import admin_read_service
 from services import get_current_user, user_tem_modulo
+from services.almoxarifado_service import resumo_estoque
 from utils import formatar_real
 
 logger = logging.getLogger(__name__)
@@ -465,6 +466,21 @@ def home_obras():
                 'vencidos_valor': round(d['vencidos_valor'], 2),
             })
 
+        # O dashboard de Obras mostra o resumo físico/financeiro do estoque
+        # apenas a quem também possui acesso ao Almoxarifado. Assim não há
+        # vazamento de valores ou quantidades para perfis sem esse módulo.
+        operacional = {'disponivel': False}
+        if user_tem_modulo(user, 'almoxarifado'):
+            resumo = resumo_estoque()
+            operacional = {'disponivel': True}
+            operacional.update({
+                chave: resumo[chave] for chave in (
+                    'quantidade_estoque', 'itens_com_estoque', 'valor_estoque',
+                    'equipamentos_estoque', 'valor_equipamentos',
+                    'locacoes_ativas', 'valor_locacao_mensal',
+                )
+            })
+
         return jsonify({
             'competencia': competencia,
             'kpis': {
@@ -479,6 +495,7 @@ def home_obras():
                                    'ate': fim.isoformat(), 'itens': pendencias},
             },
             'obras': obras_out,
+            'operacional': operacional,
         }), 200
     except Exception as e:
         logger.exception("Erro em GET /home/obras")

@@ -18,6 +18,10 @@ class AlmoxarifadoItem(db.Model):
     unidade = db.Column(db.String(20), nullable=False, default='un')
     tamanho = db.Column(db.String(30), nullable=True)
     estoque_minimo = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    # próprio = bem da empresa; locacao = equipamento de terceiro sob contrato.
+    modalidade = db.Column(db.String(20), nullable=False, default='proprio')
+    valor_unitario = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    valor_locacao_mensal = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     descricao = db.Column(db.Text, nullable=True)
     ativo = db.Column(db.Boolean, nullable=False, default=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
@@ -37,6 +41,9 @@ class AlmoxarifadoItem(db.Model):
             'tamanho': self.tamanho,
             'estoque_minimo': float(self.estoque_minimo or 0),
             'estoque_atual': float(estoque_atual) if estoque_atual is not None else None,
+            'modalidade': self.modalidade or 'proprio',
+            'valor_unitario': float(self.valor_unitario or 0),
+            'valor_locacao_mensal': float(self.valor_locacao_mensal or 0),
             'descricao': self.descricao,
             'ativo': bool(self.ativo),
             'data_criacao': self.data_criacao.isoformat() if self.data_criacao else None,

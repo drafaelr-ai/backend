@@ -939,6 +939,9 @@ def run_auto_migration():
                 unidade         VARCHAR(20) NOT NULL DEFAULT 'un',
                 tamanho         VARCHAR(30),
                 estoque_minimo  NUMERIC(12,2) NOT NULL DEFAULT 0,
+                modalidade      VARCHAR(20) NOT NULL DEFAULT 'proprio',
+                valor_unitario  NUMERIC(12,2) NOT NULL DEFAULT 0,
+                valor_locacao_mensal NUMERIC(12,2) NOT NULL DEFAULT 0,
                 descricao       TEXT,
                 ativo           BOOLEAN NOT NULL DEFAULT TRUE,
                 data_criacao    TIMESTAMP DEFAULT NOW()
@@ -948,6 +951,9 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_almoxarifado_item_nome ON almoxarifado_item (nome);
             CREATE INDEX IF NOT EXISTS idx_almoxarifado_item_ativo ON almoxarifado_item (ativo);
         """)
+        cur.execute("ALTER TABLE almoxarifado_item ADD COLUMN IF NOT EXISTS modalidade VARCHAR(20) NOT NULL DEFAULT 'proprio';")
+        cur.execute("ALTER TABLE almoxarifado_item ADD COLUMN IF NOT EXISTS valor_unitario NUMERIC(12,2) NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE almoxarifado_item ADD COLUMN IF NOT EXISTS valor_locacao_mensal NUMERIC(12,2) NOT NULL DEFAULT 0;")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS almoxarifado_movimentacao (
                 id                  SERIAL PRIMARY KEY,
@@ -958,6 +964,7 @@ def run_auto_migration():
                 funcionario_id      INTEGER REFERENCES funcionario(id) ON DELETE SET NULL,
                 obra_id             INTEGER REFERENCES obra(id) ON DELETE SET NULL,
                 usuario_id          INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                fornecedor          VARCHAR(160),
                 observacao          VARCHAR(300),
                 data_criacao        TIMESTAMP DEFAULT NOW()
             );
@@ -967,7 +974,10 @@ def run_auto_migration():
                 ON almoxarifado_movimentacao (funcionario_id);
             CREATE INDEX IF NOT EXISTS idx_almoxarifado_mov_obra
                 ON almoxarifado_movimentacao (obra_id);
+            CREATE INDEX IF NOT EXISTS idx_almoxarifado_mov_tipo
+                ON almoxarifado_movimentacao (tipo);
         """)
+        cur.execute("ALTER TABLE almoxarifado_movimentacao ADD COLUMN IF NOT EXISTS fornecedor VARCHAR(160);")
         logger.info("✅ ALMOXARIFADO: tabelas almoxarifado_item e movimentacao garantidas")
 
         # =================================================================

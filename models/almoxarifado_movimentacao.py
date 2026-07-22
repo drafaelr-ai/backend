@@ -23,6 +23,7 @@ class AlmoxarifadoMovimentacao(db.Model):
     usuario_id = db.Column(
         db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'), nullable=True,
     )
+    fornecedor = db.Column(db.String(160), nullable=True)
     observacao = db.Column(db.String(300), nullable=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -32,7 +33,7 @@ class AlmoxarifadoMovimentacao(db.Model):
 
     def variacao(self):
         quantidade = float(self.quantidade or 0)
-        if self.tipo == 'saida':
+        if self.tipo in {'saida', 'locacao_saida', 'alocacao_obra'}:
             return -quantidade
         return quantidade
 
@@ -50,6 +51,7 @@ class AlmoxarifadoMovimentacao(db.Model):
             'funcionario_nome': self.funcionario.nome if self.funcionario else None,
             'obra_id': self.obra_id,
             'obra_nome': self.obra.nome if self.obra else None,
+            'fornecedor': self.fornecedor,
             'usuario_nome': self.usuario.username if self.usuario else None,
             'observacao': self.observacao,
             'data_criacao': self.data_criacao.isoformat() if self.data_criacao else None,

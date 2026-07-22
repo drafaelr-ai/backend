@@ -8,7 +8,7 @@ from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, verify_jwt_in_request
-from sqlalchemy import case, func, or_
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
 
@@ -18,13 +18,23 @@ from models.almoxarifado_movimentacao import AlmoxarifadoMovimentacao
 from models.funcionario import Funcionario
 from models.obra import Obra
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
+from services.almoxarifado_service import (
+    TIPOS_SAIDA_ESTOQUE,
+    resumo_estoque,
+    saldo_item as _saldo_item,
+    saldos_itens as _saldos_itens,
+)
 
 logger = logging.getLogger(__name__)
 
 almoxarifado_bp = Blueprint('almoxarifado', __name__, url_prefix='/almoxarifado')
 
 _CATEGORIAS = {'fardamento', 'epi', 'equipamento', 'ferramenta', 'material', 'outro'}
-_TIPOS_MOVIMENTACAO = {'entrada', 'saida', 'ajuste'}
+_TIPOS_MOVIMENTACAO = {
+    'entrada', 'saida', 'ajuste',
+    'locacao_entrada', 'locacao_saida', 'alocacao_obra', 'devolucao_obra',
+}
+_MODALIDADES = {'proprio', 'locacao'}
 
 
 @almoxarifado_bp.before_request
@@ -72,33 +82,6 @@ def _parse_date(valor):
         return None
 
 
-def _saldo_item(item_id):
-    """Saldo derivado do histórico: entrada + ajuste − saída."""
-    expr = case(
-        (AlmoxarifadoMovimentacao.tipo == 'saida', -AlmoxarifadoMovimentacao.quantidade),
-        else_=AlmoxarifadoMovimentacao.quantidade,
-    )
-    valor = (db.session.query(func.coalesce(func.sum(expr), 0))
-             .filter(AlmoxarifadoMovimentacao.item_id == item_id).scalar())
-    return float(valor or 0)
-
-
-def _saldos_itens(item_ids):
-    if not item_ids:
-        return {}
-    expr = case(
-        (AlmoxarifadoMovimentacao.tipo == 'saida', -AlmoxarifadoMovimentacao.quantidade),
-        else_=AlmoxarifadoMovimentacao.quantidade,
-    )
-    rows = (db.session.query(
-        AlmoxarifadoMovimentacao.item_id,
-        func.coalesce(func.sum(expr), 0),
-    )
-            .filter(AlmoxarifadoMovimentacao.item_id.in_(item_ids))
-            .group_by(AlmoxarifadoMovimentacao.item_id).all())
-    return {item_id: float(saldo or 0) for item_id, saldo in rows}
-
-
 def _item_nao_encontrado(item_id):
     item = db.session.get(AlmoxarifadoItem, item_id)
     if not item:
@@ -125,6 +108,23 @@ def _validar_item(dados, item=None):
     if estoque_minimo < 0:
         return None, (jsonify({'erro': 'estoque_minimo não pode ser negativo'}), 400)
 
+    modalidade = (dados.get('modalidade') or (item.modalidade if item else 'proprio')).strip().lower()
+    if categoria != 'equipamento':
+        modalidade = 'proprio'
+    if modalidade not in _MODALIDADES:
+        return None, (jsonify({'erro': 'modalidade inválida. Use proprio ou locacao'}), 400)
+
+    valor_unitario = _to_num(dados.get('valor_unitario'))
+    if valor_unitario is None:
+        valor_unitario = float(item.valor_unitario or 0) if item else 0
+    valor_locacao = _to_num(dados.get('valor_locacao_mensal'))
+    if valor_locacao is None:
+        valor_locacao = float(item.valor_locacao_mensal or 0) if item else 0
+    if valor_unitario < 0 or valor_locacao < 0:
+        return None, (jsonify({'erro': 'valores não podem ser negativos'}), 400)
+    if modalidade != 'locacao':
+        valor_locacao = 0
+
     codigo = dados.get('codigo') if 'codigo' in dados else (item.codigo if item else None)
     codigo = str(codigo).strip()[:60] if codigo else None
     return {
@@ -132,6 +132,9 @@ def _validar_item(dados, item=None):
         'categoria': categoria,
         'unidade': unidade,
         'estoque_minimo': estoque_minimo,
+        'modalidade': modalidade,
+        'valor_unitario': valor_unitario,
+        'valor_locacao_mensal': valor_locacao,
         'codigo': codigo,
         'tamanho': (str(dados.get('tamanho')).strip()[:30]
                     if dados.get('tamanho') is not None else (item.tamanho if item else None)),
@@ -266,13 +269,13 @@ def criar_movimentacao():
 
         tipo = (dados.get('tipo') or '').strip().lower()
         if tipo not in _TIPOS_MOVIMENTACAO:
-            return jsonify({'erro': 'tipo deve ser entrada, saida ou ajuste'}), 400
+            return jsonify({'erro': 'tipo de movimentação inválido'}), 400
         quantidade = _to_num(dados.get('quantidade'))
         if quantidade is None or quantidade == 0:
             return jsonify({'erro': 'quantidade deve ser diferente de zero'}), 400
-        if tipo in {'entrada', 'saida'} and quantidade < 0:
-            return jsonify({'erro': 'entrada e saída devem usar quantidade positiva'}), 400
-        if tipo == 'saida' and quantidade > _saldo_item(item.id):
+        if tipo != 'ajuste' and quantidade < 0:
+            return jsonify({'erro': 'Use quantidade positiva para esta movimentação'}), 400
+        if tipo in TIPOS_SAIDA_ESTOQUE and quantidade > _saldo_item(item.id):
             return jsonify({'erro': 'Estoque insuficiente para registrar esta saída'}), 400
 
         data_movimentacao = _parse_date(dados.get('data_movimentacao'))
@@ -285,6 +288,30 @@ def criar_movimentacao():
             return jsonify({'erro': 'Funcionário não encontrado'}), 400
         if obra_id and not db.session.get(Obra, obra_id):
             return jsonify({'erro': 'Obra não encontrada'}), 400
+
+        # Fardamento só entra como reposição ou sai definitivamente para um
+        # colaborador. Não existe fluxo de devolução para reinserir uniforme
+        # já entregue no estoque.
+        if item.categoria == 'fardamento':
+            if tipo not in {'entrada', 'saida'}:
+                return jsonify({'erro': 'Fardamento aceita apenas reposição ou entrega definitiva'}), 400
+            if tipo == 'saida' and not funcionario_id:
+                return jsonify({'erro': 'A entrega definitiva de fardamento exige o colaborador responsável'}), 400
+
+        # Equipamento locado tem ciclo próprio: chega do fornecedor, pode ser
+        # alocado/devolvido pela obra e só então retorna ao fornecedor.
+        tipos_locacao = {'locacao_entrada', 'locacao_saida'}
+        tipos_alocacao = {'alocacao_obra', 'devolucao_obra'}
+        if tipo in tipos_locacao and (item.categoria != 'equipamento' or item.modalidade != 'locacao'):
+            return jsonify({'erro': 'Movimentações de locação só podem ser usadas em equipamento locado'}), 400
+        if tipo in tipos_alocacao and item.categoria != 'equipamento':
+            return jsonify({'erro': 'Alocação e devolução são exclusivas de equipamentos'}), 400
+        if tipo in tipos_alocacao and not obra_id:
+            return jsonify({'erro': 'Informe a obra para alocar ou devolver o equipamento'}), 400
+
+        fornecedor = (dados.get('fornecedor') or '').strip()[:160] or None
+        if tipo == 'locacao_entrada' and not fornecedor:
+            return jsonify({'erro': 'Informe o fornecedor na entrada de equipamento locado'}), 400
 
         # O catálogo é externo e centralizado, mas os destinos de uma saída
         # continuam sujeitos ao escopo de obras do usuário logado. Sem esta
@@ -306,6 +333,7 @@ def criar_movimentacao():
             funcionario_id=funcionario_id,
             obra_id=obra_id,
             usuario_id=usuario.id,
+            fornecedor=fornecedor,
             observacao=(dados.get('observacao') or '').strip()[:300] or None,
         )
         db.session.add(mov)
@@ -322,7 +350,8 @@ def criar_movimentacao():
 def dashboard():
     try:
         itens = AlmoxarifadoItem.query.filter(AlmoxarifadoItem.ativo.is_(True)).order_by(AlmoxarifadoItem.nome).all()
-        saldos = _saldos_itens([i.id for i in itens])
+        resumo = resumo_estoque(itens)
+        saldos = resumo['saldos']
         abaixo_minimo = [
             i.to_dict(saldos.get(i.id, 0)) for i in itens
             if float(i.estoque_minimo or 0) > 0 and saldos.get(i.id, 0) <= float(i.estoque_minimo)
@@ -338,6 +367,13 @@ def dashboard():
             'itens_abaixo_minimo': len(abaixo_minimo),
             'abaixo_minimo': abaixo_minimo,
             'recentes': [m.to_dict() for m in recentes],
+            'resumo': {
+                chave: resumo[chave] for chave in (
+                    'quantidade_estoque', 'itens_com_estoque', 'valor_estoque',
+                    'equipamentos_estoque', 'valor_equipamentos',
+                    'locacoes_ativas', 'valor_locacao_mensal',
+                )
+            },
         }), 200
     except Exception:
         logger.exception('Erro em GET /almoxarifado/dashboard')
