@@ -478,6 +478,8 @@ def home_obras():
                     'quantidade_estoque', 'itens_com_estoque', 'valor_estoque',
                     'equipamentos_estoque', 'valor_equipamentos',
                     'locacoes_ativas', 'valor_locacao_mensal',
+                    'locacoes_financeiro_pendente', 'locacoes_financeiro_pago',
+                    'locacoes_financeiro_total',
                 )
             })
 

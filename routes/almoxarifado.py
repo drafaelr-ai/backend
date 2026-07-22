@@ -24,6 +24,11 @@ from services.almoxarifado_service import (
     saldo_item as _saldo_item,
     saldos_itens as _saldos_itens,
 )
+from services.locacao_financeira_service import (
+    criar_pagamentos_locacao,
+    fornecedor_da_locacao,
+    validar_item_orcamento_da_obra,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,8 @@ def _validar_item(dados, item=None):
         valor_locacao = float(item.valor_locacao_mensal or 0) if item else 0
     if valor_unitario < 0 or valor_locacao < 0:
         return None, (jsonify({'erro': 'valores não podem ser negativos'}), 400)
+    if modalidade == 'locacao' and valor_locacao <= 0:
+        return None, (jsonify({'erro': 'Informe um valor mensal maior que zero para o equipamento locado'}), 400)
     if modalidade != 'locacao':
         valor_locacao = 0
 
@@ -325,6 +332,37 @@ def criar_movimentacao():
         if funcionario and not funcionario.obra_id and usuario.role not in {'master', 'administrador'}:
             return jsonify({'erro': 'Apenas administradores podem movimentar material para funcionário sem obra vinculada'}), 403
 
+        # Alocar equipamento locado também gera o compromisso financeiro da
+        # obra. Exigimos o mesmo perfil que pode baixar o financeiro e um item
+        # de orçamento da própria obra, evitando despesa sem conciliação.
+        dias_locacao = None
+        data_vencimento = None
+        orcamento_item_id = None
+        criar_financeiro = tipo == 'alocacao_obra' and item.modalidade == 'locacao'
+        if criar_financeiro:
+            if usuario.role not in {'master', 'administrador'}:
+                return jsonify({'erro': 'A alocacao de equipamento locado exige perfil administrador ou master'}), 403
+            dias_locacao = _to_int(dados.get('dias_locacao'))
+            if not dias_locacao or dias_locacao < 1:
+                return jsonify({'erro': 'Informe a quantidade de dias da locacao'}), 400
+            if not dados.get('data_vencimento'):
+                return jsonify({'erro': 'Informe o primeiro vencimento da locacao'}), 400
+            data_vencimento = _parse_date(dados.get('data_vencimento'))
+            if not data_vencimento or data_vencimento < data_movimentacao:
+                return jsonify({'erro': 'O vencimento deve ser igual ou posterior a data de alocacao'}), 400
+            orcamento_item_id = _to_int(dados.get('orcamento_item_id'))
+            if not orcamento_item_id:
+                return jsonify({'erro': 'Selecione o item do orcamento que recebera a baixa da locacao'}), 400
+            if not validar_item_orcamento_da_obra(obra_id, orcamento_item_id):
+                return jsonify({'erro': 'O item do orcamento nao pertence a obra informada'}), 400
+            # O fornecedor do compromisso financeiro é sempre o que entrou
+            # no almoxarifado com este equipamento. Não aceitamos um nome
+            # enviado pelo cliente nesta etapa porque isso quebraria a trilha
+            # de auditoria entre entrada, alocação e financeiro.
+            fornecedor = fornecedor_da_locacao(item.id)
+            if not fornecedor:
+                return jsonify({'erro': 'Nao ha fornecedor registrado na entrada deste equipamento locado'}), 400
+
         mov = AlmoxarifadoMovimentacao(
             item_id=item.id,
             tipo=tipo,
@@ -334,11 +372,25 @@ def criar_movimentacao():
             obra_id=obra_id,
             usuario_id=usuario.id,
             fornecedor=fornecedor,
+            dias_locacao=dias_locacao,
+            data_vencimento=data_vencimento,
+            orcamento_item_id=orcamento_item_id,
             observacao=(dados.get('observacao') or '').strip()[:300] or None,
         )
         db.session.add(mov)
+        pagamentos_financeiros = []
+        if criar_financeiro:
+            db.session.flush()
+            pagamentos_financeiros = criar_pagamentos_locacao(
+                mov, item, dias_locacao, data_vencimento, orcamento_item_id,
+            )
+            mov.valor_financeiro = sum(float(pagamento.valor or 0) for pagamento in pagamentos_financeiros)
         db.session.commit()
-        return jsonify({'movimentacao': mov.to_dict(), 'estoque_atual': _saldo_item(item.id)}), 201
+        return jsonify({
+            'movimentacao': mov.to_dict(),
+            'estoque_atual': _saldo_item(item.id),
+            'financeiro': [pagamento.to_dict() for pagamento in pagamentos_financeiros],
+        }), 201
     except Exception:
         db.session.rollback()
         logger.exception('Erro em POST /almoxarifado/movimentacoes')
@@ -372,6 +424,8 @@ def dashboard():
                     'quantidade_estoque', 'itens_com_estoque', 'valor_estoque',
                     'equipamentos_estoque', 'valor_equipamentos',
                     'locacoes_ativas', 'valor_locacao_mensal',
+                    'locacoes_financeiro_pendente', 'locacoes_financeiro_pago',
+                    'locacoes_financeiro_total',
                 )
             },
         }), 200

@@ -8,6 +8,7 @@ from sqlalchemy import case, func
 from extensions import db
 from models.almoxarifado_item import AlmoxarifadoItem
 from models.almoxarifado_movimentacao import AlmoxarifadoMovimentacao
+from services.locacao_financeira_service import resumo_financeiro_locacoes
 
 
 TIPOS_SAIDA_ESTOQUE = frozenset({'saida', 'locacao_saida', 'alocacao_obra'})
@@ -96,6 +97,7 @@ def resumo_estoque(itens=None):
             locacoes_ativas += quantidade_locada
             valor_locacao_mensal += quantidade_locada * float(item.valor_locacao_mensal or 0)
 
+    resumo_financeiro = resumo_financeiro_locacoes()
     return {
         'quantidade_estoque': round(quantidade_estoque, 2),
         'itens_com_estoque': itens_com_estoque,
@@ -106,4 +108,5 @@ def resumo_estoque(itens=None):
         'valor_locacao_mensal': round(valor_locacao_mensal, 2),
         'saldos': saldos,
         'locacoes_por_item': locacoes,
+        **resumo_financeiro,
     }

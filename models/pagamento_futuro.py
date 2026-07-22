@@ -26,6 +26,12 @@ class PagamentoFuturo(db.Model):
     # Vínculo com item do orçamento (orcamento_eng_item). Coluna+FK já existem no banco.
     orcamento_item_id = db.Column(db.Integer, nullable=True)
 
+    # Origem rastreável de alocações de equipamentos locados. Não há cascade:
+    # a movimentação é o registro contábil/auditável que deve ser preservado.
+    almoxarifado_movimentacao_id = db.Column(
+        db.Integer, db.ForeignKey('almoxarifado_movimentacao.id', ondelete='SET NULL'), nullable=True,
+    )
+
     def to_dict(self):
         from models.orcamento_eng_item import OrcamentoEngItem
 
@@ -60,5 +66,6 @@ class PagamentoFuturo(db.Model):
             "servico_id": self.servico_id,
             "tipo": self.tipo,
             "orcamento_item_id": self.orcamento_item_id,
-            "orcamento_item_nome": orcamento_item_nome
+            "orcamento_item_nome": orcamento_item_nome,
+            "almoxarifado_movimentacao_id": self.almoxarifado_movimentacao_id,
         }

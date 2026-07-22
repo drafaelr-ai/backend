@@ -26,6 +26,12 @@ class Lancamento(db.Model):
     # Vínculo com item do orçamento (orcamento_eng_item). Coluna+FK já existem no banco.
     orcamento_item_id = db.Column(db.Integer, nullable=True)
 
+    # Mantém a rastreabilidade quando um pagamento futuro de locação é baixado
+    # e convertido em lançamento pago no histórico financeiro da obra.
+    almoxarifado_movimentacao_id = db.Column(
+        db.Integer, db.ForeignKey('almoxarifado_movimentacao.id', ondelete='SET NULL'), nullable=True,
+    )
+
     def to_dict(self, orcamento_item_nome_map=None):
         """
         orcamento_item_nome_map (opcional): dict {orcamento_item_id: "codigo - descricao"}
@@ -66,6 +72,7 @@ class Lancamento(db.Model):
             "servico_nome": self.servico.nome if self.servico else None,
             "orcamento_item_id": self.orcamento_item_id,
             "orcamento_item_nome": orcamento_item_nome,
+            "almoxarifado_movimentacao_id": self.almoxarifado_movimentacao_id,
             "segmento": segmento_value,
             "lancamento_id": self.id
         }

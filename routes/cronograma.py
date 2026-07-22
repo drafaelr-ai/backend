@@ -1244,7 +1244,9 @@ def marcar_multiplos_como_pago(obra_id):
                             pix=pagamento.pix,
                             prioridade=0,
                             fornecedor=pagamento.fornecedor,
-                            servico_id=None
+                            servico_id=None,
+                            orcamento_item_id=pagamento.orcamento_item_id,
+                            almoxarifado_movimentacao_id=pagamento.almoxarifado_movimentacao_id,
                         )
                         db.session.add(novo_lancamento)
                         db.session.flush()

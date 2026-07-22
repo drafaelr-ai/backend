@@ -284,6 +284,11 @@ def listar_pagamentos_item(obra_id, item_id):
 
         pagamentos = []
 
+        def data_serializada(valor):
+            if not valor:
+                return None
+            return valor.isoformat() if hasattr(valor, 'isoformat') else str(valor)
+
         for r in db.session.execute(db.text("""
             SELECT id, descricao, tipo, COALESCE(valor_pago, 0), data, fornecedor
             FROM lancamento
@@ -291,7 +296,7 @@ def listar_pagamentos_item(obra_id, item_id):
         """), {"iid": item_id}).fetchall():
             pagamentos.append({
                 'fonte': 'lancamento', 'id': r[0], 'descricao': r[1], 'tipo': r[2],
-                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'valor': float(r[3] or 0), 'data': data_serializada(r[4]),
                 'fornecedor': r[5],
             })
 
@@ -302,7 +307,7 @@ def listar_pagamentos_item(obra_id, item_id):
         """), {"iid": item_id}).fetchall():
             pagamentos.append({
                 'fonte': 'pagamento_futuro', 'id': r[0], 'descricao': r[1], 'tipo': r[2],
-                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'valor': float(r[3] or 0), 'data': data_serializada(r[4]),
                 'fornecedor': r[5],
             })
 
@@ -317,7 +322,7 @@ def listar_pagamentos_item(obra_id, item_id):
             pagamentos.append({
                 'fonte': 'parcela', 'id': r[0],
                 'descricao': f"{r[1]} — parcela {r[6]}/{r[7]}", 'tipo': r[2],
-                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'valor': float(r[3] or 0), 'data': data_serializada(r[4]),
                 'fornecedor': r[5],
             })
 
@@ -330,7 +335,7 @@ def listar_pagamentos_item(obra_id, item_id):
             pagamentos.append({
                 'fonte': 'boleto', 'id': r[0],
                 'descricao': 'Boleto ' + (r[1] or r[2] or 's/ descrição'), 'tipo': 'Material',
-                'valor': float(r[3] or 0), 'data': r[4].isoformat() if r[4] else None,
+                'valor': float(r[3] or 0), 'data': data_serializada(r[4]),
                 'fornecedor': r[2],
             })
 

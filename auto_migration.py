@@ -965,6 +965,10 @@ def run_auto_migration():
                 obra_id             INTEGER REFERENCES obra(id) ON DELETE SET NULL,
                 usuario_id          INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
                 fornecedor          VARCHAR(160),
+                dias_locacao        INTEGER,
+                data_vencimento     DATE,
+                valor_financeiro    NUMERIC(12,2),
+                orcamento_item_id   INTEGER,
                 observacao          VARCHAR(300),
                 data_criacao        TIMESTAMP DEFAULT NOW()
             );
@@ -978,6 +982,14 @@ def run_auto_migration():
                 ON almoxarifado_movimentacao (tipo);
         """)
         cur.execute("ALTER TABLE almoxarifado_movimentacao ADD COLUMN IF NOT EXISTS fornecedor VARCHAR(160);")
+        cur.execute("ALTER TABLE almoxarifado_movimentacao ADD COLUMN IF NOT EXISTS dias_locacao INTEGER;")
+        cur.execute("ALTER TABLE almoxarifado_movimentacao ADD COLUMN IF NOT EXISTS data_vencimento DATE;")
+        cur.execute("ALTER TABLE almoxarifado_movimentacao ADD COLUMN IF NOT EXISTS valor_financeiro NUMERIC(12,2);")
+        cur.execute("ALTER TABLE almoxarifado_movimentacao ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;")
+        cur.execute("ALTER TABLE pagamento_futuro ADD COLUMN IF NOT EXISTS almoxarifado_movimentacao_id INTEGER;")
+        cur.execute("ALTER TABLE lancamento ADD COLUMN IF NOT EXISTS almoxarifado_movimentacao_id INTEGER;")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_pagamento_futuro_almox_mov ON pagamento_futuro (almoxarifado_movimentacao_id);")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_lancamento_almox_mov ON lancamento (almoxarifado_movimentacao_id);")
         logger.info("✅ ALMOXARIFADO: tabelas almoxarifado_item e movimentacao garantidas")
 
         # =================================================================

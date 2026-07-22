@@ -24,6 +24,13 @@ class AlmoxarifadoMovimentacao(db.Model):
         db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'), nullable=True,
     )
     fornecedor = db.Column(db.String(160), nullable=True)
+    # Dados congelados no momento da alocação de um equipamento locado. O
+    # financeiro é derivado desses dados, mas o movimento continua auditável
+    # mesmo depois que o pagamento futuro vira lançamento pago.
+    dias_locacao = db.Column(db.Integer, nullable=True)
+    data_vencimento = db.Column(db.Date, nullable=True)
+    valor_financeiro = db.Column(db.Numeric(12, 2), nullable=True)
+    orcamento_item_id = db.Column(db.Integer, nullable=True)
     observacao = db.Column(db.String(300), nullable=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -52,6 +59,10 @@ class AlmoxarifadoMovimentacao(db.Model):
             'obra_id': self.obra_id,
             'obra_nome': self.obra.nome if self.obra else None,
             'fornecedor': self.fornecedor,
+            'dias_locacao': self.dias_locacao,
+            'data_vencimento': self.data_vencimento.isoformat() if self.data_vencimento else None,
+            'valor_financeiro': float(self.valor_financeiro or 0),
+            'orcamento_item_id': self.orcamento_item_id,
             'usuario_nome': self.usuario.username if self.usuario else None,
             'observacao': self.observacao,
             'data_criacao': self.data_criacao.isoformat() if self.data_criacao else None,
