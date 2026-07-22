@@ -115,7 +115,11 @@ with app.app_context():
             'codigo': 'CAP-01', 'nome': 'Capacete', 'categoria': 'epi', 'unidade': 'un', 'estoque_minimo': 2,
         })
         check('cadastro de item autorizado', response.status_code == 201, response.status_code)
-        item_id = response.get_json()['id']
+        item = response.get_json()
+        item_id = item['id']
+        check('codigo de EPI e gerado automaticamente', item['codigo'].startswith('EP-') and item['codigo'] != 'CAP-01', item['codigo'])
+        response = client.put(f'/almoxarifado/itens/{item_id}', headers=headers_almox, json={'codigo': 'ALTERADO'})
+        check('codigo automatico nao pode ser adulterado', response.status_code == 200 and response.get_json()['codigo'] == item['codigo'], response.get_json().get('codigo'))
         response = client.post('/almoxarifado/movimentacoes', headers=headers_almox, json={
             'item_id': item_id, 'tipo': 'entrada', 'quantidade': 5,
         })
@@ -155,6 +159,13 @@ with app.app_context():
             'item_id': fardamento_id, 'tipo': 'devolucao_obra', 'quantidade': 1, 'obra_id': obra_a.id,
         })
         check('fardamento não aceita retorno ao estoque', response.status_code == 400, response.status_code)
+
+        response = client.post('/almoxarifado/itens', headers=headers_almox, json={
+            'codigo': 'MANUAL-01', 'nome': 'Enxada', 'categoria': 'ferramenta', 'unidade': 'un', 'tamanho': 'M',
+        })
+        enxada = response.get_json() if response.status_code == 201 else {}
+        check('ferramenta recebe prefixo automatico', response.status_code == 201 and enxada.get('codigo', '').startswith('FR-'), enxada.get('codigo'))
+        check('ferramenta nao grava tamanho ou grade', enxada.get('tamanho') is None, enxada.get('tamanho'))
 
         response = client.post('/almoxarifado/itens', headers=headers_almox, json={
             'codigo': 'LOC-INVALIDO', 'nome': 'Equipamento sem tarifa', 'categoria': 'equipamento', 'unidade': 'un',

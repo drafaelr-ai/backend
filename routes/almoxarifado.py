@@ -40,6 +40,14 @@ _TIPOS_MOVIMENTACAO = {
     'locacao_entrada', 'locacao_saida', 'alocacao_obra', 'devolucao_obra',
 }
 _MODALIDADES = {'proprio', 'locacao'}
+_PREFIXOS_CODIGO = {
+    'fardamento': 'FD',
+    'epi': 'EP',
+    'ferramenta': 'FR',
+    'equipamento': 'EQ',
+    'material': 'MT',
+    'outro': 'OT',
+}
 
 
 @almoxarifado_bp.before_request
@@ -94,6 +102,12 @@ def _item_nao_encontrado(item_id):
     return item, None
 
 
+def _codigo_automatico(item):
+    """Código estável, único e legível, definido somente pelo servidor."""
+    prefixo = _PREFIXOS_CODIGO[item.categoria]
+    return f'{prefixo}-{item.id:05d}'
+
+
 def _validar_item(dados, item=None):
     nome = (dados.get('nome') or (item.nome if item else '')).strip()
     if not nome:
@@ -132,8 +146,13 @@ def _validar_item(dados, item=None):
     if modalidade != 'locacao':
         valor_locacao = 0
 
-    codigo = dados.get('codigo') if 'codigo' in dados else (item.codigo if item else None)
-    codigo = str(codigo).strip()[:60] if codigo else None
+    # Código é um identificador interno imutável. Ignorar valores enviados no
+    # cliente impede colisões, adulteração de prefixo e quebra de rastreio.
+    codigo = item.codigo if item else None
+    tamanho = (str(dados.get('tamanho')).strip()[:30]
+               if dados.get('tamanho') is not None else (item.tamanho if item else None))
+    if categoria not in {'fardamento', 'epi'}:
+        tamanho = None
     return {
         'nome': nome,
         'categoria': categoria,
@@ -143,8 +162,7 @@ def _validar_item(dados, item=None):
         'valor_unitario': valor_unitario,
         'valor_locacao_mensal': valor_locacao,
         'codigo': codigo,
-        'tamanho': (str(dados.get('tamanho')).strip()[:30]
-                    if dados.get('tamanho') is not None else (item.tamanho if item else None)),
+        'tamanho': tamanho,
         'descricao': (str(dados.get('descricao')).strip()
                       if dados.get('descricao') is not None else (item.descricao if item else None)),
     }, None
@@ -183,6 +201,8 @@ def criar_item():
             return erro
         item = AlmoxarifadoItem(**valores)
         db.session.add(item)
+        db.session.flush()
+        item.codigo = _codigo_automatico(item)
         db.session.commit()
         return jsonify(item.to_dict(0)), 201
     except IntegrityError:
