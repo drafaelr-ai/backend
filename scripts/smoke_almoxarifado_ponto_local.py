@@ -17,6 +17,7 @@ from flask_jwt_extended import create_access_token
 
 from extensions import db, jwt, limiter
 import models  # noqa: F401  # Registra os modelos no metadata do SQLAlchemy.
+import routes.home as home_routes
 from models.boleto import Boleto
 from models.categoria_mo import CategoriaMO
 from models.funcionario import Funcionario
@@ -88,9 +89,11 @@ with app.app_context():
     sem_modulo = User(username='sem_modulo_smoke', role='comum', modulos_permitidos=['obras'])
     sem_modulo.set_password('senha-smoke')
     sem_modulo.obras_permitidas.append(obra_a)
-    financeiro = User(username='financeiro_smoke', role='administrador', modulos_permitidos=['almoxarifado', 'obras'])
+    admin_leitura = User(username='admin_leitura_smoke', role='comum', modulos_permitidos=['admin'])
+    admin_leitura.set_password('senha-smoke')
+    financeiro = User(username='financeiro_smoke', role='administrador', modulos_permitidos=['almoxarifado', 'obras', 'admin'])
     financeiro.set_password('senha-smoke')
-    db.session.add_all([obra_a, obra_b, categoria, almox, rh, sem_modulo, financeiro])
+    db.session.add_all([obra_a, obra_b, categoria, almox, rh, sem_modulo, admin_leitura, financeiro])
     db.session.flush()
 
     funcionario_a = Funcionario(nome='Ana', categoria_id=categoria.id, obra_id=obra_a.id, salario=2000)
@@ -108,6 +111,7 @@ with app.app_context():
     headers_almox = {'Authorization': f'Bearer {create_access_token(identity=str(almox.id))}'}
     headers_rh = {'Authorization': f'Bearer {create_access_token(identity=str(rh.id))}'}
     headers_sem_modulo = {'Authorization': f'Bearer {create_access_token(identity=str(sem_modulo.id))}'}
+    headers_admin_leitura = {'Authorization': f'Bearer {create_access_token(identity=str(admin_leitura.id))}'}
     headers_financeiro = {'Authorization': f'Bearer {create_access_token(identity=str(financeiro.id), additional_claims={'role': 'administrador'})}'}
 
     with app.test_client() as client:
@@ -283,21 +287,47 @@ with app.app_context():
             valor_parcela=450, data_vencimento=vencimento_pdf, status='Previsto',
         ))
         db.session.commit()
-        response = client.get('/home/pendencias/export-pdf?escopo=vencidas', headers=headers_almox)
-        check('PDF de vencidas é gerado', response.status_code == 200 and response.content_type == 'application/pdf', response.status_code)
-        pdf_saida = os.environ.get('SMOKE_PDF_OUTPUT')
-        if pdf_saida:
-            os.makedirs(os.path.dirname(os.path.abspath(pdf_saida)), exist_ok=True)
-            with open(pdf_saida, 'wb') as arquivo_pdf:
-                arquivo_pdf.write(response.data)
-        leitor_pdf = PdfReader(BytesIO(response.data))
-        texto_pdf = '\n'.join(pagina.extract_text() or '' for pagina in leitor_pdf.pages)
-        descricoes_pdf = [
-            *(f'PDF vencida {indice:02d}' for indice in range(55)),
-            'PDF pagamento futuro vencido', 'PDF boleto vencido', 'PDF parcelado vencido',
-        ]
-        check('PDF exporta todas as vencidas', all(descricao in texto_pdf for descricao in descricoes_pdf), len(descricoes_pdf))
-        check('PDF extenso mantém todas as páginas', len(leitor_pdf.pages) > 1, len(leitor_pdf.pages))
+        # Simula a fonte read-only de Administração: a pendência aparece no
+        # quadro principal e precisa aparecer também no mesmo PDF.
+        original_listar_pendencias = home_routes.admin_read_service.listar_pendencias
+        home_routes.admin_read_service.listar_pendencias = lambda corte: ([{
+            'imovel_id': 999,
+            'imovel_nome': 'Imovel Smoke',
+            'descricao': 'PDF administracao vencida',
+            'valor': 777,
+            'data_vencimento': vencimento_pdf,
+        }], None)
+        try:
+            response_alertas = client.get('/home/alertas?dias=0', headers=headers_financeiro)
+            pendencias_quadro = response_alertas.get_json().get('pendencias', []) if response_alertas.status_code == 200 else []
+            vencidas_quadro = [p['descricao'] for p in pendencias_quadro if p['situacao'] == 'vencido']
+            check('quadro principal exibe vencida de Administração',
+                  any(p['descricao'] == 'PDF administracao vencida' and p['modulo'] == 'admin' for p in pendencias_quadro),
+                  len(pendencias_quadro))
+
+            response = client.get('/home/pendencias/export-pdf?escopo=vencidas', headers=headers_financeiro)
+            check('PDF de vencidas é gerado', response.status_code == 200 and response.content_type == 'application/pdf', response.status_code)
+            pdf_saida = os.environ.get('SMOKE_PDF_OUTPUT')
+            if pdf_saida:
+                os.makedirs(os.path.dirname(os.path.abspath(pdf_saida)), exist_ok=True)
+                with open(pdf_saida, 'wb') as arquivo_pdf:
+                    arquivo_pdf.write(response.data)
+            leitor_pdf = PdfReader(BytesIO(response.data))
+            texto_pdf = '\n'.join(pagina.extract_text() or '' for pagina in leitor_pdf.pages)
+            check('PDF exporta todas as vencidas do quadro principal',
+                  all(descricao in texto_pdf for descricao in vencidas_quadro), len(vencidas_quadro))
+            check('PDF inclui pendência de Administração', 'PDF administracao vencida' in texto_pdf, len(leitor_pdf.pages))
+            check('PDF extenso mantém todas as páginas', len(leitor_pdf.pages) > 1, len(leitor_pdf.pages))
+
+            response_admin = client.get('/home/pendencias/export-pdf?escopo=vencidas', headers=headers_admin_leitura)
+            texto_admin = '\n'.join(
+                pagina.extract_text() or '' for pagina in PdfReader(BytesIO(response_admin.data)).pages
+            ) if response_admin.status_code == 200 else ''
+            check('usuário de Administração sem Obras exporta suas pendências',
+                  response_admin.status_code == 200 and 'PDF administracao vencida' in texto_admin,
+                  response_admin.status_code)
+        finally:
+            home_routes.admin_read_service.listar_pendencias = original_listar_pendencias
 
         response = client.post('/rh/ponto/marcacoes', headers=headers_rh, json={
             'funcionario_id': funcionario_a.id, 'data_hora': '2026-07-22T08:00',

@@ -135,6 +135,33 @@ def _pendencias_obras(user, corte, hoje):
     return itens
 
 
+def _pendencias_visiveis(user, corte, hoje):
+    """Lista as pendências dos módulos liberados ao usuário.
+
+    Esta é a fonte única do quadro "Atenção hoje" e da exportação em PDF.
+    Mantê-los no mesmo caminho evita que o arquivo deixe de fora uma
+    pendência que já está visível no dashboard principal.
+    """
+    pendencias = []
+    aviso_admin = None
+
+    if user_tem_modulo(user, 'obras'):
+        pendencias.extend(_pendencias_obras(user, corte, hoje))
+
+    if user_tem_modulo(user, 'admin'):
+        itens_admin, aviso_admin = admin_read_service.listar_pendencias(corte)
+        for it in itens_admin:
+            venc = it['data_vencimento']
+            pendencias.append(_item('admin', it['imovel_nome'], it['descricao'],
+                                    it['valor'], venc, hoje, it['imovel_id']))
+
+    # Vencidos primeiro (mais antigos no topo), depois por vencimento.
+    pendencias.sort(key=lambda item: (
+        item['situacao'] != 'vencido', item['data_vencimento'], item['modulo'], item['origem'] or '',
+    ))
+    return pendencias, aviso_admin
+
+
 @home_bp.route('/alertas', methods=['GET'])
 @jwt_required()
 def alertas():
@@ -152,21 +179,7 @@ def alertas():
 
         hoje = date.today()
         corte = hoje + timedelta(days=dias)
-        pendencias = []
-        aviso_admin = None
-
-        if user_tem_modulo(user, 'obras'):
-            pendencias.extend(_pendencias_obras(user, corte, hoje))
-
-        if user_tem_modulo(user, 'admin'):
-            itens_admin, aviso_admin = admin_read_service.listar_pendencias(corte)
-            for it in itens_admin:
-                venc = it['data_vencimento']
-                pendencias.append(_item('admin', it['imovel_nome'], it['descricao'],
-                                        it['valor'], venc, hoje, it['imovel_id']))
-
-        # vencidos primeiro (mais antigos no topo), depois por vencimento
-        _ordenar = lambda lst: sorted(lst, key=lambda x: (x['situacao'] != 'vencido', x['data_vencimento']))
+        pendencias, aviso_admin = _pendencias_visiveis(user, corte, hoje)
 
         def _resumo(mod):
             do_mod = [p for p in pendencias if p['modulo'] == mod]
@@ -186,8 +199,6 @@ def alertas():
         # array truncado = número errado mostrado pro usuário. resumo já é
         # a contagem correta (calculada antes de qualquer corte); a lista
         # completa é a fonte de verdade tanto pra ela quanto pro detalhe.
-        pendencias = _ordenar(pendencias)
-
         return jsonify({
             'pendencias': pendencias,
             'resumo': resumo,
@@ -202,12 +213,12 @@ def alertas():
 @home_bp.route('/pendencias/export-pdf', methods=['GET'])
 @jwt_required()
 def export_pendencias_pdf():
-    """PDF das pendências de Obras, agrupado por obra.
+    """PDF das pendências visíveis no dashboard principal.
 
     ?escopo=vencidas (só o que já venceu) ou todas (vencidas + a vencer até
-    o fim do mês corrente) — default 'todas'. Reusa _pendencias_obras, a
-    mesma fonte de /home/alertas, então o total bate com o que já aparece
-    no dashboard."""
+    o fim do mês corrente) — default 'todas'. Reusa a mesma fonte de
+    /home/alertas, então contempla Obras e Administração de acordo com as
+    permissões do usuário."""
     try:
         escopo = request.args.get('escopo', 'todas')
         if escopo not in ('vencidas', 'todas'):
@@ -216,8 +227,8 @@ def export_pendencias_pdf():
         user = get_current_user()
         if not user:
             return jsonify({"erro": "Usuário não encontrado"}), 401
-        if not user_tem_modulo(user, 'obras'):
-            return jsonify({"erro": "Acesso negado: você não tem permissão para o módulo Obras."}), 403
+        if not (user_tem_modulo(user, 'obras') or user_tem_modulo(user, 'admin')):
+            return jsonify({"erro": "Acesso negado: você não tem permissão para pendências."}), 403
 
         hoje = date.today()
         if escopo == 'todas':
@@ -225,17 +236,18 @@ def export_pendencias_pdf():
         else:
             corte = hoje
 
-        itens = _pendencias_obras(user, corte, hoje)
+        itens, _ = _pendencias_visiveis(user, corte, hoje)
         if escopo == 'vencidas':
             itens = [i for i in itens if i['situacao'] == 'vencido']
-        itens.sort(key=lambda x: (x['origem'] or '', x['data_vencimento']))
+        itens.sort(key=lambda item: (item['modulo'], item['origem'] or '', item['data_vencimento']))
 
         if not itens:
             return jsonify({"mensagem": "Nenhuma pendência encontrada para esse filtro"}), 200
 
-        por_obra = {}
+        por_origem = {}
         for it in itens:
-            por_obra.setdefault(it['origem'] or 'Sem obra', []).append(it)
+            chave = (it['modulo'], it['origem'] or 'Sem origem')
+            por_origem.setdefault(chave, []).append(it)
         total_geral = sum(i['valor'] for i in itens)
 
         buffer = io.BytesIO()
@@ -243,18 +255,20 @@ def export_pendencias_pdf():
                                 leftMargin=2 * cm, rightMargin=2 * cm)
         elements = []
         styles = getSampleStyleSheet()
+        gerado_em = datetime.now().strftime('%d/%m/%Y às %H:%M')
 
         def desenhar_rodape(canvas, documento):
             canvas.saveState()
             canvas.setFont('Helvetica', 8)
             canvas.setFillColor(colors.HexColor('#6B7280'))
+            canvas.drawString(2 * cm, 1 * cm, f'Gerado em: {gerado_em}')
             canvas.drawRightString(A4[0] - 2 * cm, 1 * cm, f'Página {documento.page}')
             canvas.restoreState()
 
         titulo = ('Relatório de Pendências Vencidas' if escopo == 'vencidas'
                   else 'Relatório de Pendências (Vencidas + a Vencer no Mês)')
         elements.append(Paragraph(
-            f"<b>{titulo}</b><br/><br/>Pendências: {len(itens)} | Obras: {len(por_obra)} — Total geral: {formatar_real(total_geral)}",
+            f"<b>{titulo}</b><br/><br/>Pendências: {len(itens)} | Origens: {len(por_origem)} — Total geral: {formatar_real(total_geral)}",
             styles['Title']))
         elements.append(Spacer(1, 0.8 * cm))
 
@@ -262,16 +276,17 @@ def export_pendencias_pdf():
                       'vence_hoje': lambda it: 'Vence hoje',
                       'a_vencer': lambda it: f"Vence em {it['dias']}d"}
 
-        obras_nomes = list(por_obra.keys())
-        for idx, obra_nome in enumerate(obras_nomes):
-            obra_itens = por_obra[obra_nome]
-            total_obra = sum(i['valor'] for i in obra_itens)
+        origens = list(por_origem.keys())
+        for idx, (modulo, origem_nome) in enumerate(origens):
+            origem_itens = por_origem[(modulo, origem_nome)]
+            total_origem = sum(i['valor'] for i in origem_itens)
+            tipo_origem = 'Obra' if modulo == 'obras' else 'Imóvel'
             elements.append(Paragraph(
-                f"<b>Obra: {obra_nome}</b> | Pendências: {len(obra_itens)} | Total: {formatar_real(total_obra)}", styles['Heading2']))
+                f"<b>{tipo_origem}: {origem_nome}</b> | Pendências: {len(origem_itens)} | Total: {formatar_real(total_origem)}", styles['Heading2']))
             elements.append(Spacer(1, 0.3 * cm))
 
             data = [['Vencimento', 'Situação', 'Descrição', 'Valor']]
-            for it in obra_itens:
+            for it in origem_itens:
                 venc = it['data_vencimento']
                 venc_br = f"{venc[8:10]}/{venc[5:7]}/{venc[0:4]}"
                 sit_fn = _SIT_LABEL.get(it['situacao'])
@@ -281,7 +296,7 @@ def export_pendencias_pdf():
                     (it['descricao'] or '')[:50],
                     formatar_real(it['valor']),
                 ])
-            data.append(['', '', 'SUBTOTAL', formatar_real(total_obra)])
+            data.append(['', '', 'SUBTOTAL', formatar_real(total_origem)])
 
             # LongTable divide listas extensas entre páginas sem perder linhas
             # e repete o cabeçalho em cada página do relatório.
@@ -309,13 +324,8 @@ def export_pendencias_pdf():
                 ('ALIGN', (2, -1), (3, -1), 'RIGHT'),
             ]))
             elements.append(table)
-            if idx < len(obras_nomes) - 1:
+            if idx < len(origens) - 1:
                 elements.append(Spacer(1, 0.8 * cm))
-
-        elements.append(Spacer(1, 1 * cm))
-        elements.append(Paragraph(f"<b>TOTAL GERAL: {formatar_real(total_geral)}</b>", styles['Heading1']))
-        elements.append(Spacer(1, 0.5 * cm))
-        elements.append(Paragraph(f"Gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}", styles['Normal']))
 
         doc.build(elements, onFirstPage=desenhar_rodape, onLaterPages=desenhar_rodape)
         buffer.seek(0)
