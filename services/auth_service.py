@@ -15,7 +15,7 @@ def get_current_user():
     return db.session.get(User, int(user_id_str))
 
 
-MODULOS_VALIDOS = ('obras', 'admin', 'rh', 'frota', 'solicitacoes')
+MODULOS_VALIDOS = ('obras', 'admin', 'rh', 'frota', 'solicitacoes', 'almoxarifado')
 
 
 def user_tem_modulo(user, modulo):

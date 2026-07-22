@@ -661,6 +661,36 @@ def run_auto_migration():
                     "convencao_valor, funcionario, pagamento_salario, encargo)")
 
         # =================================================================
+        # PONTO ELETRÔNICO (dentro de RH)
+        # As batidas são preservadas em tabela própria; a folha é calculada a
+        # partir delas e da jornada por funcionário. A referência externa
+        # permite receber NSR do REP de forma idempotente.
+        # =================================================================
+        logger.info("📝 PONTO: garantindo jornada e marcações eletrônicas...")
+        cur.execute("ALTER TABLE funcionario ADD COLUMN IF NOT EXISTS carga_horaria_diaria NUMERIC(5,2) NOT NULL DEFAULT 8;")
+        cur.execute("ALTER TABLE funcionario ADD COLUMN IF NOT EXISTS horario_entrada TIME;")
+        cur.execute("ALTER TABLE funcionario ADD COLUMN IF NOT EXISTS intervalo_minutos INTEGER NOT NULL DEFAULT 60;")
+        cur.execute("ALTER TABLE funcionario ADD COLUMN IF NOT EXISTS dias_trabalho JSONB DEFAULT '[0,1,2,3,4]'::jsonb;")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ponto_marcacao (
+                id                  SERIAL PRIMARY KEY,
+                funcionario_id      INTEGER NOT NULL REFERENCES funcionario(id) ON DELETE CASCADE,
+                data_hora           TIMESTAMP NOT NULL,
+                tipo                VARCHAR(30) NOT NULL DEFAULT 'entrada',
+                origem              VARCHAR(20) NOT NULL DEFAULT 'manual',
+                referencia_externa  VARCHAR(120),
+                observacao          VARCHAR(300),
+                registrada_por_id   INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                data_criacao        TIMESTAMP DEFAULT NOW()
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ponto_marcacao_referencia
+                ON ponto_marcacao (referencia_externa) WHERE referencia_externa IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_ponto_marcacao_funcionario_data
+                ON ponto_marcacao (funcionario_id, data_hora);
+        """)
+        logger.info("✅ PONTO: jornada e tabela ponto_marcacao garantidas")
+
+        # =================================================================
         # MÓDULO FROTA — 7 tabelas (aditivo, idempotente)
         # Ordem de dependência: frota_condutor → frota_veiculo →
         # frota_movimentacao → frota_documento → frota_manutencao →
@@ -893,6 +923,52 @@ def run_auto_migration():
 
         logger.info("✅ SOLICITAÇÕES: 4 tabelas garantidas (solicitacao_compra, "
                     "solicitacao_item, solicitacao_cotacao, solicitacao_config)")
+
+        # =================================================================
+        # MÓDULO ALMOXARIFADO (externo) — catálogo e histórico de estoque.
+        # Não há coluna de saldo: cada saldo é derivado das movimentações, o
+        # que mantém entradas, entregas de EPI/fardamento e ajustes auditáveis.
+        # =================================================================
+        logger.info("📝 ALMOXARIFADO: garantindo catálogo e movimentações...")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS almoxarifado_item (
+                id              SERIAL PRIMARY KEY,
+                codigo          VARCHAR(60),
+                nome            VARCHAR(160) NOT NULL,
+                categoria       VARCHAR(30) NOT NULL DEFAULT 'outro',
+                unidade         VARCHAR(20) NOT NULL DEFAULT 'un',
+                tamanho         VARCHAR(30),
+                estoque_minimo  NUMERIC(12,2) NOT NULL DEFAULT 0,
+                descricao       TEXT,
+                ativo           BOOLEAN NOT NULL DEFAULT TRUE,
+                data_criacao    TIMESTAMP DEFAULT NOW()
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_almoxarifado_item_codigo
+                ON almoxarifado_item (codigo) WHERE codigo IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_almoxarifado_item_nome ON almoxarifado_item (nome);
+            CREATE INDEX IF NOT EXISTS idx_almoxarifado_item_ativo ON almoxarifado_item (ativo);
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS almoxarifado_movimentacao (
+                id                  SERIAL PRIMARY KEY,
+                item_id             INTEGER NOT NULL REFERENCES almoxarifado_item(id) ON DELETE CASCADE,
+                tipo                VARCHAR(20) NOT NULL,
+                quantidade          NUMERIC(12,2) NOT NULL,
+                data_movimentacao   DATE NOT NULL,
+                funcionario_id      INTEGER REFERENCES funcionario(id) ON DELETE SET NULL,
+                obra_id             INTEGER REFERENCES obra(id) ON DELETE SET NULL,
+                usuario_id          INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                observacao          VARCHAR(300),
+                data_criacao        TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_almoxarifado_mov_item_data
+                ON almoxarifado_movimentacao (item_id, data_movimentacao);
+            CREATE INDEX IF NOT EXISTS idx_almoxarifado_mov_funcionario
+                ON almoxarifado_movimentacao (funcionario_id);
+            CREATE INDEX IF NOT EXISTS idx_almoxarifado_mov_obra
+                ON almoxarifado_movimentacao (obra_id);
+        """)
+        logger.info("✅ ALMOXARIFADO: tabelas almoxarifado_item e movimentacao garantidas")
 
         # =================================================================
         # ACESSOS POR MÓDULO (aditivo, idempotente)

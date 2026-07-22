@@ -13,7 +13,7 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     role = db.Column(db.String(20), nullable=False, default='comum')
-    # Módulos liberados ('obras','admin','rh','frota'). NULL = todos (default).
+    # Módulos liberados. NULL = todos (default).
     # Master ignora a lista (sempre tem tudo); ver services.auth_service.user_tem_modulo.
     modulos_permitidos = db.Column(db.JSON, nullable=True)
     obras_permitidas = db.relationship('Obra', secondary=user_obra_association, lazy='subquery',

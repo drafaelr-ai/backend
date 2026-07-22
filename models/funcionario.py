@@ -24,6 +24,12 @@ class Funcionario(db.Model):
     data_admissao = db.Column(db.Date, nullable=True)
     data_demissao = db.Column(db.Date, nullable=True)
     status = db.Column(db.String(20), nullable=False, default='ativo')  # ativo | inativo | demitido
+    # Jornada usada pela apuração do ponto. Defaults preservam os funcionários
+    # existentes e podem ser ajustados no módulo RH/Ponto.
+    carga_horaria_diaria = db.Column(db.Numeric(5, 2), nullable=False, default=8)
+    horario_entrada = db.Column(db.Time, nullable=True)
+    intervalo_minutos = db.Column(db.Integer, nullable=False, default=60)
+    dias_trabalho = db.Column(db.JSON, nullable=True, default=lambda: [0, 1, 2, 3, 4])
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
 
     categoria = db.relationship('CategoriaMO', lazy=True)
@@ -61,6 +67,10 @@ class Funcionario(db.Model):
             'data_admissao': self.data_admissao.isoformat() if self.data_admissao else None,
             'data_demissao': self.data_demissao.isoformat() if self.data_demissao else None,
             'status': self.status,
+            'carga_horaria_diaria': float(self.carga_horaria_diaria or 8),
+            'horario_entrada': self.horario_entrada.strftime('%H:%M') if self.horario_entrada else '08:00',
+            'intervalo_minutos': self.intervalo_minutos if self.intervalo_minutos is not None else 60,
+            'dias_trabalho': self.dias_trabalho if self.dias_trabalho is not None else [0, 1, 2, 3, 4],
             'acima_do_piso': acima_do_piso,
             'data_criacao': self.data_criacao.isoformat() if self.data_criacao else None,
         }

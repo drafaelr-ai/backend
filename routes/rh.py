@@ -5,7 +5,7 @@ import io
 import csv
 import json
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, time, timedelta
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, verify_jwt_in_request
@@ -19,6 +19,7 @@ from models.convencao_valor import ConvencaoValor
 from models.funcionario import Funcionario
 from models.pagamento_salario import PagamentoSalario
 from models.encargo import Encargo
+from models.ponto_marcacao import PontoMarcacao
 from models.obra import Obra
 from services import cct_parser_service, rh_service, storage_service
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
@@ -1134,3 +1135,300 @@ def obter_dashboard():
     except Exception as e:
         logger.exception("Erro em GET /rh/dashboard")
         return jsonify({"erro": "Erro ao montar dashboard"}), 500
+
+
+# ---------------------------------------------------------------- ponto eletrônico
+
+_PONTO_TIPOS = {'entrada', 'saida', 'intervalo_inicio', 'intervalo_fim'}
+_PONTO_ORIGENS = {'manual', 'relogio', 'importacao'}
+
+
+def _parse_datetime(valor):
+    if not valor:
+        return None
+    if isinstance(valor, datetime):
+        return valor
+    try:
+        return datetime.fromisoformat(str(valor).replace('Z', '+00:00')).replace(tzinfo=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_time(valor):
+    if valor is None or valor == '':
+        return None
+    if isinstance(valor, time):
+        return valor
+    try:
+        return time.fromisoformat(str(valor)[:5])
+    except (TypeError, ValueError):
+        return None
+
+
+def _funcionario_ponto(func_id):
+    funcionario = db.session.get(Funcionario, func_id)
+    if not funcionario:
+        return None, (jsonify({'erro': 'Funcionário não encontrado'}), 404)
+    if not user_has_access_to_obra(get_current_user(), funcionario.obra_id):
+        return None, (jsonify({'erro': 'Acesso negado a este funcionário'}), 403)
+    return funcionario, None
+
+
+def _jornada_dict(funcionario):
+    dias = funcionario.dias_trabalho if isinstance(funcionario.dias_trabalho, list) else [0, 1, 2, 3, 4]
+    dias = sorted({int(d) for d in dias if str(d).isdigit() and 0 <= int(d) <= 6})
+    return {
+        'funcionario_id': funcionario.id,
+        'carga_horaria_diaria': float(funcionario.carga_horaria_diaria or 8),
+        'horario_entrada': funcionario.horario_entrada.strftime('%H:%M') if funcionario.horario_entrada else '08:00',
+        'intervalo_minutos': funcionario.intervalo_minutos if funcionario.intervalo_minutos is not None else 60,
+        'dias_trabalho': dias or [0, 1, 2, 3, 4],
+    }
+
+
+def _formatar_minutos(minutos):
+    sinal = '-' if minutos < 0 else ''
+    minutos = abs(int(round(minutos)))
+    return f'{sinal}{minutos // 60:02d}:{minutos % 60:02d}'
+
+
+def _apurar_dia(data_ref, marcacoes, jornada):
+    """Calcula horas entre a primeira entrada e a última saída do dia.
+
+    Intervalos explicitamente marcados são descontados. Caso exista apenas uma
+    batida, a folha mostra "incompleto" em vez de assumir uma saída.
+    """
+    marcacoes = sorted(marcacoes, key=lambda marcacao: marcacao.data_hora)
+    esperado = int(round(jornada['carga_horaria_diaria'] * 60)) if data_ref.weekday() in jornada['dias_trabalho'] else 0
+    if not marcacoes:
+        return {
+            'data': data_ref.isoformat(), 'dia_semana': data_ref.strftime('%A'),
+            'marcacoes': [], 'entrada': None, 'saida': None,
+            'trabalhado_minutos': 0, 'esperado_minutos': esperado, 'saldo_minutos': -esperado,
+            'atraso_minutos': 0, 'status': 'sem_marcacao' if esperado else 'folga',
+        }
+
+    entrada = next((m for m in marcacoes if m.tipo == 'entrada'), marcacoes[0])
+    saida = next((m for m in reversed(marcacoes) if m.tipo == 'saida'), None)
+    inicio_intervalo = None
+    intervalo_minutos = 0
+    for marcacao in marcacoes:
+        if marcacao.tipo == 'intervalo_inicio':
+            inicio_intervalo = marcacao.data_hora
+        elif marcacao.tipo == 'intervalo_fim' and inicio_intervalo and marcacao.data_hora >= inicio_intervalo:
+            intervalo_minutos += int((marcacao.data_hora - inicio_intervalo).total_seconds() // 60)
+            inicio_intervalo = None
+
+    trabalhado = 0
+    if saida and saida.data_hora >= entrada.data_hora:
+        trabalhado = max(0, int((saida.data_hora - entrada.data_hora).total_seconds() // 60) - intervalo_minutos)
+    horario_previsto = _parse_time(jornada['horario_entrada']) or time(8, 0)
+    previsto = datetime.combine(data_ref, horario_previsto)
+    atraso = max(0, int((entrada.data_hora - previsto).total_seconds() // 60))
+    saldo = trabalhado - esperado
+    if not saida:
+        status = 'incompleto'
+    elif saldo > 0:
+        status = 'hora_extra'
+    elif saldo < 0:
+        status = 'pendencia'
+    else:
+        status = 'ok'
+    return {
+        'data': data_ref.isoformat(), 'dia_semana': data_ref.strftime('%A'),
+        'marcacoes': [m.to_dict() for m in marcacoes],
+        'entrada': entrada.data_hora.strftime('%H:%M'),
+        'saida': saida.data_hora.strftime('%H:%M') if saida else None,
+        'trabalhado_minutos': trabalhado, 'esperado_minutos': esperado,
+        'saldo_minutos': saldo, 'atraso_minutos': atraso, 'status': status,
+    }
+
+
+def _periodo_competencia(competencia):
+    try:
+        ano, mes = [int(valor) for valor in competencia.split('-', 1)]
+        inicio = date(ano, mes, 1)
+        fim = date(ano + 1, 1, 1) - timedelta(days=1) if mes == 12 else date(ano, mes + 1, 1) - timedelta(days=1)
+        return inicio, fim
+    except (AttributeError, TypeError, ValueError):
+        return None, None
+
+
+@rh_bp.route('/ponto/marcacoes', methods=['GET'])
+@jwt_required()
+def listar_marcacoes_ponto():
+    try:
+        funcionario_id, erro = _parse_int_arg('funcionario_id', request.args.get('funcionario_id'))
+        if erro:
+            return erro
+        funcionario, erro = _funcionario_ponto(funcionario_id)
+        if erro:
+            return erro
+        inicio = _parse_date(request.args.get('data_inicio')) if request.args.get('data_inicio') else None
+        fim = _parse_date(request.args.get('data_fim')) if request.args.get('data_fim') else None
+        query = PontoMarcacao.query.filter(PontoMarcacao.funcionario_id == funcionario.id)
+        if inicio:
+            query = query.filter(PontoMarcacao.data_hora >= datetime.combine(inicio, time.min))
+        if fim:
+            query = query.filter(PontoMarcacao.data_hora < datetime.combine(fim + timedelta(days=1), time.min))
+        marcacoes = query.order_by(PontoMarcacao.data_hora.desc()).limit(500).all()
+        return jsonify([m.to_dict() for m in marcacoes]), 200
+    except Exception:
+        logger.exception('Erro em GET /rh/ponto/marcacoes')
+        return jsonify({'erro': 'Erro ao listar batidas de ponto'}), 500
+
+
+@rh_bp.route('/ponto/marcacoes', methods=['POST'])
+@jwt_required()
+def criar_marcacao_ponto():
+    try:
+        dados = request.get_json(silent=True) or {}
+        funcionario_id, erro = _parse_int_arg('funcionario_id', dados.get('funcionario_id'))
+        if erro:
+            return erro
+        funcionario, erro = _funcionario_ponto(funcionario_id)
+        if erro:
+            return erro
+        data_hora = _parse_datetime(dados.get('data_hora'))
+        if not data_hora:
+            return jsonify({'erro': 'data_hora inválida'}), 400
+        tipo = (dados.get('tipo') or 'entrada').strip().lower()
+        origem = (dados.get('origem') or 'manual').strip().lower()
+        if tipo not in _PONTO_TIPOS:
+            return jsonify({'erro': 'tipo inválido'}), 400
+        if origem not in _PONTO_ORIGENS:
+            return jsonify({'erro': 'origem inválida'}), 400
+        referencia_externa = (dados.get('referencia_externa') or '').strip()[:120] or None
+        # Esta rota é usada pelo painel humano de RH. Ela não pode aceitar
+        # registros que se apresentem como vindos de um relógio: uma integração
+        # de REP deve usar credencial própria e trilha de auditoria específica.
+        # Assim, um token de usuário não consegue forjar uma batida de hardware.
+        if origem != 'manual' or referencia_externa:
+            return jsonify({
+                'erro': 'Importações de relógio exigem uma integração autenticada e não podem ser enviadas pelo painel manual',
+            }), 403
+        marcacao = PontoMarcacao(
+            funcionario_id=funcionario.id, data_hora=data_hora, tipo=tipo, origem=origem,
+            referencia_externa=referencia_externa,
+            observacao=(dados.get('observacao') or '').strip()[:300] or None,
+            registrada_por_id=get_current_user().id,
+        )
+        db.session.add(marcacao)
+        db.session.commit()
+        return jsonify(marcacao.to_dict()), 201
+    except Exception:
+        db.session.rollback()
+        logger.exception('Erro em POST /rh/ponto/marcacoes')
+        return jsonify({'erro': 'Erro ao registrar batida de ponto'}), 500
+
+
+@rh_bp.route('/ponto/marcacoes/<int:marcacao_id>', methods=['DELETE'])
+@jwt_required()
+def remover_marcacao_ponto(marcacao_id):
+    try:
+        marcacao = db.session.get(PontoMarcacao, marcacao_id)
+        if not marcacao:
+            return jsonify({'erro': 'Batida não encontrada'}), 404
+        funcionario, erro = _funcionario_ponto(marcacao.funcionario_id)
+        if erro:
+            return erro
+        if marcacao.origem != 'manual':
+            return jsonify({'erro': 'Batidas importadas do relógio não podem ser removidas manualmente'}), 400
+        db.session.delete(marcacao)
+        db.session.commit()
+        return jsonify({'ok': True}), 200
+    except Exception:
+        db.session.rollback()
+        logger.exception('Erro em DELETE /rh/ponto/marcacoes/<id>')
+        return jsonify({'erro': 'Erro ao remover batida de ponto'}), 500
+
+
+@rh_bp.route('/ponto/funcionarios/<int:funcionario_id>/jornada', methods=['GET', 'PUT'])
+@jwt_required()
+def jornada_funcionario_ponto(funcionario_id):
+    try:
+        funcionario, erro = _funcionario_ponto(funcionario_id)
+        if erro:
+            return erro
+        if request.method == 'GET':
+            return jsonify(_jornada_dict(funcionario)), 200
+
+        dados = request.get_json(silent=True) or {}
+        carga = _to_num(dados.get('carga_horaria_diaria'))
+        if carga is None or not 0 < carga <= 24:
+            return jsonify({'erro': 'carga_horaria_diaria deve estar entre 0 e 24'}), 400
+        horario = _parse_time(dados.get('horario_entrada'))
+        if not horario:
+            return jsonify({'erro': 'horario_entrada inválido'}), 400
+        try:
+            intervalo = int(dados.get('intervalo_minutos'))
+        except (TypeError, ValueError):
+            return jsonify({'erro': 'intervalo_minutos inválido'}), 400
+        dias = dados.get('dias_trabalho')
+        if not isinstance(dias, list) or not dias:
+            return jsonify({'erro': 'dias_trabalho deve conter ao menos um dia'}), 400
+        try:
+            dias = sorted({int(dia) for dia in dias})
+        except (TypeError, ValueError):
+            return jsonify({'erro': 'dias_trabalho inválido'}), 400
+        if any(dia < 0 or dia > 6 for dia in dias) or intervalo < 0 or intervalo > 600:
+            return jsonify({'erro': 'Dados de jornada fora do intervalo permitido'}), 400
+        funcionario.carga_horaria_diaria = carga
+        funcionario.horario_entrada = horario
+        funcionario.intervalo_minutos = intervalo
+        funcionario.dias_trabalho = dias
+        db.session.commit()
+        return jsonify(_jornada_dict(funcionario)), 200
+    except Exception:
+        db.session.rollback()
+        logger.exception('Erro em /rh/ponto/funcionarios/<id>/jornada')
+        return jsonify({'erro': 'Erro ao salvar jornada'}), 500
+
+
+@rh_bp.route('/ponto/folha', methods=['GET'])
+@jwt_required()
+def gerar_folha_ponto():
+    try:
+        competencia = request.args.get('competencia') or date.today().strftime('%Y-%m')
+        inicio, fim = _periodo_competencia(competencia)
+        if not inicio:
+            return jsonify({'erro': 'competencia deve ter o formato YYYY-MM'}), 400
+        funcionario_id, erro = _parse_int_arg('funcionario_id', request.args.get('funcionario_id'))
+        if erro:
+            return erro
+        funcionario, erro = _funcionario_ponto(funcionario_id)
+        if erro:
+            return erro
+        marcacoes = (PontoMarcacao.query.filter(
+            PontoMarcacao.funcionario_id == funcionario.id,
+            PontoMarcacao.data_hora >= datetime.combine(inicio, time.min),
+            PontoMarcacao.data_hora < datetime.combine(fim + timedelta(days=1), time.min),
+        ).order_by(PontoMarcacao.data_hora).all())
+        por_data = {}
+        for marcacao in marcacoes:
+            por_data.setdefault(marcacao.data_hora.date(), []).append(marcacao)
+        jornada = _jornada_dict(funcionario)
+        dias = []
+        cursor = inicio
+        while cursor <= fim:
+            dias.append(_apurar_dia(cursor, por_data.get(cursor, []), jornada))
+            cursor += timedelta(days=1)
+        total_trabalhado = sum(dia['trabalhado_minutos'] for dia in dias)
+        total_esperado = sum(dia['esperado_minutos'] for dia in dias)
+        total_atraso = sum(dia['atraso_minutos'] for dia in dias)
+        return jsonify({
+            'competencia': competencia,
+            'funcionario': funcionario.to_dict(),
+            'jornada': jornada,
+            'dias': dias,
+            'resumo': {
+                'trabalhado_minutos': total_trabalhado,
+                'esperado_minutos': total_esperado,
+                'saldo_minutos': total_trabalhado - total_esperado,
+                'atraso_minutos': total_atraso,
+                'dias_com_pendencia': sum(1 for dia in dias if dia['status'] in {'pendencia', 'incompleto', 'sem_marcacao'}),
+            },
+        }), 200
+    except Exception:
+        logger.exception('Erro em GET /rh/ponto/folha')
+        return jsonify({'erro': 'Erro ao gerar folha de ponto'}), 500

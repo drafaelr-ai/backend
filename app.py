@@ -53,6 +53,7 @@ from models.convencao_valor import ConvencaoValor     # noqa: F401
 from models.funcionario import Funcionario            # noqa: F401
 from models.pagamento_salario import PagamentoSalario # noqa: F401
 from models.encargo import Encargo                    # noqa: F401
+from models.ponto_marcacao import PontoMarcacao       # noqa: F401
 # Módulo Frota
 from models.frota_condutor import FrotaCondutor       # noqa: F401
 from models.frota_veiculo import FrotaVeiculo         # noqa: F401
@@ -66,12 +67,15 @@ from models.solicitacao_compra import SolicitacaoCompra    # noqa: F401
 from models.solicitacao_item import SolicitacaoItem        # noqa: F401
 from models.solicitacao_cotacao import SolicitacaoCotacao  # noqa: F401
 from models.solicitacao_config import SolicitacaoConfig    # noqa: F401
+# Módulo Almoxarifado
+from models.almoxarifado_item import AlmoxarifadoItem  # noqa: F401
+from models.almoxarifado_movimentacao import AlmoxarifadoMovimentacao  # noqa: F401
 
 from routes import (
     notificacoes_bp, bi_bp, diario_bp, auth_bp, admin_bp, sid_bp,
     caixa_bp, servicos_bp, boletos_bp, lancamentos_bp,
     cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
-    rh_bp, frota_bp, solicitacoes_bp, home_bp,
+    rh_bp, frota_bp, solicitacoes_bp, almoxarifado_bp, home_bp,
 )
 
 setup_logging()
@@ -161,6 +165,7 @@ def create_app(config_class=Config):
     app.register_blueprint(rh_bp)
     app.register_blueprint(frota_bp)
     app.register_blueprint(solicitacoes_bp)
+    app.register_blueprint(almoxarifado_bp)
     app.register_blueprint(home_bp)
 
     return app

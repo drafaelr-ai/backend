@@ -31,6 +31,7 @@ from .convencao_valor import ConvencaoValor  # noqa: F401
 from .funcionario import Funcionario  # noqa: F401
 from .pagamento_salario import PagamentoSalario  # noqa: F401
 from .encargo import Encargo  # noqa: F401
+from .ponto_marcacao import PontoMarcacao  # noqa: F401
 # --- Módulo Frota ---
 from .frota_condutor import FrotaCondutor  # noqa: F401
 from .frota_veiculo import FrotaVeiculo  # noqa: F401
@@ -44,3 +45,6 @@ from .solicitacao_compra import SolicitacaoCompra  # noqa: F401
 from .solicitacao_item import SolicitacaoItem  # noqa: F401
 from .solicitacao_cotacao import SolicitacaoCotacao  # noqa: F401
 from .solicitacao_config import SolicitacaoConfig  # noqa: F401
+# --- Módulo Almoxarifado ---
+from .almoxarifado_item import AlmoxarifadoItem  # noqa: F401
+from .almoxarifado_movimentacao import AlmoxarifadoMovimentacao  # noqa: F401
