@@ -484,6 +484,27 @@ def criar_movimentacao(veiculo_id):
         if erro:
             return erro
 
+        operacao = (dados.get('operacao') or 'movimentacao').strip().lower()
+        if operacao not in {'movimentacao', 'cessao_obra', 'retorno_obra'}:
+            return jsonify({'erro': 'operacao invalida'}), 400
+        if operacao == 'cessao_obra' and destino['local_tipo'] != 'obra':
+            return jsonify({'erro': 'A cessao deve ter uma obra como destino'}), 400
+        if operacao == 'cessao_obra' and veiculo.local_tipo == 'obra':
+            return jsonify({'erro': 'Veiculo ja esta cedido a uma obra; use movimentacao para transferi-lo'}), 400
+        if operacao == 'retorno_obra':
+            if veiculo.local_tipo != 'obra':
+                return jsonify({'erro': 'Somente veiculo cedido a uma obra pode retornar'}), 400
+            if destino['local_tipo'] is not None:
+                return jsonify({'erro': 'O retorno da obra deve ser para o patio central'}), 400
+
+        observacao = (dados.get('observacao') or '').strip() or None
+        rotulo_operacao = {
+            'cessao_obra': 'Cessao para obra',
+            'retorno_obra': 'Retorno da obra ao patio central',
+        }.get(operacao)
+        if rotulo_operacao:
+            observacao = f'{rotulo_operacao}{": " + observacao if observacao else ""}'[:300]
+
         mov = FrotaMovimentacao(
             veiculo_id=veiculo.id,
             destino_tipo=(dados.get('destino_tipo') or '').strip(),
@@ -491,7 +512,7 @@ def criar_movimentacao(veiculo_id):
             imovel_id=destino['imovel_id'],
             destino_nome=destino['nome'],
             data_movimentacao=_parse_date(dados.get('data_movimentacao')) or date.today(),
-            observacao=(dados.get('observacao') or '').strip() or None,
+            observacao=observacao,
         )
         _aplicar_destino(veiculo, destino)
         db.session.add(mov)

@@ -8,6 +8,8 @@ from datetime import date, datetime
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, verify_jwt_in_request
+from defusedxml import ElementTree as DefusedElementTree
+from defusedxml.common import DefusedXmlException
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload
@@ -48,6 +50,8 @@ _PREFIXOS_CODIGO = {
     'material': 'MT',
     'outro': 'OT',
 }
+_MAX_NF_XML_BYTES = 5 * 1024 * 1024
+_MAX_LINHAS_ENTRADA = 100
 
 
 @almoxarifado_bp.before_request
@@ -93,6 +97,88 @@ def _parse_date(valor):
         return datetime.fromisoformat(str(valor)[:10]).date()
     except (TypeError, ValueError):
         return None
+
+
+def _xml_local_name(elemento):
+    """Nome sem namespace de um elemento XML de NF-e/NFC-e."""
+    return elemento.tag.rsplit('}', 1)[-1]
+
+
+def _xml_texto(elemento, nome):
+    for filho in elemento.iter():
+        if _xml_local_name(filho) == nome and filho.text:
+            return filho.text.strip()
+    return None
+
+
+def _ler_nota_fiscal_xml(arquivo):
+    """Extrai somente os campos de produto de XML NF-e/NFC-e.
+
+    O XML não é salvo e o parser bloqueia entidades externas. O usuário ainda
+    revisa todas as linhas antes de registrar a entrada definitiva.
+    """
+    nome_arquivo = (arquivo.filename or '').strip()
+    if not nome_arquivo.lower().endswith('.xml'):
+        return None, 'Envie o XML da NF-e ou NFC-e (.xml).'
+
+    conteudo = arquivo.read(_MAX_NF_XML_BYTES + 1)
+    if not conteudo:
+        return None, 'O arquivo da nota fiscal está vazio.'
+    if len(conteudo) > _MAX_NF_XML_BYTES:
+        return None, 'O XML da nota fiscal excede o limite de 5 MB.'
+
+    try:
+        raiz = DefusedElementTree.fromstring(conteudo)
+    except (DefusedXmlException, DefusedElementTree.ParseError, ValueError, UnicodeError):
+        return None, 'Não foi possível ler este XML de nota fiscal.'
+
+    emitente = None
+    numero = None
+    serie = None
+    data_emissao = None
+    for elemento in raiz.iter():
+        nome = _xml_local_name(elemento)
+        if nome == 'emit' and not emitente:
+            emitente = _xml_texto(elemento, 'xNome')
+        elif nome == 'ide':
+            numero = numero or _xml_texto(elemento, 'nNF')
+            serie = serie or _xml_texto(elemento, 'serie')
+            data_emissao = data_emissao or _xml_texto(elemento, 'dhEmi') or _xml_texto(elemento, 'dEmi')
+
+    itens = []
+    for detalhe in raiz.iter():
+        if _xml_local_name(detalhe) != 'det':
+            continue
+        produto = next((filho for filho in detalhe if _xml_local_name(filho) == 'prod'), None)
+        if produto is None:
+            continue
+        nome = _xml_texto(produto, 'xProd')
+        quantidade = _to_num(_xml_texto(produto, 'qCom'))
+        if not nome or quantidade is None or quantidade <= 0:
+            continue
+        itens.append({
+            'nome': nome[:160],
+            'quantidade': quantidade,
+            'unidade': (_xml_texto(produto, 'uCom') or 'un').lower()[:20],
+            'valor_unitario': _to_num(_xml_texto(produto, 'vUnCom')) or 0,
+            'codigo_fornecedor': (_xml_texto(produto, 'cProd') or '')[:60],
+            'ncm': (_xml_texto(produto, 'NCM') or '')[:20],
+        })
+        if len(itens) > _MAX_LINHAS_ENTRADA:
+            return None, f'A nota possui mais de {_MAX_LINHAS_ENTRADA} itens; importe em lotes menores.'
+
+    if not itens:
+        return None, 'Não encontramos itens válidos neste XML de nota fiscal.'
+    data_emissao = (data_emissao or '')[:10]
+    if not _parse_date(data_emissao):
+        data_emissao = None
+    return {
+        'fornecedor': (emitente or '')[:160],
+        'numero': (numero or '')[:30],
+        'serie': (serie or '')[:20],
+        'data_emissao': data_emissao,
+        'itens': itens,
+    }, None
 
 
 def _item_nao_encontrado(item_id):
@@ -212,6 +298,119 @@ def criar_item():
         db.session.rollback()
         logger.exception('Erro em POST /almoxarifado/itens')
         return jsonify({'erro': 'Erro ao cadastrar item'}), 500
+
+
+@almoxarifado_bp.route('/entradas/importar-nf', methods=['POST'])
+@jwt_required()
+def importar_nota_fiscal():
+    """Lê um XML de NF-e/NFC-e e devolve uma prévia para revisão no cliente."""
+    try:
+        arquivo = request.files.get('arquivo')
+        if not arquivo:
+            return jsonify({'erro': 'Selecione o XML da nota fiscal.'}), 400
+        nota, erro = _ler_nota_fiscal_xml(arquivo)
+        if erro:
+            return jsonify({'erro': erro}), 400
+        return jsonify(nota), 200
+    except Exception:
+        logger.exception('Erro em POST /almoxarifado/entradas/importar-nf')
+        return jsonify({'erro': 'Erro ao importar a nota fiscal'}), 500
+
+
+@almoxarifado_bp.route('/entradas', methods=['POST'])
+@jwt_required()
+def criar_entradas_em_lote():
+    """Cadastra itens e suas entradas em uma única transação atômica."""
+    try:
+        dados = request.get_json(silent=True) or {}
+        linhas = dados.get('itens')
+        if not isinstance(linhas, list) or not linhas:
+            return jsonify({'erro': 'Informe ao menos um item para a entrada.'}), 400
+        if len(linhas) > _MAX_LINHAS_ENTRADA:
+            return jsonify({'erro': f'Uma entrada aceita no máximo {_MAX_LINHAS_ENTRADA} itens.'}), 400
+
+        data_movimentacao = _parse_date(dados.get('data_movimentacao'))
+        if not data_movimentacao:
+            return jsonify({'erro': 'data_movimentacao inválida'}), 400
+        fornecedor = (dados.get('fornecedor') or '').strip()[:160] or None
+        observacao_geral = (dados.get('observacao') or '').strip()[:180]
+        nota_numero = (dados.get('nota_numero') or '').strip()[:30]
+        nota_serie = (dados.get('nota_serie') or '').strip()[:20]
+
+        # Valida tudo antes de gravar: uma linha inválida não deixa uma entrada
+        # parcial no estoque nem cria itens órfãos no catálogo.
+        plano = []
+        for indice, linha in enumerate(linhas, start=1):
+            if not isinstance(linha, dict):
+                return jsonify({'erro': f'Item {indice} inválido'}), 400
+            quantidade = _to_num(linha.get('quantidade'))
+            if quantidade is None or quantidade <= 0:
+                return jsonify({'erro': f'Informe uma quantidade positiva no item {indice}'}), 400
+            item_id = _to_int(linha.get('item_id'))
+            if item_id:
+                item = db.session.get(AlmoxarifadoItem, item_id)
+                if not item or not item.ativo:
+                    return jsonify({'erro': f'Item {indice} não está disponível para entrada'}), 400
+                valores = None
+            else:
+                valores, erro_item = _validar_item(linha)
+                if erro_item:
+                    return erro_item
+                item = None
+            item_locado = (
+                (item is not None and item.categoria == 'equipamento' and item.modalidade == 'locacao')
+                or (valores is not None and valores['categoria'] == 'equipamento' and valores['modalidade'] == 'locacao')
+            )
+            if item_locado and not fornecedor:
+                return jsonify({'erro': 'Informe o fornecedor para a entrada de equipamento locado'}), 400
+            plano.append({
+                'item': item,
+                'valores': valores,
+                'quantidade': quantidade,
+                'codigo_fornecedor': (linha.get('codigo_fornecedor') or '').strip()[:60],
+            })
+
+        usuario = get_current_user()
+        entradas = []
+        itens_criados = []
+        for linha in plano:
+            item = linha['item']
+            if item is None:
+                item = AlmoxarifadoItem(**linha['valores'])
+                db.session.add(item)
+                db.session.flush()
+                item.codigo = _codigo_automatico(item)
+                itens_criados.append(item)
+
+            tipo = 'locacao_entrada' if item.categoria == 'equipamento' and item.modalidade == 'locacao' else 'entrada'
+            referencias_nf = []
+            if nota_numero:
+                referencias_nf.append(f'NF {nota_numero}' + (f' série {nota_serie}' if nota_serie else ''))
+            if linha['codigo_fornecedor']:
+                referencias_nf.append(f'cód. fornecedor {linha["codigo_fornecedor"]}')
+            observacao = ' | '.join(filter(None, [observacao_geral, *referencias_nf]))[:300] or None
+            movimento = AlmoxarifadoMovimentacao(
+                item_id=item.id,
+                tipo=tipo,
+                quantidade=linha['quantidade'],
+                data_movimentacao=data_movimentacao,
+                usuario_id=usuario.id,
+                fornecedor=fornecedor,
+                observacao=observacao,
+            )
+            db.session.add(movimento)
+            entradas.append((item, movimento))
+
+        db.session.commit()
+        return jsonify({
+            'itens_criados': len(itens_criados),
+            'movimentacoes': [movimento.to_dict() for _, movimento in entradas],
+            'itens': [item.to_dict(_saldo_item(item.id)) for item, _ in entradas],
+        }), 201
+    except Exception:
+        db.session.rollback()
+        logger.exception('Erro em POST /almoxarifado/entradas')
+        return jsonify({'erro': 'Erro ao registrar as entradas'}), 500
 
 
 @almoxarifado_bp.route('/itens/<int:item_id>', methods=['PUT'])

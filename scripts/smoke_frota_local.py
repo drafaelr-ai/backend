@@ -171,9 +171,25 @@ with app.app_context():
         check('comum mover p/ obra sem acesso -> 403', r.status_code == 403)
 
         r = c.post(f'/frota/veiculos/{veic_id}/movimentacoes', json={
-            'destino_tipo': 'obra', 'obra_id': obra1_id,
+            'destino_tipo': 'obra', 'obra_id': obra1_id, 'operacao': 'cessao_obra',
         }, headers=h_comum)
         check('comum mover p/ obra permitida -> 201', r.status_code == 201)
+        check('cessão à obra registra histórico',
+              json.loads(r.data)['movimentacao']['observacao'] == 'Cessao para obra',
+              json.loads(r.data).get('movimentacao'))
+
+        r = c.post(f'/frota/veiculos/{veic_id}/movimentacoes', json={
+            'destino_tipo': 'sem_local', 'operacao': 'retorno_obra',
+        }, headers=h_comum)
+        check('retorno da obra ao pátio -> 201', r.status_code == 201)
+        check('retorno limpa vínculo com obra',
+              json.loads(r.data)['veiculo']['local_tipo'] is None and json.loads(r.data)['veiculo']['obra_id'] is None,
+              json.loads(r.data).get('veiculo'))
+
+        r = c.post(f'/frota/veiculos/{veic_id}/movimentacoes', json={
+            'destino_tipo': 'obra', 'obra_id': obra1_id, 'operacao': 'cessao_obra',
+        }, headers=h_comum)
+        check('veículo pode ser cedido novamente após o retorno', r.status_code == 201, r.status_code)
 
         r = c.post(f'/frota/veiculos/{veic_id}/movimentacoes', json={
             'destino_tipo': 'banana',

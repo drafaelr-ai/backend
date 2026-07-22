@@ -150,6 +150,52 @@ with app.app_context():
         saldo = client.get('/almoxarifado/itens', headers=headers_almox).get_json()[0]['estoque_atual']
         check('saldo histórico é consistente', saldo == 3, saldo)
 
+        xml_nf_smoke = b'''<?xml version="1.0" encoding="UTF-8"?>
+            <nfeProc><NFe><infNFe><ide><nNF>9876</nNF><serie>3</serie><dhEmi>2026-07-22T10:00:00-03:00</dhEmi></ide>
+            <emit><xNome>Fornecedor NF Smoke</xNome></emit>
+            <det nItem="1"><prod><cProd>TUB-10</cProd><xProd>Tubo NF Smoke</xProd><NCM>3917</NCM><uCom>un</uCom><qCom>8.0000</qCom><vUnCom>12.50</vUnCom></prod></det>
+            <det nItem="2"><prod><cProd>COL-02</cProd><xProd>Cola NF Smoke</xProd><uCom>kg</uCom><qCom>2.5000</qCom><vUnCom>18.00</vUnCom></prod></det>
+            </infNFe></NFe></nfeProc>'''
+        response = client.post('/almoxarifado/entradas/importar-nf', headers=headers_almox, data={
+            'arquivo': (BytesIO(xml_nf_smoke), 'nota-smoke.xml'),
+        }, content_type='multipart/form-data')
+        nota_importada = response.get_json() if response.status_code == 200 else {}
+        check('XML da NF preenche fornecedor e itens',
+              response.status_code == 200 and nota_importada.get('fornecedor') == 'Fornecedor NF Smoke' and len(nota_importada.get('itens', [])) == 2,
+              response.status_code)
+        response = client.post('/almoxarifado/entradas/importar-nf', headers=headers_almox, data={
+            'arquivo': (BytesIO(b'<!DOCTYPE nfe [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><nfeProc>&xxe;</nfeProc>'), 'nota-invalida.xml'),
+        }, content_type='multipart/form-data')
+        check('importação de XML bloqueia entidades externas', response.status_code == 400, response.status_code)
+        response = client.post('/almoxarifado/entradas', headers=headers_almox, json={
+            'data_movimentacao': nota_importada.get('data_emissao'),
+            'fornecedor': nota_importada.get('fornecedor'),
+            'nota_numero': nota_importada.get('numero'),
+            'nota_serie': nota_importada.get('serie'),
+            'itens': [{
+                **item, 'categoria': 'material', 'estoque_minimo': 1,
+                'modalidade': 'proprio', 'descricao': f"NCM {item['ncm']}" if item.get('ncm') else '',
+            } for item in nota_importada.get('itens', [])],
+        })
+        entradas_nf = response.get_json() if response.status_code == 201 else {}
+        check('entrada em lote da NF é registrada', response.status_code == 201 and len(entradas_nf.get('movimentacoes', [])) == 2, response.status_code)
+        itens_nf = client.get('/almoxarifado/itens', headers=headers_almox).get_json()
+        tubo_nf = next((item for item in itens_nf if item['nome'] == 'Tubo NF Smoke'), None)
+        cola_nf = next((item for item in itens_nf if item['nome'] == 'Cola NF Smoke'), None)
+        check('entrada em lote mantém quantidade e código automático',
+              tubo_nf and cola_nf and tubo_nf['estoque_atual'] == 8 and cola_nf['estoque_atual'] == 2.5
+              and tubo_nf['codigo'].startswith('MT-') and cola_nf['codigo'].startswith('MT-'),
+              {'tubo': tubo_nf, 'cola': cola_nf})
+        response = client.post('/almoxarifado/entradas', headers=headers_almox, json={
+            'itens': [
+                {'nome': 'Nao deve criar', 'categoria': 'material', 'unidade': 'un', 'quantidade': 1},
+                {'nome': 'Quantidade invalida', 'categoria': 'material', 'unidade': 'un', 'quantidade': 0},
+            ],
+        })
+        check('entrada em lote inválida não grava parcialmente', response.status_code == 400, response.status_code)
+        itens_pos_erro = client.get('/almoxarifado/itens', headers=headers_almox).get_json()
+        check('entrada em lote preserva atomicidade', not any(item['nome'] == 'Nao deve criar' for item in itens_pos_erro), len(itens_pos_erro))
+
         response = client.post('/almoxarifado/itens', headers=headers_almox, json={
             'codigo': 'UNI-01', 'nome': 'Camisa uniforme', 'categoria': 'fardamento', 'unidade': 'un',
         })
