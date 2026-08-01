@@ -48,9 +48,13 @@ def make_fake_db(status_by_key):
             # extrai "FROM <tabela>"
             tabela = sql.split('FROM', 1)[1].strip().split()[0]
             rid = params.get('id')
-            status = status_by_key.get((tabela, rid), '__MISSING__')
+            obra_id = params.get('obra_id')
+            key = (tabela, rid, obra_id) if obra_id is not None else (tabela, rid)
+            status = status_by_key.get(key, '__MISSING__')
             if status == '__MISSING__':
                 return _FakeResult(None)        # linha não existe no banco
+            if tabela.startswith('admin_'):
+                return _FakeResult((status, 42))
             return _FakeResult((status,))
 
     class _DB:
@@ -72,9 +76,9 @@ def descricoes(itens):
 # =====================================================================
 # Obra 7 tem boletos id 100 (pendente), 101 (pendente), 102 (pendente, NÃO selecionado)
 status_main = {
-    ('boleto', 100): 'Pendente',
-    ('boleto', 101): 'Pendente',
-    ('boleto', 102): 'Pendente',   # existe na obra mas NÃO está em nenhum link
+    ('boleto', 100, 7): 'Pendente',
+    ('boleto', 101, 7): 'Pendente',
+    ('boleto', 102, 7): 'Pendente',   # existe na obra mas NÃO está em nenhum link
 }
 sl_main.db = make_fake_db(status_main)
 
@@ -100,15 +104,25 @@ check('MAIN link B mostra só {102}', descricoes(resB) == ['Boleto 102'])
 check('MAIN link B NÃO vaza 100/101', descricoes(resB) == ['Boleto 102'])
 
 # Status ao vivo: boleto 101 vira Pago → some do link A
-status_main[('boleto', 101)] = 'Pago'
+status_main[('boleto', 101, 7)] = 'Pago'
 resA2 = sl_main._itens_dinamicos(7, linkA_refs, linkA_itens)
 check('MAIN status ao vivo: boleto pago some da lista', descricoes(resA2) == ['Boleto 100'])
 
 # Item de outra obra nunca entra (ref aponta para id de obra diferente, mas
 # a lista é a seleção — provamos que grupo_id não puxa nada extra):
+status_main[('parcela_individual', 201, 7)] = 'Previsto'
+parcelado_itens = [{'descricao': 'Locação · parcela 1/3', 'valor': 250.50, 'forma': 'pix', 'pix_chave': 'locacao@pix'}]
+parcelado_refs = [{'tabela': 'parcela_individual', 'id': 201}]
+parcelado = sl_main._itens_dinamicos(7, parcelado_refs, parcelado_itens)
+check('MAIN parcela pendente entra no Superlink com seu valor',
+      len(parcelado) == 1 and abs(parcelado[0]['valor'] - 250.50) < 0.01)
+status_main[('parcela_individual', 201, 7)] = 'Pago'
+check('MAIN parcela paga some do Superlink',
+      sl_main._itens_dinamicos(7, parcelado_refs, parcelado_itens) == [])
+
 resA3 = sl_main._itens_dinamicos(999, linkA_refs, linkA_itens)
-check('MAIN grupo_id diferente não altera a lista (sem re-query por obra)',
-      descricoes(resA3) == ['Boleto 100'])  # 101 ainda Pago
+check('MAIN grupo_id diferente oculta referências de outra obra',
+      descricoes(resA3) == [])
 
 # Legado: link sem refs → snapshot filtrado (só selecionados, sem 'pago')
 legado = sl_main._itens_dinamicos(7, None,
@@ -187,13 +201,13 @@ def _install_fake_model(module, registry):
 # o link gera com 3 selecionados (700,701,702). A obra tem AINDA outros
 # boletos (800,801) que NÃO entram no link. Provamos que só os 3 aparecem.
 status_http = {
-    ('boleto', 700): 'Pendente',
-    ('boleto', 701): 'Pendente',
-    ('boleto', 702): 'Pendente',
-    ('boleto', 800): 'Pendente',   # existe na obra 7, NÃO selecionado
-    ('boleto', 801): 'Pendente',   # existe na obra 7, NÃO selecionado
-    ('boleto', 110): 'Pendente',   # boleto da OBRA 1 (link da obra 1)
-    ('boleto', 900): 'Pendente',   # boleto da OBRA 2 — NUNCA deve aparecer no link da obra 1
+    ('boleto', 700, 7): 'Pendente',
+    ('boleto', 701, 7): 'Pendente',
+    ('boleto', 702, 7): 'Pendente',
+    ('boleto', 800, 7): 'Pendente',   # existe na obra 7, NÃO selecionado
+    ('boleto', 801, 7): 'Pendente',   # existe na obra 7, NÃO selecionado
+    ('boleto', 110, 1): 'Pendente',   # boleto da OBRA 1 (link da obra 1)
+    ('boleto', 900, 2): 'Pendente',   # boleto da OBRA 2 — NUNCA deve aparecer no link da obra 1
 }
 sl_main.db = make_fake_db(status_http)
 

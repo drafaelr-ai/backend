@@ -3,10 +3,11 @@ import secrets
 from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required
 
 from extensions import db
 from models.superlink import Superlink
+from services import get_current_user, user_has_access_to_obra
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +16,49 @@ superlink_bp = Blueprint('superlink', __name__, url_prefix='/superlink')
 # Whitelist explícita — protege contra qualquer dado malicioso que chegue em refs
 _TABELAS_PERMITIDAS = {'pagamento_futuro', 'boleto', 'parcela_individual'}
 
+# Consultas fixas por tipo de referência. Além de não interpolar nomes de
+# tabelas, todas vinculam a cobrança à obra do Superlink antes de expô-la.
+_STATUS_SQL_POR_TABELA = {
+    'pagamento_futuro': """
+        SELECT status FROM pagamento_futuro
+        WHERE id = :id AND obra_id = :obra_id
+    """,
+    'boleto': """
+        SELECT status FROM boleto
+        WHERE id = :id AND obra_id = :obra_id
+    """,
+    'parcela_individual': """
+        SELECT parcela.status
+        FROM parcela_individual AS parcela
+        JOIN pagamento_parcelado_v2 AS pagamento
+          ON pagamento.id = parcela.pagamento_parcelado_id
+        WHERE parcela.id = :id
+          AND pagamento.obra_id = :obra_id
+          AND LOWER(COALESCE(pagamento.status, '')) NOT IN ('cancelado', 'concluido', 'concluído')
+    """,
+}
+
 
 def _gerar_token():
     return secrets.token_urlsafe(24)
+
+
+def _status_referencia_na_obra(tabela, rid, obra_id):
+    """Retorna o status da referência somente se ela pertence à obra."""
+    if tabela not in _TABELAS_PERMITIDAS or obra_id is None:
+        return None
+
+    try:
+        referencia_id = int(rid)
+        if referencia_id <= 0:
+            return None
+        row = db.session.execute(
+            db.text(_STATUS_SQL_POR_TABELA[tabela]),
+            {'id': referencia_id, 'obra_id': int(obra_id)},
+        ).fetchone()
+        return row[0] if row else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _itens_dinamicos(grupo_id, refs, itens_snapshot):
@@ -59,13 +100,10 @@ def _itens_dinamicos(grupo_id, refs, itens_snapshot):
             continue
 
         try:
-            row = db.session.execute(
-                db.text(f"SELECT status FROM {tabela} WHERE id = :id"),
-                {'id': int(rid)},
-            ).fetchone()
-            if not row:
-                continue  # sumiu do banco → não exibe
-            if str(row[0]).lower() in ('pago', 'cancelado'):
+            status = _status_referencia_na_obra(tabela, rid, grupo_id)
+            if status is None:
+                continue  # sumiu, foi desvinculado ou não pertence à obra
+            if str(status).lower() in ('pago', 'cancelado'):
                 continue  # pago/cancelado → remove do resultado
             resultado.append(dict(item))
         except Exception:
@@ -88,10 +126,42 @@ def criar_superlink():
         refs     = data.get('refs') or None
         obra_id  = data.get('obra_id')
 
+        obra_id_int = None
+        if obra_id not in (None, ''):
+            try:
+                obra_id_int = int(obra_id)
+                if obra_id_int <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                return jsonify({'erro': 'obra_id inválido'}), 400
+
+            current_user = get_current_user()
+            if not current_user or not user_has_access_to_obra(current_user, obra_id_int):
+                return jsonify({'erro': 'Acesso negado a esta obra'}), 403
+
         if not titulo:
             return jsonify({'erro': 'titulo obrigatório'}), 400
         if not itens or not isinstance(itens, list):
             return jsonify({'erro': 'itens deve ser lista não vazia'}), 400
+
+        if refs:
+            if not isinstance(refs, list) or len(refs) != len(itens):
+                return jsonify({'erro': 'refs deve corresponder aos itens do link'}), 400
+            if obra_id_int is None:
+                return jsonify({'erro': 'obra_id é obrigatório quando houver referências'}), 400
+
+            for ref in refs:
+                if ref is None:
+                    continue
+                if not isinstance(ref, dict):
+                    return jsonify({'erro': 'referência inválida'}), 400
+
+                tabela = ref.get('tabela')
+                status = _status_referencia_na_obra(tabela, ref.get('id'), obra_id_int)
+                if status is None:
+                    return jsonify({'erro': 'referência não encontrada nesta obra'}), 400
+                if str(status).lower() in ('pago', 'cancelado'):
+                    return jsonify({'erro': 'não é possível gerar link para cobrança encerrada'}), 400
 
         for item in itens:
             descricao = (item.get('descricao') or '').strip()
@@ -114,7 +184,7 @@ def criar_superlink():
         agora = datetime.utcnow()
         sl = Superlink(
             token=token,
-            grupo_id=int(obra_id) if obra_id else None,
+            grupo_id=obra_id_int,
             titulo=titulo,
             itens=itens,
             refs=refs,
