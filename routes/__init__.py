@@ -17,3 +17,4 @@ from routes.frota import frota_bp  # noqa: F401
 from routes.solicitacoes import solicitacoes_bp  # noqa: F401
 from routes.almoxarifado import almoxarifado_bp  # noqa: F401
 from routes.home import home_bp  # noqa: F401
+from routes.planejamento import planejamento_bp  # noqa: F401

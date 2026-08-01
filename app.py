@@ -70,12 +70,18 @@ from models.solicitacao_config import SolicitacaoConfig    # noqa: F401
 # Módulo Almoxarifado
 from models.almoxarifado_item import AlmoxarifadoItem  # noqa: F401
 from models.almoxarifado_movimentacao import AlmoxarifadoMovimentacao  # noqa: F401
+# Módulo Planejamento
+from models.planejamento_atividade import PlanejamentoAtividade  # noqa: F401
+from models.planejamento_apontamento import PlanejamentoApontamento  # noqa: F401
+from models.planejamento_restricao import PlanejamentoRestricao  # noqa: F401
+from models.planejamento_fechamento import PlanejamentoFechamento  # noqa: F401
 
 from routes import (
     notificacoes_bp, bi_bp, diario_bp, auth_bp, admin_bp, sid_bp,
     caixa_bp, servicos_bp, boletos_bp, lancamentos_bp,
     cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
     rh_bp, frota_bp, solicitacoes_bp, almoxarifado_bp, home_bp,
+    planejamento_bp,
 )
 
 setup_logging()
@@ -167,6 +173,7 @@ def create_app(config_class=Config):
     app.register_blueprint(solicitacoes_bp)
     app.register_blueprint(almoxarifado_bp)
     app.register_blueprint(home_bp)
+    app.register_blueprint(planejamento_bp)
 
     return app
 
