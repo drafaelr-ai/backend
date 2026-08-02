@@ -26,7 +26,7 @@ from routes.home import home_bp
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = 'smoke-test-secret'
+app.config['JWT_SECRET_KEY'] = 'smoke-test-secret-with-at-least-32-bytes'
 db.init_app(app)
 jwt.init_app(app)
 app.register_blueprint(home_bp)
@@ -35,6 +35,7 @@ TABELAS = [
     'user', 'user_obra_association', 'obra', 'lancamento', 'boleto',
     'parcela_individual', 'pagamento_parcelado_v2', 'pagamento_futuro',
     'servico', 'pagamento_servico',
+    'almoxarifado_item', 'almoxarifado_movimentacao',
 ]
 
 PASS = []

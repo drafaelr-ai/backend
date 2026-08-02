@@ -790,7 +790,7 @@ def inserir_pagamento(obra_id):
             db.session.flush()
             
             # Vínculo com item do orçamento — via ORM, com validação explícita.
-            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo parcelado): {erro} ---")
@@ -881,57 +881,13 @@ def inserir_pagamento(obra_id):
             
             db.session.flush()
             
-            # Se STATUS = PAGO, criar PagamentoServico para cada parcela
-            if status == 'Pago' and servico_id:
-                logger.info(f"   💰 Status=PAGO com serviço vinculado, criando PagamentoServico...")
-                
-                servico = Servico.query.get(servico_id)
-                if servico:
-                    # Determinar tipo_pagamento
-                    tipo_pagamento = ('mao_de_obra' if tipo == 'Mão de Obra'
-                                       else 'equipamento' if tipo == 'Equipamentos'
-                                       else 'material')
-
-                    # Criar UM PagamentoServico com valor total
-                    novo_pag_servico = PagamentoServico(
-                        servico_id=servico_id,
-                        tipo_pagamento=tipo_pagamento,
-                        valor_total=valor_total,
-                        valor_pago=valor_total,
-                        data=data,
-                        status='Pago',
-                        fornecedor=fornecedor,
-                        prioridade=prioridade
-                    )
-                    db.session.add(novo_pag_servico)
-                    db.session.flush()
-                    
-                    logger.info(f"      ✅ PagamentoServico criado: ID={novo_pag_servico.id}, valor={valor_total}")
-                    
-                    # Atualizar parcelas_pagas (todas as linhas, incluindo a entrada)
-                    novo_parcelado.parcelas_pagas = total_pagamentos
-                    novo_parcelado.status = 'Concluído'
-                    
-                    # Recalcular % do serviço
-                    pagamentos = PagamentoServico.query.filter_by(servico_id=servico_id).all()
-                    pagamentos_mao = [p for p in pagamentos if p.tipo_pagamento == 'mao_de_obra']
-                    pagamentos_mat = [p for p in pagamentos if p.tipo_pagamento == 'material']
-                    
-                    if servico.valor_global_mao_de_obra > 0:
-                        total_pago = sum(p.valor_pago for p in pagamentos_mao)
-                        servico.percentual_conclusao_mao_obra = min(100, (total_pago / servico.valor_global_mao_de_obra) * 100)
-                    
-                    if servico.valor_global_material > 0:
-                        total_pago = sum(p.valor_pago for p in pagamentos_mat)
-                        servico.percentual_conclusao_material = min(100, (total_pago / servico.valor_global_material) * 100)
-                    
-                    logger.info(f"      ✅ Serviço atualizado: MO={servico.percentual_conclusao_mao_obra:.1f}%, MAT={servico.percentual_conclusao_material:.1f}%")
-            
-            elif status == 'Pago':
-                # Status=Pago mas sem serviço vinculado
+            # ParcelaIndividual e a fonte canonica do pagamento parcelado,
+            # inclusive quando existe servico. Criar PagamentoServico aqui
+            # registraria o mesmo valor uma segunda vez.
+            if status == 'Pago':
                 novo_parcelado.parcelas_pagas = total_pagamentos
                 novo_parcelado.status = 'Concluído'
-                logger.info(f"   ✅ Todas as parcelas marcadas como pagas (sem vínculo ao serviço)")
+                logger.info("   ✅ Todas as parcelas marcadas como pagas sem duplicar a fonte financeira")
             
             db.session.commit()
             logger.info(f"{'='*80}")
@@ -955,6 +911,12 @@ def inserir_pagamento(obra_id):
                                    else 'equipamento' if tipo == 'Equipamentos'
                                    else 'material')
 
+                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), obra_id)
+                if erro:
+                    db.session.rollback()
+                    logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (pagamento pago): {erro} ---")
+                    return jsonify({"erro": erro}), 400
+
                 novo_pagamento = PagamentoServico(
                     servico_id=servico_id,
                     tipo_pagamento=tipo_pagamento,
@@ -964,7 +926,8 @@ def inserir_pagamento(obra_id):
                     data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
                     status=status,
                     prioridade=prioridade,
-                    fornecedor=fornecedor
+                    fornecedor=fornecedor,
+                    orcamento_item_id=oid,
                 )
                 db.session.add(novo_pagamento)
                 db.session.flush()
@@ -1007,7 +970,7 @@ def inserir_pagamento(obra_id):
                 db.session.flush()
                 
                 # Vínculo com item do orçamento — via ORM, com validação explícita.
-                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), obra_id)
                 if erro:
                     db.session.rollback()
                     logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo pagamento futuro): {erro} ---")
@@ -1037,7 +1000,7 @@ def inserir_pagamento(obra_id):
                 db.session.flush()
                 
                 # Vínculo com item do orçamento — via ORM, com validação explícita.
-                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), obra_id)
                 if erro:
                     db.session.rollback()
                     logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo pagamento futuro): {erro} ---")
@@ -1068,7 +1031,7 @@ def inserir_pagamento(obra_id):
                 db.session.flush()
                 
                 # Vínculo com item do orçamento — via ORM, com validação explícita.
-                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+                oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), obra_id)
                 if erro:
                     db.session.rollback()
                     logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo lancamento): {erro} ---")
@@ -1199,7 +1162,8 @@ def marcar_multiplos_como_pago(obra_id):
                             status='Pago',
                             prioridade=0,
                             fornecedor=pagamento.fornecedor,
-                            pix=pagamento.pix
+                            pix=pagamento.pix,
+                            orcamento_item_id=pagamento.orcamento_item_id,
                         )
                         db.session.add(novo_pag_servico)
                         db.session.flush()

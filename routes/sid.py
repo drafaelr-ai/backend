@@ -199,7 +199,7 @@ def criar_pagamento_futuro(obra_id):
         logger.debug(f"--- [DEBUG] Flush OK, ID atribuído: {novo_pagamento.id} ---")
         
         # Vínculo com item do orçamento — via ORM, com validação explícita.
-        oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+        oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'), obra_id)
         if erro:
             db.session.rollback()
             logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo pagamento): {erro} ---")
@@ -278,7 +278,7 @@ def editar_pagamento_futuro(obra_id, pagamento_id):
         # Vínculo com item do orçamento — via ORM, com validação explícita.
         # Item inválido => 400 (nunca mais 200 silencioso).
         if 'orcamento_item_id' in data:
-            oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+            oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'), obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (pagamento {pagamento_id}): {erro} ---")
@@ -846,7 +846,7 @@ def criar_pagamento_parcelado(obra_id):
         db.session.flush()  # Para obter o ID do pagamento
         
         # Vínculo com item do orçamento — via ORM, com validação explícita.
-        oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+        oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'), obra_id)
         if erro:
             db.session.rollback()
             logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo parcelado): {erro} ---")
@@ -1015,7 +1015,7 @@ def editar_pagamento_parcelado(obra_id, pagamento_id):
         
         # Vínculo com item do orçamento — via ORM, com validação explícita.
         if 'orcamento_item_id' in data:
-            oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'))
+            oid, erro = resolver_orcamento_item_id(data.get('orcamento_item_id'), obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (parcelado {pagamento_id}): {erro} ---")

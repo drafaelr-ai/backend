@@ -27,6 +27,7 @@ from models.servico_usuario import ServicoUsuario
 from models.servico_base import ServicoBase
 from models.pagamento_servico import PagamentoServico
 from services.orcamento_service import resolver_orcamento_item_id
+from services.financeiro_service import calcular_totais_pagos_obra
 from models.pagamento_futuro import PagamentoFuturo
 from models.lancamento import Lancamento
 from models.nota_fiscal import NotaFiscal
@@ -70,7 +71,13 @@ def get_obras():
         lancamentos_sum = db.session.query(
             Lancamento.obra_id,
             func.sum(Lancamento.valor_total).label('total_geral_lanc'),
-            func.sum(Lancamento.valor_pago).label('total_pago_lanc'),
+            func.sum(case(
+                (
+                    ~func.coalesce(Lancamento.descricao, '').like('%(Parcela %'),
+                    Lancamento.valor_pago,
+                ),
+                else_=0,
+            )).label('total_pago_lanc'),
             func.sum(
                 case(
                     (Lancamento.valor_total > Lancamento.valor_pago, 
@@ -110,6 +117,20 @@ def get_obras():
         ).filter(
             PagamentoFuturo.status.in_(['Previsto', 'Pendente'])
         ).group_by(PagamentoFuturo.obra_id).subquery()
+
+        pagamentos_futuros_pagos_sum = db.session.query(
+            PagamentoFuturo.obra_id,
+            func.sum(PagamentoFuturo.valor).label('total_futuro_pago')
+        ).filter(
+            PagamentoFuturo.status == 'Pago'
+        ).group_by(PagamentoFuturo.obra_id).subquery()
+
+        boletos_pagos_sum = db.session.query(
+            Boleto.obra_id,
+            func.sum(Boleto.valor).label('total_boletos_pagos')
+        ).filter(
+            Boleto.status == 'Pago'
+        ).group_by(Boleto.obra_id).subquery()
         
         # NOVO: 4b. Pagamentos Futuros SEM serviço (Despesas Extras)
         pagamentos_futuros_extra_sum = db.session.query(
@@ -213,6 +234,8 @@ def get_obras():
             func.coalesce(parcelas_extra_sum.c.total_parcelas_extra, 0).label('parcelas_extra'),
             func.coalesce(parcelas_pagas_com_servico_sum.c.total_parcelas_pagas, 0).label('parcelas_pagas_com_servico'),
             func.coalesce(parcelas_pagas_sem_servico_sum.c.total_parcelas_pagas_sem, 0).label('parcelas_pagas_sem_servico'),
+            func.coalesce(pagamentos_futuros_pagos_sum.c.total_futuro_pago, 0).label('futuro_pago'),
+            func.coalesce(boletos_pagos_sum.c.total_boletos_pagos, 0).label('boletos_pagos'),
             func.coalesce(orcamento_eng_sum.c.total_orcamento_eng, 0).label('orcamento_eng'),
             func.coalesce(servicos_orcamento_sum.c.total_servicos_orcamento, 0).label('servicos_orcamento')
         ).outerjoin(
@@ -233,6 +256,10 @@ def get_obras():
             parcelas_pagas_com_servico_sum, Obra.id == parcelas_pagas_com_servico_sum.c.obra_id
         ).outerjoin(
             parcelas_pagas_sem_servico_sum, Obra.id == parcelas_pagas_sem_servico_sum.c.obra_id
+        ).outerjoin(
+            pagamentos_futuros_pagos_sum, Obra.id == pagamentos_futuros_pagos_sum.c.obra_id
+        ).outerjoin(
+            boletos_pagos_sum, Obra.id == boletos_pagos_sum.c.obra_id
         ).outerjoin(
             orcamento_eng_sum, Obra.id == orcamento_eng_sum.c.obra_id
         ).outerjoin(
@@ -270,7 +297,7 @@ def get_obras():
 
         # 8. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico, parcelas_pagas_sem_servico, orcamento_eng, servicos_orcamento in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico, parcelas_pagas_sem_servico, futuro_pago, boletos_pagos, orcamento_eng, servicos_orcamento in obras_com_totais:
             
             # Calcular valores COM serviço
             futuro_com_servico = float(futuro_previsto) - float(futuro_extra)
@@ -286,7 +313,11 @@ def get_obras():
             # KPI 2: Total Pago (Valores Efetivados)
             # Inclui: lançamentos + pagamentos de serviço + parcelas pagas COM serviço
             # NOTA: Parcelas pagas SEM serviço já estão em lanc_pago (Lancamento criado ao pagar)
-            total_pago = float(lanc_pago) + float(pag_pago) + float(parcelas_pagas_com_servico)
+            total_pago = (
+                float(lanc_pago) + float(pag_pago) +
+                float(parcelas_pagas_com_servico) + float(parcelas_pagas_sem_servico) +
+                float(futuro_pago) + float(boletos_pagos)
+            )
             
             # KPI 3: Liberado para Pagamento (Fila) - Incluindo Cronograma Financeiro
             liberado_pagamento = (
@@ -548,7 +579,11 @@ def get_obra_detalhes(obra_id):
         # KPI 2: VALORES EFETIVADOS/PAGOS
         # Inclui: lançamentos pagos (sem espelho de parcela) + pagamentos de
         # serviço + TODAS as parcelas pagas (com ou sem serviço).
-        kpi_valores_pagos = total_pago_lancamentos + total_pago_servicos + total_parcelas_pagas
+        # Uma unica consolidacao para cards, historico e orcamento. Inclui
+        # boletos e pagamentos futuros legados, e exclui lancamentos-espelho
+        # de parcelas para nao contar o mesmo pagamento duas vezes.
+        totais_pagos_obra = calcular_totais_pagos_obra(obra_id)
+        kpi_valores_pagos = totais_pagos_obra['total']
         logger.debug(f"--- [DEBUG KPI] ✅ VALORES PAGOS = R$ {kpi_valores_pagos:.2f} ---")
         
         # KPI 3: LIBERADO PARA PAGAMENTO (Valores pendentes = valor_total - valor_pago)
@@ -597,7 +632,7 @@ def get_obra_detalhes(obra_id):
         
         # Atualizar KPIs com boletos
         # CORREÇÃO: Boletos com serviço NÃO aumentam orçamento - são forma de pagamento do serviço
-        kpi_valores_pagos += total_boletos_com_servico_pagos + total_boletos_sem_servico_pagos  # TODOS boletos pagos vão para valores pagos
+        # Boletos pagos ja fazem parte de calcular_totais_pagos_obra().
         kpi_liberado_pagamento += total_boletos_com_servico_pendentes  # Boletos pendentes com serviço vão para liberado
         kpi_despesas_extras += total_boletos_sem_servico_pendentes + total_boletos_sem_servico_pagos  # Boletos sem serviço vão para despesas extras
         
@@ -706,6 +741,33 @@ def get_obra_detalhes(obra_id):
                 "pagamento_id": pag.id,
                 "prioridade": pag.prioridade,
                 "fornecedor": pag.fornecedor
+            })
+
+        # O fluxo atual converte PagamentoFuturo ao efetivar o pagamento.
+        # Registros antigos que permaneceram com status Pago continuam sendo
+        # pagamentos validos e precisam aparecer no extrato e no total.
+        pagamentos_futuros_pagos = PagamentoFuturo.query.filter_by(
+            obra_id=obra_id,
+            status='Pago',
+        ).all()
+        for pagamento in pagamentos_futuros_pagos:
+            historico_unificado.append({
+                "id": f"futuro-pago-{pagamento.id}",
+                "tipo_registro": "pagamento_futuro_pago",
+                "pagamento_futuro_id": pagamento.id,
+                "data": pagamento.data_vencimento,
+                "data_vencimento": pagamento.data_vencimento,
+                "descricao": pagamento.descricao or "Pagamento",
+                "tipo": pagamento.tipo or "Despesa",
+                "valor_total": float(pagamento.valor or 0.0),
+                "valor_pago": float(pagamento.valor or 0.0),
+                "status": "Pago",
+                "pix": pagamento.pix,
+                "servico_id": pagamento.servico_id,
+                "orcamento_item_id": pagamento.orcamento_item_id,
+                "orcamento_item_nome": _orc_itens_map.get(pagamento.orcamento_item_id),
+                "prioridade": 0,
+                "fornecedor": pagamento.fornecedor,
             })
         
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
@@ -1279,7 +1341,7 @@ def atualizar_pagamento_servico(pagamento_id):
         if 'tipo_pagamento' in dados:
             pagamento.tipo_pagamento = dados['tipo_pagamento']  # 'mao_de_obra' ou 'material'
         if 'orcamento_item_id' in dados:
-            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), servico.obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (pagamento_servico {pagamento_id}): {erro} ---")

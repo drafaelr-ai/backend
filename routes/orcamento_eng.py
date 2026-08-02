@@ -24,6 +24,7 @@ from services import (
     get_current_user,
     user_has_access_to_obra,
 )
+from services.financeiro_service import calcular_totais_pagos_obra
 from utils import formatar_real
 
 logger = logging.getLogger(__name__)
@@ -111,12 +112,29 @@ def obter_orcamento_eng(obra_id):
             for item_id, tipo, valor in db.session.execute(db.text("""
                 SELECT orcamento_item_id, tipo, COALESCE(SUM(valor_pago), 0)
                 FROM lancamento
-                WHERE orcamento_item_id = ANY(:ids) AND status = 'Pago'
+                WHERE orcamento_item_id = ANY(:ids)
+                  AND COALESCE(valor_pago, 0) > 0
+                  AND COALESCE(descricao, '') NOT LIKE '%(Parcela %'
                 GROUP BY orcamento_item_id, tipo
             """), {"ids": todos_item_ids}).fetchall():
                 d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
                 if tipo and 'obra' in tipo.lower(): d['mo'] += float(valor or 0)
                 else: d['mat'] += float(valor or 0)
+
+            # Pagamentos de servico diretamente vinculados ao item tambem
+            # fazem parte do historico financeiro da obra.
+            for item_id, tipo, valor in db.session.execute(db.text("""
+                SELECT orcamento_item_id, tipo_pagamento, COALESCE(SUM(valor_pago), 0)
+                FROM pagamento_servico
+                WHERE orcamento_item_id = ANY(:ids)
+                  AND COALESCE(valor_pago, 0) > 0
+                GROUP BY orcamento_item_id, tipo_pagamento
+            """), {"ids": todos_item_ids}).fetchall():
+                d = pago_por_item.setdefault(item_id, {'mo': 0.0, 'mat': 0.0})
+                if tipo and ('mao' in tipo.lower() or 'obra' in tipo.lower()):
+                    d['mo'] += float(valor or 0)
+                else:
+                    d['mat'] += float(valor or 0)
 
             # 2. Pagamentos Futuros pagos
             for item_id, tipo, valor in db.session.execute(db.text("""
@@ -170,6 +188,8 @@ def obter_orcamento_eng(obra_id):
             etapa_fornecimento = 0
             etapa_pago_mo = 0
             etapa_pago_mat = 0
+            etapa_pago_servico = 0
+            etapa_pago_fornecimento = 0
 
             itens_dict = []
             for item in etapa.itens:
@@ -180,11 +200,27 @@ def obter_orcamento_eng(obra_id):
                 etapa_fornecimento += totais.get('total_fornecimento', 0)
 
                 pago = pago_por_item.get(item.id, {'mo': 0.0, 'mat': 0.0})
-                item_pago_mo = pago['mo']
-                item_pago_mat = pago['mat']
-                item_pago = item_pago_mo + item_pago_mat
+                pagamento_bruto = pago['mo'] + pago['mat']
+                if item.tipo_composicao == 'composto':
+                    item_pago_mo = 0
+                    item_pago_mat = 0
+                    item_pago_servico = pagamento_bruto
+                    item_pago_fornecimento = 0
+                elif item.tipo_composicao == 'fornecimento':
+                    item_pago_mo = 0
+                    item_pago_mat = 0
+                    item_pago_servico = 0
+                    item_pago_fornecimento = pagamento_bruto
+                else:
+                    item_pago_mo = pago['mo']
+                    item_pago_mat = pago['mat']
+                    item_pago_servico = 0
+                    item_pago_fornecimento = 0
+                item_pago = pagamento_bruto
                 etapa_pago_mo += item_pago_mo
                 etapa_pago_mat += item_pago_mat
+                etapa_pago_servico += item_pago_servico
+                etapa_pago_fornecimento += item_pago_fornecimento
 
                 total_itens += 1
                 if item.servico_id:
@@ -194,6 +230,8 @@ def obter_orcamento_eng(obra_id):
                 item_dict['total_pago'] = item_pago
                 item_dict['valor_pago_mo'] = item_pago_mo
                 item_dict['valor_pago_mat'] = item_pago_mat
+                item_dict['valor_pago_servico'] = item_pago_servico
+                item_dict['valor_pago_fornecimento'] = item_pago_fornecimento
                 item_dict['percentual_executado'] = round((item_pago / totais['total'] * 100) if totais['total'] > 0 else 0, 1)
                 itens_dict.append(item_dict)
 
@@ -202,10 +240,13 @@ def obter_orcamento_eng(obra_id):
             total_servico += etapa_servico
             total_fornecimento += etapa_fornecimento
             etapa_total = etapa_mo + etapa_mat + etapa_servico + etapa_fornecimento
-            etapa_pago = etapa_pago_mo + etapa_pago_mat
-
-            etapa_pago_servico = (etapa_pago * (etapa_servico / etapa_total)) if etapa_total > 0 and etapa_servico > 0 else 0
-            etapa_pago_fornecimento = (etapa_pago * (etapa_fornecimento / etapa_total)) if etapa_total > 0 and etapa_fornecimento > 0 else 0
+            # As quatro categorias sao mutuamente exclusivas. O codigo antigo
+            # rateava novamente o total ja contado em MO/Material e inflava o
+            # executado de etapas com itens compostos ou de fornecimento.
+            etapa_pago = (
+                etapa_pago_mo + etapa_pago_mat +
+                etapa_pago_servico + etapa_pago_fornecimento
+            )
 
             total_pago_mo += etapa_pago_mo
             total_pago_mat += etapa_pago_mat
@@ -229,7 +270,10 @@ def obter_orcamento_eng(obra_id):
             })
 
         subtotal = total_mo + total_mat + total_servico + total_fornecimento  # MODIFICADO: incluir serviço + fornecimento
-        total_pago = total_pago_mo + total_pago_mat + total_pago_servico + total_pago_fornecimento  # MODIFICADO
+        total_pago = total_pago_mo + total_pago_mat + total_pago_servico + total_pago_fornecimento
+        totais_pagos_obra = calcular_totais_pagos_obra(obra_id)
+        total_pago_obra = totais_pagos_obra['total']
+        total_pago_sem_vinculo = max(total_pago_obra - total_pago, 0)
         bdi = obra.bdi if hasattr(obra, 'bdi') else 0
         valor_bdi = subtotal * (bdi / 100) if bdi else 0
         total_geral = subtotal + valor_bdi
@@ -253,6 +297,10 @@ def obter_orcamento_eng(obra_id):
                 'total_pago_fornecimento': total_pago_fornecimento,
                 'total_pago': total_pago,
                 'percentual_executado': round((total_pago / subtotal * 100) if subtotal > 0 else 0, 1),
+                'total_pago_obra': total_pago_obra,
+                'total_pago_sem_vinculo': total_pago_sem_vinculo,
+                'percentual_pago_obra': round((total_pago_obra / subtotal * 100) if subtotal > 0 else 0, 1),
+                'fontes_total_pago_obra': totais_pagos_obra,
                 'total_etapas': len(etapas),
                 'total_itens': total_itens,
                 'itens_vinculados': itens_vinculados
@@ -292,12 +340,27 @@ def listar_pagamentos_item(obra_id, item_id):
         for r in db.session.execute(db.text("""
             SELECT id, descricao, tipo, COALESCE(valor_pago, 0), data, fornecedor
             FROM lancamento
-            WHERE orcamento_item_id = :iid AND status = 'Pago'
+            WHERE orcamento_item_id = :iid
+              AND COALESCE(valor_pago, 0) > 0
+              AND COALESCE(descricao, '') NOT LIKE '%(Parcela %'
         """), {"iid": item_id}).fetchall():
             pagamentos.append({
                 'fonte': 'lancamento', 'id': r[0], 'descricao': r[1], 'tipo': r[2],
                 'valor': float(r[3] or 0), 'data': data_serializada(r[4]),
                 'fornecedor': r[5],
+            })
+
+        for r in db.session.execute(db.text("""
+            SELECT id, tipo_pagamento, COALESCE(valor_pago, 0), data, fornecedor
+            FROM pagamento_servico
+            WHERE orcamento_item_id = :iid
+              AND COALESCE(valor_pago, 0) > 0
+        """), {"iid": item_id}).fetchall():
+            pagamentos.append({
+                'fonte': 'pagamento_servico', 'id': r[0],
+                'descricao': 'Pagamento de servico', 'tipo': r[1],
+                'valor': float(r[2] or 0), 'data': data_serializada(r[3]),
+                'fornecedor': r[4],
             })
 
         for r in db.session.execute(db.text("""

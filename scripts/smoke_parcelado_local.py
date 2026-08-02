@@ -20,17 +20,29 @@ from flask_jwt_extended import create_access_token
 
 from extensions import db, jwt
 import models  # noqa: F401
-from models import User, Obra, PagamentoParcelado, ParcelaIndividual
+from models import (
+    Obra,
+    OrcamentoEngEtapa,
+    OrcamentoEngItem,
+    PagamentoFuturo,
+    PagamentoParcelado,
+    PagamentoServico,
+    ParcelaIndividual,
+    Servico,
+    User,
+)
 from routes.cronograma import cronograma_bp
+from routes.lancamentos import lancamentos_bp
 from routes.sid import sid_bp
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = 'smoke-test-secret'
+app.config['JWT_SECRET_KEY'] = 'smoke-test-secret-with-at-least-32-bytes'
 db.init_app(app)
 jwt.init_app(app)
 app.register_blueprint(cronograma_bp)
+app.register_blueprint(lancamentos_bp)
 app.register_blueprint(sid_bp)
 
 TABELAS = [
@@ -58,12 +70,42 @@ hoje = date.today()
 with app.app_context():
     db.metadata.create_all(bind=db.engine, tables=[db.metadata.tables[t] for t in TABELAS])
     obra = Obra(nome='Obra Parcelado Smoke')
+    outra_obra = Obra(nome='Outra obra isolada')
     master = User(username='master_smoke', role='master')
     master.set_password('x')
-    db.session.add_all([obra, master])
+    db.session.add_all([obra, outra_obra, master])
+    db.session.flush()
+    servico = Servico(obra_id=obra.id, nome='Serviço vinculado')
+    etapa = OrcamentoEngEtapa(obra_id=obra.id, codigo='01', nome='Etapa teste', ordem=1)
+    db.session.add_all([servico, etapa])
+    db.session.flush()
+    item_orcamento = OrcamentoEngItem(
+        etapa_id=etapa.id,
+        codigo='01.01',
+        descricao='Item vinculado',
+        unidade='un',
+        quantidade=1,
+        tipo_composicao='composto',
+        preco_unitario=1000,
+        servico_id=servico.id,
+    )
+    db.session.add(item_orcamento)
+    outra_etapa = OrcamentoEngEtapa(obra_id=outra_obra.id, codigo='99', nome='Etapa isolada', ordem=1)
+    db.session.add(outra_etapa)
+    db.session.flush()
+    outro_item = OrcamentoEngItem(
+        etapa_id=outra_etapa.id,
+        codigo='99.01',
+        descricao='Item de outra obra',
+        unidade='un',
+        quantidade=1,
+        tipo_composicao='composto',
+        preco_unitario=500,
+    )
+    db.session.add(outro_item)
     db.session.commit()
     obra_id = obra.id
-    h = {'Authorization': f'Bearer {create_access_token(identity=str(master.id))}'}
+    h = {'Authorization': f'Bearer {create_access_token(identity=str(master.id), additional_claims={"role": master.role})}'}
 
     with app.test_client() as c:
         def parcelas_de(pid):
@@ -136,6 +178,82 @@ with app.app_context():
               f"got {body['parcelas_pagas']}/{body['status']}")
         check('parcelas 400+400 e entrada 200 fecham 1000',
               round(sum(p.valor_parcela for p in ps3), 2) == 1000.00)
+
+        print('\n=== rastreabilidade e fonte financeira única ===')
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
+            'descricao': 'Tentativa de vínculo cruzado', 'valor': 10, 'tipo': 'Material',
+            'status': 'Pago', 'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+            'orcamento_item_id': outro_item.id,
+        })
+        check('item de outra obra é rejeitado -> 400', r.status_code == 400, f'{r.status_code}: {r.data[:300]}')
+
+        r = c.post(f'/obras/{obra_id}/lancamentos', headers=h, json={
+            'descricao': 'Agendado ligado ao orçamento', 'valor': 90, 'tipo': 'Material',
+            'status': 'A Pagar', 'data': hoje.isoformat(),
+            'data_vencimento': hoje.isoformat(), 'servico_id': servico.id,
+            'orcamento_item_id': item_orcamento.id,
+        })
+        check('agendamento geral vinculado -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
+        futuro_geral = db.session.get(PagamentoFuturo, json.loads(r.data)['id'])
+        check('agendamento geral conserva item, serviço e tipo',
+              futuro_geral.orcamento_item_id == item_orcamento.id
+              and futuro_geral.servico_id == servico.id
+              and futuro_geral.tipo == 'Material')
+
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
+            'descricao': 'Parcelado ligado ao orçamento', 'valor': 600, 'tipo': 'Material',
+            'status': 'Pago', 'data': hoje.isoformat(),
+            'tipo_forma_pagamento': 'parcelado', 'numero_parcelas': 2,
+            'periodicidade': 'Mensal', 'data_primeira_parcela': hoje.isoformat(),
+            'servico_id': servico.id, 'orcamento_item_id': item_orcamento.id,
+        })
+        check('parcelado pago e vinculado -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
+        parcelado_vinculado_id = json.loads(r.data)['pagamento_parcelado']['id']
+        parcelado_vinculado = db.session.get(PagamentoParcelado, parcelado_vinculado_id)
+        check('parcelamento conserva item do orçamento',
+              parcelado_vinculado.orcamento_item_id == item_orcamento.id,
+              parcelado_vinculado.orcamento_item_id)
+        check('parcelas pagas não criam PagamentoServico duplicado',
+              PagamentoServico.query.filter_by(servico_id=servico.id).count() == 0)
+
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
+            'descricao': 'À vista ligado ao orçamento', 'valor': 125, 'tipo': 'Mão de Obra',
+            'status': 'Pago', 'data': hoje.isoformat(),
+            'tipo_forma_pagamento': 'avista', 'servico_id': servico.id,
+            'orcamento_item_id': item_orcamento.id,
+        })
+        check('à vista pago e vinculado -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
+        pagamento_avista = PagamentoServico.query.filter_by(servico_id=servico.id).one()
+        check('pagamento à vista conserva item do orçamento',
+              pagamento_avista.orcamento_item_id == item_orcamento.id,
+              pagamento_avista.orcamento_item_id)
+
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
+            'descricao': 'Futuro ligado ao orçamento', 'valor': 75, 'tipo': 'Material',
+            'status': 'A Pagar', 'data': hoje.isoformat(),
+            'data_vencimento': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+            'servico_id': servico.id, 'orcamento_item_id': item_orcamento.id,
+        })
+        check('futuro vinculado -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
+        futuro_id = json.loads(r.data)['id']
+        check('futuro nasce com vínculo',
+              db.session.get(PagamentoFuturo, futuro_id).orcamento_item_id == item_orcamento.id)
+
+        r = c.post(
+            f'/obras/{obra_id}/cronograma/marcar-multiplos-pagos',
+            headers=h,
+            json={'itens': [{'tipo': 'futuro', 'id': futuro_id}], 'data_pagamento': hoje.isoformat()},
+        )
+        check('baixa do futuro vinculado -> 200', r.status_code == 200, f'{r.status_code}: {r.data[:300]}')
+        pagamento_convertido = PagamentoServico.query.filter_by(
+            servico_id=servico.id,
+            valor_total=75,
+        ).one()
+        check('baixa conserva item do orçamento',
+              pagamento_convertido.orcamento_item_id == item_orcamento.id,
+              pagamento_convertido.orcamento_item_id)
+        check('futuro convertido é removido sem perder o pagamento',
+              db.session.get(PagamentoFuturo, futuro_id) is None)
 
         print('\n=== fix 3: edição regenera parcelas em aberto ===')
         # paga a 1ª parcela do parcelamento "Centavos" e edita o total

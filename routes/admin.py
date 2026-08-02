@@ -2309,7 +2309,7 @@ def simular_pagamento_teste(obra_id):
             db.session.flush()
             
             # Vínculo com item do orçamento — via ORM, com validação explícita.
-            oid, erro = resolver_orcamento_item_id(orcamento_item_id)
+            oid, erro = resolver_orcamento_item_id(orcamento_item_id, obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (teste lancamento): {erro} ---")
@@ -2334,7 +2334,7 @@ def simular_pagamento_teste(obra_id):
             db.session.flush()
             
             # Vínculo com item do orçamento — via ORM, com validação explícita.
-            oid, erro = resolver_orcamento_item_id(orcamento_item_id)
+            oid, erro = resolver_orcamento_item_id(orcamento_item_id, obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (teste pagamento_futuro): {erro} ---")
@@ -2363,7 +2363,7 @@ def simular_pagamento_teste(obra_id):
             db.session.flush()
             
             # Vínculo com item do orçamento — via ORM, com validação explícita.
-            oid, erro = resolver_orcamento_item_id(orcamento_item_id)
+            oid, erro = resolver_orcamento_item_id(orcamento_item_id, obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (teste parcelado): {erro} ---")
