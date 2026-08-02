@@ -20,6 +20,7 @@ from flask_jwt_extended import create_access_token
 from extensions import db, jwt
 import models  # noqa: F401
 from models import (
+    Boleto,
     Lancamento,
     Obra,
     OrcamentoEngEtapa,
@@ -436,6 +437,60 @@ with app.app_context():
         pai = db.session.get(PagamentoParcelado, pid)
         check("status 'Concluído' cru ignorado", pai.status == 'Ativo', f'got {pai.status}')
         check('parcelas_pagas cru ignorado', pai.parcelas_pagas == 1, f'got {pai.parcelas_pagas}')
+
+        print('\n=== acesso rápido: vencido e a vencer no mês ===')
+        r = c.get('/obras?mostrar_concluidas=true&incluir_arquivadas=true', headers=h)
+        linha_base = next(item for item in json.loads(r.data) if item['id'] == obra_id)
+
+        parcelado_resumo = PagamentoParcelado(
+            obra_id=obra_id,
+            descricao='Parcelas para resumo',
+            valor_total=110,
+            numero_parcelas=2,
+            valor_parcela=55,
+            data_primeira_parcela=hoje - timedelta(days=1),
+            periodicidade='Mensal',
+            parcelas_pagas=0,
+            status='Ativo',
+        )
+        db.session.add(parcelado_resumo)
+        db.session.flush()
+        db.session.add_all([
+            PagamentoFuturo(
+                obra_id=obra_id, descricao='Futuro vencido do resumo', valor=10,
+                data_vencimento=hoje - timedelta(days=1), status='Previsto',
+            ),
+            PagamentoFuturo(
+                obra_id=obra_id, descricao='Futuro do mês', valor=20,
+                data_vencimento=hoje, status='Previsto',
+            ),
+            Boleto(
+                obra_id=obra_id, descricao='Boleto vencido do resumo', valor=30,
+                data_vencimento=hoje - timedelta(days=1), status='Vencido',
+            ),
+            Boleto(
+                obra_id=obra_id, descricao='Boleto do mês', valor=40,
+                data_vencimento=hoje, status='Pendente',
+            ),
+            ParcelaIndividual(
+                pagamento_parcelado_id=parcelado_resumo.id, numero_parcela=1,
+                valor_parcela=50, data_vencimento=hoje - timedelta(days=1), status='Previsto',
+            ),
+            ParcelaIndividual(
+                pagamento_parcelado_id=parcelado_resumo.id, numero_parcela=2,
+                valor_parcela=60, data_vencimento=hoje, status='Previsto',
+            ),
+        ])
+        db.session.commit()
+
+        r = c.get('/obras?mostrar_concluidas=true&incluir_arquivadas=true', headers=h)
+        linha_atual = next(item for item in json.loads(r.data) if item['id'] == obra_id)
+        check('resumo vencido soma futuro, boleto e parcela',
+              round(linha_atual['valor_vencido'] - linha_base['valor_vencido'], 2) == 90.0,
+              {'base': linha_base, 'atual': linha_atual})
+        check('resumo do mês soma futuro, boleto e parcela sem misturar vencidos',
+              round(linha_atual['valor_a_vencer_mes'] - linha_base['valor_a_vencer_mes'], 2) == 120.0,
+              {'base': linha_base, 'atual': linha_atual})
 
 print(f'\n{"=" * 40}')
 print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')
