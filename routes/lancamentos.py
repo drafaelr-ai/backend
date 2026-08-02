@@ -131,9 +131,18 @@ def add_lancamento(obra_id):
                 fornecedor=dados.get('fornecedor'),
                 pix=dados.get('pix'),
                 observacoes=None,
-                status='Previsto'
+                status='Previsto',
+                servico_id=dados.get('servico_id'),
+                tipo=dados.get('tipo'),
             )
             db.session.add(novo_pagamento_futuro)
+            db.session.flush()
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), obra_id)
+            if erro:
+                db.session.rollback()
+                logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo pagamento futuro): {erro} ---")
+                return jsonify({"erro": erro}), 400
+            novo_pagamento_futuro.orcamento_item_id = oid
             db.session.commit()
             
             # --- NOTIFICAÇÃO PARA MASTERS ---
@@ -182,7 +191,7 @@ def add_lancamento(obra_id):
             db.session.flush()  # Para obter o ID
 
             # Vínculo com item do orçamento — via ORM, com validação explícita.
-            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (novo lancamento): {erro} ---")
@@ -264,7 +273,7 @@ def editar_lancamento(lancamento_id):
         
         # Vínculo com item do orçamento — via ORM, com validação explícita.
         if 'orcamento_item_id' in dados:
-            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), lancamento.obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (lancamento {lancamento_id}): {erro} ---")
@@ -312,7 +321,7 @@ def atualizar_lancamento_parcial(lancamento_id):
         
         # Vínculo com item do orçamento — via ORM, com validação explícita.
         if 'orcamento_item_id' in dados:
-            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'))
+            oid, erro = resolver_orcamento_item_id(dados.get('orcamento_item_id'), lancamento.obra_id)
             if erro:
                 db.session.rollback()
                 logger.warning(f"--- [VINCULO] orcamento_item_id rejeitado (lancamento {lancamento_id}): {erro} ---")

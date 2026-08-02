@@ -1047,12 +1047,22 @@ def run_auto_migration():
                 id SERIAL PRIMARY KEY,
                 atividade_id INTEGER NOT NULL REFERENCES planejamento_atividade(id) ON DELETE CASCADE,
                 quantidade NUMERIC(14,3) NOT NULL,
+                tipo_apontamento VARCHAR(20) NOT NULL DEFAULT 'quantidade',
+                percentual NUMERIC(5,2),
                 data_apontamento DATE NOT NULL,
                 observacao TEXT,
                 registrado_por_user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT ck_planejamento_apontamento_quantidade CHECK (quantidade > 0)
+                CONSTRAINT ck_planejamento_apontamento_quantidade CHECK (quantidade > 0),
+                CONSTRAINT ck_planejamento_apontamento_tipo
+                    CHECK (tipo_apontamento IN ('quantidade','percentual')),
+                CONSTRAINT ck_planejamento_apontamento_percentual
+                    CHECK (percentual IS NULL OR (percentual > 0 AND percentual <= 100))
             );
+            ALTER TABLE planejamento_apontamento
+                ADD COLUMN IF NOT EXISTS tipo_apontamento VARCHAR(20) NOT NULL DEFAULT 'quantidade';
+            ALTER TABLE planejamento_apontamento
+                ADD COLUMN IF NOT EXISTS percentual NUMERIC(5,2);
             CREATE INDEX IF NOT EXISTS idx_planejamento_apontamento_atividade_data
                 ON planejamento_apontamento (atividade_id, data_apontamento);
 

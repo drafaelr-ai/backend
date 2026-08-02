@@ -9,6 +9,14 @@ class PlanejamentoApontamento(db.Model):
     __tablename__ = 'planejamento_apontamento'
     __table_args__ = (
         db.CheckConstraint('quantidade > 0', name='ck_planejamento_apontamento_quantidade'),
+        db.CheckConstraint(
+            "tipo_apontamento IN ('quantidade','percentual')",
+            name='ck_planejamento_apontamento_tipo',
+        ),
+        db.CheckConstraint(
+            'percentual IS NULL OR (percentual > 0 AND percentual <= 100)',
+            name='ck_planejamento_apontamento_percentual',
+        ),
         db.Index(
             'idx_planejamento_apontamento_atividade_data',
             'atividade_id',
@@ -23,6 +31,10 @@ class PlanejamentoApontamento(db.Model):
         nullable=False,
     )
     quantidade = db.Column(db.Numeric(14, 3), nullable=False)
+    tipo_apontamento = db.Column(
+        db.String(20), nullable=False, default='quantidade', server_default='quantidade'
+    )
+    percentual = db.Column(db.Numeric(5, 2), nullable=True)
     data_apontamento = db.Column(db.Date, nullable=False)
     observacao = db.Column(db.Text, nullable=True)
     registrado_por_user_id = db.Column(
@@ -42,6 +54,8 @@ class PlanejamentoApontamento(db.Model):
             'id': self.id,
             'atividade_id': self.atividade_id,
             'quantidade': float(quantidade or 0),
+            'tipo_apontamento': self.tipo_apontamento or 'quantidade',
+            'percentual': float(self.percentual) if self.percentual is not None else None,
             'data_apontamento': (
                 self.data_apontamento.isoformat() if self.data_apontamento else None
             ),

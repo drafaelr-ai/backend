@@ -359,15 +359,17 @@ with app.app_context():
         print('\n=== Produção e impedimentos ===')
         response = client.post(
             f'/planejamento/atividades/{activity_id}/apontamentos',
-            json={'quantidade': 40, 'data_apontamento': monday.isoformat(), 'observacao': 'Produção do dia'},
+            json={'quantidade': 40, 'data_apontamento': '2000-01-01', 'observacao': 'Produção do dia'},
             headers=h_common,
         )
         progressed = body(response)
         check(
-            'apontamento positivo atualiza execução e andamento',
+            'apontamento positivo atualiza execução, andamento e usa a data automática',
             response.status_code == 201
             and progressed['atividade']['quantidade_executada'] == 40
-            and progressed['atividade']['status'] == 'em_andamento',
+            and progressed['atividade']['status'] == 'em_andamento'
+            and progressed['apontamento']['tipo_apontamento'] == 'quantidade'
+            and progressed['apontamento']['data_apontamento'] == date.today().isoformat(),
             progressed,
         )
         response = client.post(
@@ -382,6 +384,78 @@ with app.app_context():
             headers=h_common,
         )
         check('usuário não aponta produção em outra obra -> 403', response.status_code == 403)
+
+        response = client.post(
+            f'/obras/{works[0].id}/planejamento/atividades',
+            json={'titulo': 'Atividade medida somente por avanço percentual'},
+            headers=h_master,
+        )
+        percentage_activity = body(response)
+        check(
+            'atividade sem quantidade pode ser criada para medição percentual',
+            response.status_code == 201
+            and percentage_activity['quantidade_planejada'] == 0,
+            percentage_activity,
+        )
+        percentage_activity_id = percentage_activity['id']
+        response = client.post(
+            f'/planejamento/atividades/{percentage_activity_id}/apontamentos',
+            json={'percentual': 35, 'data_apontamento': '2000-01-01'},
+            headers=h_master,
+        )
+        percentage_progress = body(response)
+        check(
+            'primeiro percentual converte atividade 0/0 para base de 100%',
+            response.status_code == 201
+            and percentage_progress['atividade']['quantidade_planejada'] == 100
+            and percentage_progress['atividade']['quantidade_executada'] == 35
+            and percentage_progress['atividade']['unidade'] == '%'
+            and percentage_progress['atividade']['percentual_conclusao'] == 35
+            and percentage_progress['atividade']['status'] == 'em_andamento'
+            and percentage_progress['apontamento']['tipo_apontamento'] == 'percentual'
+            and percentage_progress['apontamento']['percentual'] == 35
+            and percentage_progress['apontamento']['data_apontamento'] == date.today().isoformat(),
+            percentage_progress,
+        )
+        response = client.post(
+            f'/planejamento/atividades/{percentage_activity_id}/apontamentos',
+            json={'percentual': 60},
+            headers=h_master,
+        )
+        percentage_progress = body(response)
+        check(
+            'novo percentual define o avanço total sem somar duas vezes',
+            response.status_code == 201
+            and percentage_progress['atividade']['quantidade_executada'] == 60
+            and percentage_progress['apontamento']['quantidade'] == 25
+            and percentage_progress['apontamento']['percentual'] == 60,
+            percentage_progress,
+        )
+        response = client.post(
+            f'/planejamento/atividades/{percentage_activity_id}/apontamentos',
+            json={'percentual': 50},
+            headers=h_master,
+        )
+        check('percentual não pode reduzir o avanço atual -> 400', response.status_code == 400, body(response))
+        response = client.post(
+            f'/planejamento/atividades/{percentage_activity_id}/apontamentos',
+            json={'percentual': 101},
+            headers=h_master,
+        )
+        check('percentual acima de 100 -> 400', response.status_code == 400, body(response))
+        response = client.post(
+            f'/planejamento/atividades/{percentage_activity_id}/apontamentos',
+            json={'percentual': 100},
+            headers=h_master,
+        )
+        percentage_progress = body(response)
+        check(
+            'percentual de 100 conclui a atividade',
+            response.status_code == 201
+            and percentage_progress['atividade']['status'] == 'concluido'
+            and percentage_progress['atividade']['percentual_conclusao'] == 100,
+            percentage_progress,
+        )
         response = client.post(
             f'/planejamento/atividades/{activity_id}/restricoes',
             json={'descricao': 'Sem material'},

@@ -1,6 +1,7 @@
 import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
@@ -47,6 +48,7 @@ from services.planejamento_service import (
 logger = logging.getLogger(__name__)
 planejamento_bp = Blueprint('planejamento', __name__)
 MAX_PLANEJAMENTO_REQUEST_BYTES = 3 * 1024 * 1024
+PLANEJAMENTO_TIMEZONE = ZoneInfo('America/Fortaleza')
 
 
 @planejamento_bp.before_request
@@ -459,22 +461,77 @@ def post_planejamento_apontamento(activity_id):
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             raise PlanejamentoValidationError('O corpo deve ser um objeto JSON.')
-        quantity = parse_decimal(data.get('quantidade'), 'quantidade', minimum=Decimal('0.001'))
-        if quantity <= 0:
-            raise PlanejamentoValidationError('quantidade deve ser maior que zero.', 'quantidade')
-        note_date = parse_iso_date(data.get('data_apontamento'), 'data_apontamento') or date.today()
+        has_quantity = data.get('quantidade') not in (None, '')
+        has_percentage = data.get('percentual') not in (None, '')
+        if has_quantity == has_percentage:
+            raise PlanejamentoValidationError(
+                'Informe somente quantidade ou percentual.',
+                'quantidade',
+            )
+
+        percentage = None
+        note_type = 'quantidade'
+        if has_percentage:
+            percentage = parse_decimal(
+                data.get('percentual'),
+                'percentual',
+                minimum=Decimal('0.001'),
+                maximum=Decimal('100'),
+            )
+            current_percentage = Decimal(str(activity.percentual_conclusao))
+            if percentage <= current_percentage:
+                raise PlanejamentoValidationError(
+                    'percentual deve ser maior que o avanço atual.',
+                    'percentual',
+                )
+
+            planned = Decimal(str(activity.quantidade_planejada or 0))
+            executed = Decimal(str(activity.quantidade_executada or 0))
+            if planned <= 0:
+                # Atividades sem medição física passam a usar uma base percentual.
+                activity.quantidade_planejada = Decimal('100')
+                activity.quantidade_executada = percentage
+                activity.unidade = '%'
+                quantity = percentage - current_percentage
+            else:
+                target_executed = (planned * percentage / Decimal('100')).quantize(
+                    Decimal('0.001')
+                )
+                quantity = target_executed - executed
+                if quantity <= 0:
+                    raise PlanejamentoValidationError(
+                        'percentual deve gerar avanço maior que o atual.',
+                        'percentual',
+                    )
+                activity.quantidade_executada = target_executed
+            note_type = 'percentual'
+        else:
+            quantity = parse_decimal(
+                data.get('quantidade'),
+                'quantidade',
+                minimum=Decimal('0.001'),
+            )
+            if quantity <= 0:
+                raise PlanejamentoValidationError(
+                    'quantidade deve ser maior que zero.', 'quantidade'
+                )
+            activity.quantidade_executada = Decimal(
+                str(activity.quantidade_executada or 0)
+            ) + quantity
+
+        # A data é definida no servidor para impedir retrodatação pelo navegador.
+        note_date = datetime.now(PLANEJAMENTO_TIMEZONE).date()
         observation = clean_text(data.get('observacao'), 'observacao', 2000)
         note = PlanejamentoApontamento(
             atividade_id=activity.id,
             quantidade=quantity,
+            tipo_apontamento=note_type,
+            percentual=percentage,
             data_apontamento=note_date,
             observacao=observation,
             registrado_por_user_id=user.id,
         )
         db.session.add(note)
-        activity.quantidade_executada = Decimal(
-            str(activity.quantidade_executada or 0)
-        ) + quantity
         activity.versao = (activity.versao or 0) + 1
         db.session.flush()
         activity.status = automatic_status(activity)
