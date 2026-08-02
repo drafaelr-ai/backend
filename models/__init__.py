@@ -48,3 +48,8 @@ from .solicitacao_config import SolicitacaoConfig  # noqa: F401
 # --- Módulo Almoxarifado ---
 from .almoxarifado_item import AlmoxarifadoItem  # noqa: F401
 from .almoxarifado_movimentacao import AlmoxarifadoMovimentacao  # noqa: F401
+# --- Módulo Planejamento ---
+from .planejamento_atividade import PlanejamentoAtividade  # noqa: F401
+from .planejamento_apontamento import PlanejamentoApontamento  # noqa: F401
+from .planejamento_restricao import PlanejamentoRestricao  # noqa: F401
+from .planejamento_fechamento import PlanejamentoFechamento  # noqa: F401

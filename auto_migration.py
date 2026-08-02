@@ -993,6 +993,136 @@ def run_auto_migration():
         logger.info("✅ ALMOXARIFADO: tabelas almoxarifado_item e movimentacao garantidas")
 
         # =================================================================
+        # MÓDULO PLANEJAMENTO OPERACIONAL
+        # Tabelas ficam inacessíveis pelo Data API do Supabase. O acesso é
+        # exclusivamente pelo backend Flask, que aplica JWT + escopo de obra.
+        # =================================================================
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS planejamento_atividade (
+                id SERIAL PRIMARY KEY,
+                obra_id INTEGER NOT NULL REFERENCES obra(id) ON DELETE CASCADE,
+                orcamento_item_id INTEGER REFERENCES orcamento_eng_item(id) ON DELETE SET NULL,
+                cronograma_id INTEGER REFERENCES cronograma_obra(id) ON DELETE SET NULL,
+                titulo VARCHAR(240) NOT NULL,
+                descricao TEXT,
+                etapa_nome VARCHAR(200),
+                origem VARCHAR(20) NOT NULL DEFAULT 'manual',
+                status VARCHAR(20) NOT NULL DEFAULT 'a_planejar',
+                prioridade VARCHAR(20) NOT NULL DEFAULT 'normal',
+                responsavel VARCHAR(160),
+                equipe VARCHAR(160),
+                data_inicio DATE,
+                data_fim DATE,
+                quantidade_planejada NUMERIC(14,3) NOT NULL DEFAULT 0,
+                quantidade_executada NUMERIC(14,3) NOT NULL DEFAULT 0,
+                unidade VARCHAR(24) NOT NULL DEFAULT 'un',
+                observacoes TEXT,
+                criado_por_user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                versao INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT ck_planejamento_atividade_status
+                    CHECK (status IN ('a_planejar','pronto','em_andamento','impedido','concluido')),
+                CONSTRAINT ck_planejamento_atividade_origem
+                    CHECK (origem IN ('manual','orcamento','planilha')),
+                CONSTRAINT ck_planejamento_atividade_prioridade
+                    CHECK (prioridade IN ('baixa','normal','alta','critica')),
+                CONSTRAINT ck_planejamento_atividade_quantidades
+                    CHECK (quantidade_planejada >= 0 AND quantidade_executada >= 0),
+                CONSTRAINT ck_planejamento_atividade_datas
+                    CHECK (data_fim IS NULL OR data_inicio IS NULL OR data_fim >= data_inicio)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_planejamento_atividade_orcamento_item
+                ON planejamento_atividade (obra_id, orcamento_item_id)
+                WHERE orcamento_item_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_planejamento_atividade_obra_status
+                ON planejamento_atividade (obra_id, status);
+            CREATE INDEX IF NOT EXISTS idx_planejamento_atividade_obra_periodo
+                ON planejamento_atividade (obra_id, data_inicio, data_fim);
+            CREATE INDEX IF NOT EXISTS idx_planejamento_atividade_cronograma
+                ON planejamento_atividade (cronograma_id)
+                WHERE cronograma_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS planejamento_apontamento (
+                id SERIAL PRIMARY KEY,
+                atividade_id INTEGER NOT NULL REFERENCES planejamento_atividade(id) ON DELETE CASCADE,
+                quantidade NUMERIC(14,3) NOT NULL,
+                data_apontamento DATE NOT NULL,
+                observacao TEXT,
+                registrado_por_user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT ck_planejamento_apontamento_quantidade CHECK (quantidade > 0)
+            );
+            CREATE INDEX IF NOT EXISTS idx_planejamento_apontamento_atividade_data
+                ON planejamento_apontamento (atividade_id, data_apontamento);
+
+            CREATE TABLE IF NOT EXISTS planejamento_restricao (
+                id SERIAL PRIMARY KEY,
+                atividade_id INTEGER NOT NULL REFERENCES planejamento_atividade(id) ON DELETE CASCADE,
+                tipo VARCHAR(24) NOT NULL,
+                descricao VARCHAR(500) NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'aberta',
+                responsavel VARCHAR(160),
+                data_limite DATE,
+                observacoes TEXT,
+                resolvida_em TIMESTAMPTZ,
+                criada_por_user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT ck_planejamento_restricao_tipo
+                    CHECK (tipo IN ('material','projeto','equipe','equipamento','predecessora','outro')),
+                CONSTRAINT ck_planejamento_restricao_status
+                    CHECK (status IN ('aberta','resolvida','cancelada'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_planejamento_restricao_atividade_status
+                ON planejamento_restricao (atividade_id, status);
+            CREATE INDEX IF NOT EXISTS idx_planejamento_restricao_aberta_limite
+                ON planejamento_restricao (data_limite)
+                WHERE status = 'aberta';
+
+            CREATE TABLE IF NOT EXISTS planejamento_fechamento (
+                id SERIAL PRIMARY KEY,
+                obra_id INTEGER NOT NULL REFERENCES obra(id) ON DELETE CASCADE,
+                semana_inicio DATE NOT NULL,
+                semana_fim DATE NOT NULL,
+                planejadas INTEGER NOT NULL DEFAULT 0,
+                concluidas INTEGER NOT NULL DEFAULT 0,
+                ppc NUMERIC(5,2) NOT NULL DEFAULT 0,
+                motivos_nao_conclusao JSONB,
+                aprendizado TEXT,
+                fechado_por_user_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_planejamento_fechamento_obra_semana
+                    UNIQUE (obra_id, semana_inicio),
+                CONSTRAINT ck_planejamento_fechamento_metricas
+                    CHECK (planejadas >= 0 AND concluidas >= 0 AND ppc >= 0 AND ppc <= 100)
+            );
+            CREATE INDEX IF NOT EXISTS idx_planejamento_fechamento_obra_semana
+                ON planejamento_fechamento (obra_id, semana_inicio);
+        """)
+        for table_name in (
+            'planejamento_atividade',
+            'planejamento_apontamento',
+            'planejamento_restricao',
+            'planejamento_fechamento',
+        ):
+            cur.execute(f'ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY;')
+            cur.execute(
+                f'REVOKE ALL ON TABLE {table_name} FROM anon, authenticated, service_role;'
+            )
+        for sequence_name in (
+            'planejamento_atividade_id_seq',
+            'planejamento_apontamento_id_seq',
+            'planejamento_restricao_id_seq',
+            'planejamento_fechamento_id_seq',
+        ):
+            cur.execute(
+                f'REVOKE ALL ON SEQUENCE {sequence_name} FROM anon, authenticated, service_role;'
+            )
+        logger.info("✅ PLANEJAMENTO: schema, índices e bloqueio do Data API garantidos")
+
+        # =================================================================
         # ACESSOS POR MÓDULO (aditivo, idempotente)
         # NULL = todos os módulos (comportamento anterior preservado).
         # Invariante: o usuário id=1 (Diego, ex-admin_principal) é o ÚNICO
