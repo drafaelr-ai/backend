@@ -889,9 +889,9 @@ def get_obra_detalhes(obra_id):
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
         
         for item in historico_unificado:
-            if item['data']:
+            if item['data'] and hasattr(item['data'], 'isoformat'):
                 item['data'] = item['data'].isoformat()
-            if item.get('data_vencimento'):
+            if item.get('data_vencimento') and hasattr(item['data_vencimento'], 'isoformat'):
                 item['data_vencimento'] = item['data_vencimento'].isoformat()
             
         # --- Cálculo dos totais de serviço ---

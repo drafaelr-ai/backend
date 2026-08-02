@@ -1,10 +1,9 @@
 """
-Smoke test local do pagamento parcelado — SQLite in-memory, sem banco real.
+Regressão local do fluxo financeiro — SQLite in-memory, sem banco real.
 
-Valida os 4 fixes: (1) parcelas_customizadas de boleto honradas (valores +
-código de barras), (2) ajuste de centavos na última parcela, (3) edição
-estrutural regenera parcelas em aberto preservando as pagas, (4) criação
-já 'Pago' com entrada marca a entrada como paga e alinha o contador.
+Valida pagamento à vista e parcelado, entrada, boletos customizados, vínculo
+com orçamento, baixa de parcela, consolidação sem duplicidade, histórico geral,
+edição estrutural e isolamento de acesso entre obras.
 
 Uso: cd backend && python scripts/smoke_parcelado_local.py
 """
@@ -21,6 +20,7 @@ from flask_jwt_extended import create_access_token
 from extensions import db, jwt
 import models  # noqa: F401
 from models import (
+    Lancamento,
     Obra,
     OrcamentoEngEtapa,
     OrcamentoEngItem,
@@ -33,7 +33,9 @@ from models import (
 )
 from routes.cronograma import cronograma_bp
 from routes.lancamentos import lancamentos_bp
+from routes.obras import obras_bp
 from routes.sid import sid_bp
+from services.financeiro_service import calcular_totais_pagos_obra
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
@@ -43,13 +45,14 @@ db.init_app(app)
 jwt.init_app(app)
 app.register_blueprint(cronograma_bp)
 app.register_blueprint(lancamentos_bp)
+app.register_blueprint(obras_bp)
 app.register_blueprint(sid_bp)
 
 TABELAS = [
     'user', 'user_obra_association', 'obra', 'lancamento', 'servico',
     'pagamento_servico', 'pagamento_parcelado_v2', 'parcela_individual',
     'pagamento_futuro', 'boleto', 'orcamento_eng_etapa', 'orcamento_eng_item',
-    'notificacao',
+    'orcamento', 'anexo_orcamento', 'notificacao',
 ]
 
 PASS = []
@@ -73,11 +76,14 @@ with app.app_context():
     outra_obra = Obra(nome='Outra obra isolada')
     master = User(username='master_smoke', role='master')
     master.set_password('x')
-    db.session.add_all([obra, outra_obra, master])
+    sem_acesso = User(username='sem_acesso_smoke', role='comum')
+    sem_acesso.set_password('x')
+    db.session.add_all([obra, outra_obra, master, sem_acesso])
     db.session.flush()
     servico = Servico(obra_id=obra.id, nome='Serviço vinculado')
+    outro_servico = Servico(obra_id=outra_obra.id, nome='Serviço de outra obra')
     etapa = OrcamentoEngEtapa(obra_id=obra.id, codigo='01', nome='Etapa teste', ordem=1)
-    db.session.add_all([servico, etapa])
+    db.session.add_all([servico, outro_servico, etapa])
     db.session.flush()
     item_orcamento = OrcamentoEngItem(
         etapa_id=etapa.id,
@@ -106,6 +112,9 @@ with app.app_context():
     db.session.commit()
     obra_id = obra.id
     h = {'Authorization': f'Bearer {create_access_token(identity=str(master.id), additional_claims={"role": master.role})}'}
+    h_sem_acesso = {
+        'Authorization': f'Bearer {create_access_token(identity=str(sem_acesso.id), additional_claims={"role": sem_acesso.role})}'
+    }
 
     with app.test_client() as c:
         def parcelas_de(pid):
@@ -180,6 +189,61 @@ with app.app_context():
               round(sum(p.valor_parcela for p in ps3), 2) == 1000.00)
 
         print('\n=== rastreabilidade e fonte financeira única ===')
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', json={
+            'descricao': 'Tentativa sem token', 'valor': 10, 'tipo': 'Material',
+            'status': 'Pago', 'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+        })
+        check('requisição sem autenticação é rejeitada -> 401', r.status_code == 401,
+              f'{r.status_code}: {r.data[:300]}')
+
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h_sem_acesso, json={
+            'descricao': 'Tentativa sem acesso', 'valor': 10, 'tipo': 'Material',
+            'status': 'Pago', 'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+        })
+        check('usuário sem acesso à obra é rejeitado -> 403', r.status_code == 403,
+              f'{r.status_code}: {r.data[:300]}')
+
+        casos_invalidos = [
+            ('descrição vazia', {
+                'descricao': ' ', 'valor': 10, 'tipo': 'Material', 'status': 'Pago',
+                'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+            }),
+            ('valor zero', {
+                'descricao': 'Valor inválido', 'valor': 0, 'tipo': 'Material', 'status': 'Pago',
+                'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+            }),
+            ('status inválido', {
+                'descricao': 'Status inválido', 'valor': 10, 'tipo': 'Material', 'status': 'Cancelado',
+                'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+            }),
+            ('data inválida', {
+                'descricao': 'Data inválida', 'valor': 10, 'tipo': 'Material', 'status': 'Pago',
+                'data': 'não-é-data', 'tipo_forma_pagamento': 'avista',
+            }),
+            ('mais de 60 parcelas', {
+                'descricao': 'Parcelamento inválido', 'valor': 610, 'tipo': 'Material',
+                'status': 'A Pagar', 'data': hoje.isoformat(),
+                'tipo_forma_pagamento': 'parcelado', 'numero_parcelas': 61,
+                'periodicidade': 'Mensal', 'data_primeira_parcela': hoje.isoformat(),
+            }),
+            ('entrada igual ao total', {
+                'descricao': 'Entrada inválida', 'valor': 100, 'tipo': 'Material',
+                'status': 'A Pagar', 'data': hoje.isoformat(),
+                'tipo_forma_pagamento': 'parcelado', 'numero_parcelas': 2,
+                'periodicidade': 'Mensal', 'data_primeira_parcela': hoje.isoformat(),
+                'tem_entrada': True, 'valor_entrada': 100, 'percentual_entrada': 100,
+            }),
+            ('serviço de outra obra', {
+                'descricao': 'Vínculo cruzado', 'valor': 10, 'tipo': 'Material',
+                'status': 'Pago', 'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
+                'servico_id': outro_servico.id,
+            }),
+        ]
+        for nome_caso, payload in casos_invalidos:
+            r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json=payload)
+            check(f'{nome_caso} é rejeitado -> 400', r.status_code == 400,
+                  f'{r.status_code}: {r.data[:300]}')
+
         r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
             'descricao': 'Tentativa de vínculo cruzado', 'valor': 10, 'tipo': 'Material',
             'status': 'Pago', 'data': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
@@ -254,6 +318,85 @@ with app.app_context():
               pagamento_convertido.orcamento_item_id)
         check('futuro convertido é removido sem perder o pagamento',
               db.session.get(PagamentoFuturo, futuro_id) is None)
+
+        print('\n=== fluxo completo: parcela -> orçamento -> histórico geral ===')
+        total_antes = calcular_totais_pagos_obra(obra_id)['total']
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
+            'descricao': 'Parcelado global consolidado', 'valor': 300, 'tipo': 'Material',
+            'status': 'A Pagar', 'data': hoje.isoformat(),
+            'tipo_forma_pagamento': 'parcelado', 'numero_parcelas': 3,
+            'periodicidade': 'Mensal', 'data_primeira_parcela': hoje.isoformat(),
+            'orcamento_item_id': item_orcamento.id,
+        })
+        check('novo parcelado consolidado -> 201', r.status_code == 201,
+              f'{r.status_code}: {r.data[:300]}')
+        consolidado_id = json.loads(r.data)['pagamento_parcelado']['id']
+        consolidado = db.session.get(PagamentoParcelado, consolidado_id)
+        check('parcelamento pertence à obra e ao item selecionados',
+              consolidado.obra_id == obra_id and consolidado.orcamento_item_id == item_orcamento.id,
+              consolidado.to_dict())
+
+        primeira = parcelas_de(consolidado_id)[0]
+        r = c.post(
+            f'/sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{consolidado_id}/parcelas/{primeira.id}/pagar',
+            headers=h_sem_acesso,
+            json={'data_pagamento': hoje.isoformat(), 'forma_pagamento': 'PIX'},
+        )
+        check('usuário sem acesso não pode baixar parcela -> 403', r.status_code == 403,
+              f'{r.status_code}: {r.data[:300]}')
+
+        r = c.post(
+            f'/sid/cronograma-financeiro/{obra_id}/pagamentos-parcelados/{consolidado_id}/parcelas/{primeira.id}/pagar',
+            headers=h,
+            json={'data_pagamento': hoje.isoformat(), 'forma_pagamento': 'PIX'},
+        )
+        check('baixa da parcela consolidada -> 200', r.status_code == 200,
+              f'{r.status_code}: {r.data[:300]}')
+        db.session.refresh(primeira)
+        check('parcela guarda status, data e forma de pagamento',
+              primeira.status == 'Pago' and primeira.data_pagamento == hoje
+              and primeira.forma_pagamento == 'PIX', primeira.to_dict())
+
+        pago_no_item = sum(
+            parcela.valor_parcela
+            for parcela in ParcelaIndividual.query.join(PagamentoParcelado).filter(
+                PagamentoParcelado.orcamento_item_id == item_orcamento.id,
+                ParcelaIndividual.status == 'Pago',
+            ).all()
+            if parcela.pagamento_parcelado_id == consolidado_id
+        )
+        check('orçamento recebe exatamente a parcela paga (R$ 100)',
+              pago_no_item == 100.0, f'got {pago_no_item}')
+        total_depois = calcular_totais_pagos_obra(obra_id)['total']
+        check('consolidado geral aumenta uma única vez em R$ 100',
+              round(total_depois - total_antes, 2) == 100.0,
+              f'antes={total_antes} depois={total_depois}')
+
+        r = c.get(f'/obras/{obra_id}', headers=h)
+        check('dashboard da obra responde após a baixa -> 200', r.status_code == 200,
+              f'{r.status_code}: {r.data[:500]}')
+        detalhe = json.loads(r.data)
+        ocorrencias = [
+            item for item in detalhe.get('historico_unificado', [])
+            if item.get('pagamento_parcelado_id') == consolidado_id
+            and item.get('parcela_id') == primeira.id
+        ]
+        check('histórico geral contém a parcela paga uma única vez',
+              len(ocorrencias) == 1, f'got {ocorrencias}')
+        check('histórico conserva obra, orçamento e valor da parcela',
+              len(ocorrencias) == 1
+              and ocorrencias[0]['orcamento_item_id'] == item_orcamento.id
+              and ocorrencias[0]['valor_pago'] == 100.0,
+              ocorrencias)
+        espelhos = Lancamento.query.filter_by(obra_id=obra_id).filter(
+            Lancamento.descricao.like('Parcelado global consolidado (Parcela %')
+        ).all()
+        check('lançamento-espelho não duplica o histórico nem o consolidado',
+              len(espelhos) == 1
+              and all(item.get('tipo_registro') != 'lancamento'
+                      for item in detalhe.get('historico_unificado', [])
+                      if item.get('descricao', '').startswith('Parcelado global consolidado (Parcela ')),
+              [espelho.to_dict() for espelho in espelhos])
 
         print('\n=== fix 3: edição regenera parcelas em aberto ===')
         # paga a 1ª parcela do parcelamento "Centavos" e edita o total
