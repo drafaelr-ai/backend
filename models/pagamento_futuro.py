@@ -15,7 +15,7 @@ class PagamentoFuturo(db.Model):
     data_vencimento = db.Column(db.Date, nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Previsto')  # Previsto/Pago/Cancelado
     fornecedor = db.Column(db.String(150), nullable=True)
-    pix = db.Column(db.String(100), nullable=True)  # Chave PIX para pagamento
+    pix = db.Column(db.Text, nullable=True)  # Chave PIX ou payload Pix Copia e Cola
     codigo_barras = db.Column(db.String(100), nullable=True)  # Código de barras / linha digitável
     observacoes = db.Column(db.Text, nullable=True)
 

@@ -756,7 +756,8 @@ def inserir_pagamento(obra_id):
             data_vencimento_parsed = date.fromisoformat(str(data_vencimento)) if data_vencimento else None
         except ValueError:
             return jsonify({"erro": "Data de vencimento é inválida"}), 400
-        pix = dados.get('pix')
+        pix = str(dados.get('pix') or '').strip() or None
+        meio_pagamento = str(dados.get('meio_pagamento') or 'PIX').strip() or 'PIX'
         try:
             prioridade = int(dados.get('prioridade', 0))
         except (TypeError, ValueError):
@@ -857,7 +858,9 @@ def inserir_pagamento(obra_id):
                 data_primeira_parcela=data_primeira,
                 periodicidade=periodicidade,
                 parcelas_pagas=0,
-                status='Ativo'
+                status='Ativo',
+                pix=pix,
+                forma_pagamento=meio_pagamento,
             )
             db.session.add(novo_parcelado)
             db.session.flush()
@@ -889,7 +892,7 @@ def inserir_pagamento(obra_id):
                     data_vencimento=data_entrada_parsed,
                     status='Pago' if status == 'Pago' else 'Previsto',
                     data_pagamento=data_entrada_parsed if status == 'Pago' else None,
-                    forma_pagamento=pix if status == 'Pago' else None,
+                    forma_pagamento=meio_pagamento if status == 'Pago' else None,
                     observacao=f'ENTRADA ({percentual_entrada:.0f}%)'
                 )
                 db.session.add(parcela_entrada)
@@ -946,7 +949,7 @@ def inserir_pagamento(obra_id):
                     data_vencimento=data_venc,
                     status=parcela_status,
                     data_pagamento=parcela_data_pagamento,
-                    forma_pagamento=pix if status == 'Pago' else None,
+                    forma_pagamento=meio_pagamento if status == 'Pago' else None,
                     codigo_barras=codigo_barras_i,
                 )
                 db.session.add(nova_parcela)
@@ -999,6 +1002,8 @@ def inserir_pagamento(obra_id):
                     status=status,
                     prioridade=prioridade,
                     fornecedor=fornecedor,
+                    forma_pagamento=meio_pagamento,
+                    pix=pix,
                     orcamento_item_id=oid,
                 )
                 db.session.add(novo_pagamento)

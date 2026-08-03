@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flask import Flask
 from flask_jwt_extended import create_access_token
+from sqlalchemy import Text
 
 from extensions import db, jwt
 import models  # noqa: F401
@@ -23,6 +24,7 @@ from models import (
     Boleto,
     Lancamento,
     Obra,
+    Orcamento,
     OrcamentoEngEtapa,
     OrcamentoEngItem,
     PagamentoFuturo,
@@ -70,6 +72,7 @@ def check(label, condition, detail=''):
 
 
 hoje = date.today()
+PIX_COPIA_E_COLA_LONGO = '000201010212' + ('1234567890' * 35) + '6304ABCD'
 
 with app.app_context():
     db.metadata.create_all(bind=db.engine, tables=[db.metadata.tables[t] for t in TABELAS])
@@ -122,15 +125,37 @@ with app.app_context():
             return (ParcelaIndividual.query.filter_by(pagamento_parcelado_id=pid)
                     .order_by(ParcelaIndividual.numero_parcela).all())
 
+        print('\n=== PIX longo / Pix Copia e Cola ===')
+        for model, column_name in (
+            (Lancamento, 'pix'),
+            (PagamentoFuturo, 'pix'),
+            (PagamentoServico, 'pix'),
+            (PagamentoParcelado, 'pix'),
+            (Servico, 'pix'),
+            (Orcamento, 'dados_pagamento'),
+        ):
+            check(
+                f'{model.__name__}.{column_name} usa TEXT',
+                isinstance(model.__table__.c[column_name].type, Text),
+                model.__table__.c[column_name].type,
+            )
+
         print('\n=== fix 2: centavos (1000/3) ===')
         r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
             'descricao': 'Centavos', 'valor': 1000, 'tipo': 'Material',
             'status': 'A Pagar', 'data': hoje.isoformat(),
             'tipo_forma_pagamento': 'parcelado', 'numero_parcelas': 3,
             'periodicidade': 'Mensal', 'data_primeira_parcela': hoje.isoformat(),
+            'meio_pagamento': 'PIX', 'pix': PIX_COPIA_E_COLA_LONGO,
         })
         check('POST parcelado 1000/3 -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
         pid = json.loads(r.data)['pagamento_parcelado']['id']
+        parcelado_pix = db.session.get(PagamentoParcelado, pid)
+        check('parcelado preserva Pix Copia e Cola completo',
+              parcelado_pix.pix == PIX_COPIA_E_COLA_LONGO,
+              f'len={len(parcelado_pix.pix or "")}')
+        check('parcelado guarda PIX como meio, não como chave',
+              parcelado_pix.forma_pagamento == 'PIX', parcelado_pix.forma_pagamento)
         ps = parcelas_de(pid)
         valores = [p.valor_parcela for p in ps]
         check('parcelas 333.33/333.33/333.34', valores == [333.33, 333.33, 333.34], f'got {valores}')
@@ -173,6 +198,7 @@ with app.app_context():
             'periodicidade': 'Mensal', 'data_primeira_parcela': hoje.isoformat(),
             'tem_entrada': True, 'valor_entrada': 200, 'percentual_entrada': 20,
             'data_entrada': hoje.isoformat(),
+            'meio_pagamento': 'PIX', 'pix': PIX_COPIA_E_COLA_LONGO,
         })
         check('POST Pago com entrada -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
         body = json.loads(r.data)['pagamento_parcelado']
@@ -183,6 +209,11 @@ with app.app_context():
               and ps3[0].status == 'Pago' and ps3[0].data_pagamento is not None,
               f'got {ps3[0].status}/{ps3[0].data_pagamento}')
         check('todas pagas', all(p.status == 'Pago' for p in ps3))
+        check('parcelas pagas guardam somente o meio PIX',
+              all(p.forma_pagamento == 'PIX' for p in ps3),
+              [p.forma_pagamento for p in ps3])
+        check('chave longa fica no pagamento pai',
+              db.session.get(PagamentoParcelado, pid3).pix == PIX_COPIA_E_COLA_LONGO)
         check('contador = 3 (linhas) e Concluído',
               body['parcelas_pagas'] == 3 and body['status'] == 'Concluído',
               f"got {body['parcelas_pagas']}/{body['status']}")
@@ -286,23 +317,49 @@ with app.app_context():
             'status': 'Pago', 'data': hoje.isoformat(),
             'tipo_forma_pagamento': 'avista', 'servico_id': servico.id,
             'orcamento_item_id': item_orcamento.id,
+            'meio_pagamento': 'PIX', 'pix': PIX_COPIA_E_COLA_LONGO,
         })
         check('à vista pago e vinculado -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
         pagamento_avista = PagamentoServico.query.filter_by(servico_id=servico.id).one()
         check('pagamento à vista conserva item do orçamento',
               pagamento_avista.orcamento_item_id == item_orcamento.id,
               pagamento_avista.orcamento_item_id)
+        check('pagamento à vista vinculado preserva PIX longo e o meio',
+              pagamento_avista.pix == PIX_COPIA_E_COLA_LONGO
+              and pagamento_avista.forma_pagamento == 'PIX',
+              pagamento_avista.to_dict())
 
         r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
             'descricao': 'Futuro ligado ao orçamento', 'valor': 75, 'tipo': 'Material',
             'status': 'A Pagar', 'data': hoje.isoformat(),
             'data_vencimento': hoje.isoformat(), 'tipo_forma_pagamento': 'avista',
             'servico_id': servico.id, 'orcamento_item_id': item_orcamento.id,
+            'meio_pagamento': 'PIX', 'pix': PIX_COPIA_E_COLA_LONGO,
         })
         check('futuro vinculado -> 201', r.status_code == 201, f'{r.status_code}: {r.data[:300]}')
         futuro_id = json.loads(r.data)['id']
+        futuro_vinculado = db.session.get(PagamentoFuturo, futuro_id)
         check('futuro nasce com vínculo',
-              db.session.get(PagamentoFuturo, futuro_id).orcamento_item_id == item_orcamento.id)
+              futuro_vinculado.orcamento_item_id == item_orcamento.id)
+        check('futuro preserva Pix Copia e Cola completo',
+              futuro_vinculado.pix == PIX_COPIA_E_COLA_LONGO,
+              f'len={len(futuro_vinculado.pix or "")}')
+
+        r = c.post(f'/obras/{obra_id}/inserir-pagamento', headers=h, json={
+            'descricao': 'Pago avulso com PIX longo', 'valor': 88, 'tipo': 'Material',
+            'status': 'Pago', 'data': hoje.isoformat(),
+            'tipo_forma_pagamento': 'avista', 'meio_pagamento': 'PIX',
+            'pix': PIX_COPIA_E_COLA_LONGO,
+        })
+        check('pago avulso com PIX longo -> 201', r.status_code == 201,
+              f'{r.status_code}: {r.data[:300]}')
+        lancamento_pix = Lancamento.query.filter_by(
+            obra_id=obra_id,
+            descricao='Pago avulso com PIX longo',
+        ).one()
+        check('lançamento preserva Pix Copia e Cola completo',
+              lancamento_pix.pix == PIX_COPIA_E_COLA_LONGO,
+              f'len={len(lancamento_pix.pix or "")}')
 
         r = c.post(
             f'/obras/{obra_id}/cronograma/marcar-multiplos-pagos',

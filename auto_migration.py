@@ -51,6 +51,34 @@ def run_auto_migration():
             cur.execute("ALTER TABLE pagamento_parcelado_v2 ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';")
             logger.info("✅ Coluna segmento adicionada")
 
+        # PIX pode ser uma chave simples ou o payload completo "Pix Copia e
+        # Cola". VARCHAR(100/255) rejeitava BR Codes longos e fazia o endpoint
+        # devolver erro 500. TEXT é aditivo e preserva integralmente os dados.
+        for table_name, column_name in (
+            ('lancamento', 'pix'),
+            ('pagamento_futuro', 'pix'),
+            ('pagamento_servico', 'pix'),
+            ('servico', 'pix'),
+            ('pagamento_parcelado_v2', 'pix'),
+            ('orcamento', 'dados_pagamento'),
+        ):
+            cur.execute(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = %s
+                  AND column_name = %s;
+                """,
+                (table_name, column_name),
+            )
+            column = cur.fetchone()
+            if column and column[0] != 'text':
+                cur.execute(
+                    f'ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE TEXT;'
+                )
+                logger.info("✅ %s.%s ampliado para TEXT", table_name, column_name)
+
         # 2.5 NOVO: Adicionar campos de pagamento na tabela orcamento
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'data_vencimento';")
         if not cur.fetchone():

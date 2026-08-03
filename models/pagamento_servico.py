@@ -14,7 +14,7 @@ class PagamentoServico(db.Model):
     status = db.Column(db.String(20), nullable=False, default='Pago')
     tipo_pagamento = db.Column(db.String(20), nullable=False)
     forma_pagamento = db.Column(db.String(20), nullable=True)
-    pix = db.Column(db.String(100), nullable=True)  # Chave PIX do pagamento
+    pix = db.Column(db.Text, nullable=True)  # Chave PIX ou payload Pix Copia e Cola
     prioridade = db.Column(db.Integer, nullable=False, default=0)
     fornecedor = db.Column(db.String(150), nullable=True)
 
