@@ -32,6 +32,28 @@ def run_auto_migration():
         cur = conn.cursor()
         cur.execute("SET statement_timeout = '900s';")
 
+        # Tokens FCM são vinculados à conta autenticada pela API. A tabela não
+        # é acessível diretamente pelo Data API do Supabase.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS push_device (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+                token TEXT NOT NULL UNIQUE,
+                plataforma VARCHAR(20) NOT NULL DEFAULT 'android',
+                ativo BOOLEAN NOT NULL DEFAULT TRUE,
+                criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ultimo_acesso_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_push_device_user_ativo
+                ON push_device (user_id, ativo);
+            ALTER TABLE push_device ENABLE ROW LEVEL SECURITY;
+            REVOKE ALL ON TABLE push_device FROM anon, authenticated, service_role;
+            REVOKE ALL ON SEQUENCE push_device_id_seq FROM anon, authenticated, service_role;
+            """
+        )
+
         # 1. Verificar colunas em pagamento_futuro
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'servico_id';")
         if not cur.fetchone():

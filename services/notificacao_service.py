@@ -3,6 +3,7 @@ from extensions import db
 from models.notificacao import Notificacao
 from models.user import User
 from models.obra import Obra
+from services.push_service import enviar_push_usuario
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,12 @@ def criar_notificacao(usuario_destino_id, tipo, titulo, mensagem=None, obra_id=N
         db.session.add(notificacao)
         db.session.commit()
         logger.info(f"--- [NOTIF] Notificação criada: {tipo} para usuário {usuario_destino_id} ---")
+        try:
+            enviar_push_usuario(notificacao)
+        except Exception:
+            # O aviso no sino já foi persistido e nunca deve ser desfeito por
+            # uma indisponibilidade momentânea do provedor de push.
+            logger.exception('Falha inesperada no espelho de push nativo')
         return notificacao
     except Exception as e:
         db.session.rollback()

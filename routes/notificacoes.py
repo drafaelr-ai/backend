@@ -1,12 +1,60 @@
 import logging
+from datetime import datetime
 from flask import Blueprint, request, jsonify, make_response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.notificacao import Notificacao
+from models.push_device import PushDevice
 
 logger = logging.getLogger(__name__)
 
 notificacoes_bp = Blueprint('notificacoes', __name__, url_prefix='/notificacoes')
+
+
+@notificacoes_bp.route('/dispositivos', methods=['POST', 'DELETE', 'OPTIONS'])
+@jwt_required()
+def sincronizar_dispositivo_push():
+    """Vincula ou remove, exclusivamente para a conta logada, um token FCM."""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+
+    current_user_id = int(get_jwt_identity())
+    data = request.get_json(silent=True) or {}
+    token = str(data.get('token') or '').strip()
+    if not 20 <= len(token) <= 4096:
+        return jsonify({'erro': 'Token de dispositivo inválido'}), 400
+
+    try:
+        if request.method == 'DELETE':
+            device = PushDevice.query.filter_by(
+                user_id=current_user_id,
+                token=token,
+            ).first()
+            if device:
+                device.ativo = False
+                device.atualizado_em = datetime.utcnow()
+                db.session.commit()
+            return jsonify({'sucesso': True}), 200
+
+        plataforma = str(data.get('plataforma') or 'android').strip().lower()
+        if plataforma not in {'android', 'ios'}:
+            return jsonify({'erro': 'Plataforma inválida'}), 400
+
+        device = PushDevice.query.filter_by(token=token).first()
+        created = device is None
+        if created:
+            device = PushDevice(token=token)
+            db.session.add(device)
+        device.user_id = current_user_id
+        device.plataforma = plataforma
+        device.ativo = True
+        device.ultimo_acesso_em = datetime.utcnow()
+        db.session.commit()
+        return jsonify(device.to_dict()), 201 if created else 200
+    except Exception:
+        db.session.rollback()
+        logger.exception('Falha ao sincronizar dispositivo de push')
+        return jsonify({'erro': 'Erro interno no servidor'}), 500
 
 
 @notificacoes_bp.route('', methods=['GET', 'OPTIONS'])

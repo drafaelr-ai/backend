@@ -25,6 +25,7 @@ from models.user import User, user_obra_association   # noqa: F401
 from models.obra import Obra                          # noqa: F401
 from models.servico import Servico                    # noqa: F401
 from models.notificacao import Notificacao            # noqa: F401
+from models.push_device import PushDevice              # noqa: F401
 from models.pagamento_servico import PagamentoServico # noqa: F401
 from models.lancamento import Lancamento              # noqa: F401
 from models.orcamento import Orcamento                # noqa: F401
