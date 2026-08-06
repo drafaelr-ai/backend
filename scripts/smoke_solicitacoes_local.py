@@ -172,6 +172,60 @@ with app.app_context():
         check('notif: solicitante NÃO recebeu a própria',
               len(notifs(ids['solicitante_smoke'], 'solicitacao_criada')) == 0)
 
+        print('\n=== edição da solicitação ===')
+        r = c.put(f'/solicitacoes/{sol_id}', json={'itens': [{'descricao': 'x', 'quantidade': 1}]},
+                  headers=h_alert)
+        check('PUT por terceiro -> 403', r.status_code == 403, f'got {r.status_code}')
+        r = c.put(f'/solicitacoes/{sol_id}', json={'itens': []}, headers=h_sol)
+        check('PUT sem itens -> 400', r.status_code == 400)
+        r = c.put(f'/solicitacoes/{sol_id}', json={'itens': [{'descricao': 'Cimento', 'quantidade': 0}]},
+                  headers=h_sol)
+        check('PUT quantidade zero -> 400', r.status_code == 400)
+        r = c.put(f'/solicitacoes/{sol_id}', json={
+            'tipo': 'Banana', 'itens': [{'descricao': 'Cimento', 'quantidade': 1}]}, headers=h_sol)
+        check('PUT tipo inválido -> 400', r.status_code == 400)
+        r = c.put(f'/solicitacoes/{sol_id}', json={
+            'obra_id': obra2_id, 'itens': [{'descricao': 'Cimento', 'quantidade': 1}]}, headers=h_sol)
+        check('PUT movendo para obra sem acesso -> 403', r.status_code == 403)
+        r = c.put(f'/solicitacoes/{sol_id}', json={
+            'obra_id': obra_arq_id, 'itens': [{'descricao': 'Cimento', 'quantidade': 1}]}, headers=h_master)
+        check('PUT movendo para obra arquivada -> 400', r.status_code == 400)
+
+        item_cimento = sol['itens'][0]
+        r = c.put(f'/solicitacoes/{sol_id}', json={
+            'tipo': 'Equipamentos',
+            'data_necessidade': (date.today() + timedelta(days=20)).isoformat(),
+            'observacao': 'Ajustado: laje adiada',
+            'itens': [
+                {'id': item_cimento['id'], 'descricao': 'Cimento CP-II', 'quantidade': '60', 'unidade': 'sc'},
+                {'descricao': 'Brita 1', 'quantidade': 8, 'unidade': 'm³'},
+            ],
+        }, headers=h_sol)
+        check('PUT ajuste pelo solicitante -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')
+        editada = json.loads(r.data)
+        check('edição: tipo atualizado', editada['tipo'] == 'Equipamentos')
+        check('edição: observação atualizada', editada['observacao'] == 'Ajustado: laje adiada')
+        check('edição: 2 itens (1 removido, 1 novo)', len(editada['itens']) == 2)
+        check('edição: item existente preserva id',
+              editada['itens'][0]['id'] == item_cimento['id'])
+        check('edição: quantidade atualizada', editada['itens'][0]['quantidade'] == 60.0)
+        check('edição: item novo criado', editada['itens'][1]['descricao'] == 'Brita 1')
+        check('edição: item ausente removido',
+              all(i['descricao'] != 'Areia média' for i in editada['itens']))
+        check('edição: pode_editar no payload', editada['pode_editar'] is True)
+        check('edição: status preservado', editada['status'] == 'Aberta')
+        check('edição sem cotações não notifica',
+              len(notifs(ids['alertado_smoke'], 'solicitacao_editada')) == 0)
+
+        r = c.put(f'/solicitacoes/{sol_id}', json={
+            'itens': [{'descricao': 'Cimento CP-II', 'quantidade': 50, 'unidade': 'sc'},
+                      {'descricao': 'Areia média', 'quantidade': 20, 'unidade': 'm³'}],
+            'tipo': 'Material',
+            'data_necessidade': (date.today() + timedelta(days=15)).isoformat(),
+        }, headers=h_master)
+        check('PUT pelo master -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:200]}')
+        sol = json.loads(r.data)  # itens recriados — ids novos para os passos seguintes
+
         print('\n=== rota pública ===')
         token = sol['token_publico']
         r = c.get(f'/solicitacoes/publico/{token}')
@@ -223,6 +277,16 @@ with app.app_context():
         r = c.delete(f'/solicitacoes/{sol_id}/cotacoes/{cot2["id"]}', headers=h_sol)
         check('DELETE cotação por não-autor -> 403', r.status_code == 403)
 
+        r = c.put(f'/solicitacoes/{sol_id}', json={
+            'observacao': 'Confirmar prazo com o depósito',
+            'itens': [{'id': i['id'], 'descricao': i['descricao'],
+                       'quantidade': i['quantidade'], 'unidade': i['unidade']}
+                      for i in sol['itens']],
+        }, headers=h_sol)
+        check('PUT com cotações registradas -> 200', r.status_code == 200, f'got {r.status_code}')
+        check('notif: alertado avisado do ajuste',
+              len(notifs(ids['alertado_smoke'], 'solicitacao_editada')) == 1)
+
         print('\n=== aprovação — sem limite configurado (tudo exige aprovador) ===')
         r = c.post(f'/solicitacoes/{sol_id}/aprovar', json={'cotacao_id': cot2['id']}, headers=h_alert)
         check('não-aprovador sem limite -> 403', r.status_code == 403, f'got {r.status_code}')
@@ -267,6 +331,12 @@ with app.app_context():
         check('PagamentoFuturo único', PagamentoFuturo.query.count() == 1)
         r = c.patch(f'/solicitacoes/{sol_id}/cancelar', headers=h_master)
         check('cancelar aprovada -> 400', r.status_code == 400)
+        r = c.put(f'/solicitacoes/{sol_id}',
+                  json={'itens': [{'descricao': 'Cimento', 'quantidade': 1}]}, headers=h_master)
+        check('PUT em aprovada -> 400', r.status_code == 400)
+        r = c.get(f'/solicitacoes/{sol_id}', headers=h_master)
+        check('detalhe: pode_editar False em aprovada',
+              json.loads(r.data)['pode_editar'] is False)
         r = c.post(f'/solicitacoes/{sol_id}/cotacoes',
                    json={'fornecedor': 'F3', 'valor_total': 10}, headers=h_alert)
         check('cotação em aprovada -> 400', r.status_code == 400)

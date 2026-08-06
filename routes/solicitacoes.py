@@ -6,6 +6,10 @@ Rejeitada | Cancelada. Ao aprovar (ou efetivar direto, quando a cotação
 escolhida está dentro do limite configurado) é criado um PagamentoFuturo
 ('Previsto') na obra — o financeiro completa depois pelos fluxos existentes.
 
+Enquanto não decidida, a solicitação pode ser ajustada (itens, tipo, obra,
+data de necessidade, observação) pelo solicitante ou pelo master — `PUT
+/solicitacoes/<id>`.
+
 Config (linha única id=1): usuários alertados na criação (pesquisa de preços),
 aprovadores e limite de valor. Limite ausente = toda compra exige aprovador.
 
@@ -174,6 +178,52 @@ def _notificar_ids(user_ids, tipo, titulo, mensagem, solicitacao, origem_id):
             )
 
 
+def _validar_itens(itens_dados):
+    """Valida a lista de itens do payload. Retorna (itens_limpos, erro).
+
+    `itens_limpos` são dicts (não models) — quem cria monta os SolicitacaoItem,
+    quem edita casa pelo `id` para preservar as linhas existentes."""
+    if not isinstance(itens_dados, list) or not itens_dados:
+        return None, "Informe ao menos um item na solicitação."
+    limpos = []
+    for idx, item in enumerate(itens_dados, start=1):
+        if not isinstance(item, dict):
+            return None, f"Item {idx}: formato inválido."
+        descricao = (item.get('descricao') or '').strip()
+        quantidade = _to_num(item.get('quantidade'))
+        if not descricao:
+            return None, f"Item {idx}: descrição é obrigatória."
+        if not quantidade or quantidade <= 0:
+            return None, f"Item {idx}: quantidade deve ser maior que zero."
+        limpos.append({
+            'id': _to_int(item.get('id')),
+            'descricao': descricao[:300],
+            'quantidade': quantidade,
+            'unidade': (item.get('unidade') or '').strip()[:20] or None,
+            'observacao': (item.get('observacao') or '').strip()[:300] or None,
+        })
+    return limpos, None
+
+
+def _pode_editar(s, user):
+    """Ajustes só antes da decisão e só pelo solicitante (ou master) — mesma
+    regra do cancelamento."""
+    return (s.status not in _STATUS_DECIDIDOS
+            and (user.role == 'master' or s.solicitante_id == user.id))
+
+
+def _payload_detalhe(s, user):
+    """to_dict + flags que dependem de quem está olhando."""
+    cfg = _config()
+    out = s.to_dict(incluir_detalhes=True)
+    out['pode_aprovar'] = _eh_aprovador(user, cfg)
+    out['limite_valor'] = cfg.limite_valor if cfg else None
+    out['pode_cancelar'] = (s.status in _STATUS_ABERTOS
+                            and (user.role == 'master' or s.solicitante_id == user.id))
+    out['pode_editar'] = _pode_editar(s, user)
+    return out
+
+
 def _resumo_itens(s, limite=180):
     """'50x cimento CP-II (+3 itens)' — para a descrição do PagamentoFuturo."""
     if not s.itens:
@@ -225,23 +275,12 @@ def criar_solicitacao():
     if tipo not in _TIPOS:
         return jsonify({"erro": f"tipo inválido (use {sorted(_TIPOS)})"}), 400
 
-    itens_dados = dados.get('itens')
-    if not isinstance(itens_dados, list) or not itens_dados:
-        return jsonify({"erro": "Informe ao menos um item na solicitação."}), 400
-    itens = []
-    for idx, item in enumerate(itens_dados, start=1):
-        descricao = (item.get('descricao') or '').strip() if isinstance(item, dict) else ''
-        quantidade = _to_num(item.get('quantidade')) if isinstance(item, dict) else None
-        if not descricao:
-            return jsonify({"erro": f"Item {idx}: descrição é obrigatória."}), 400
-        if not quantidade or quantidade <= 0:
-            return jsonify({"erro": f"Item {idx}: quantidade deve ser maior que zero."}), 400
-        itens.append(SolicitacaoItem(
-            descricao=descricao[:300],
-            quantidade=quantidade,
-            unidade=(item.get('unidade') or '').strip()[:20] or None,
-            observacao=(item.get('observacao') or '').strip()[:300] or None,
-        ))
+    itens_limpos, erro = _validar_itens(dados.get('itens'))
+    if erro:
+        return jsonify({"erro": erro}), 400
+    itens = [SolicitacaoItem(descricao=i['descricao'], quantidade=i['quantidade'],
+                             unidade=i['unidade'], observacao=i['observacao'])
+             for i in itens_limpos]
 
     try:
         solicitacao = SolicitacaoCompra(
@@ -281,13 +320,89 @@ def detalhe_solicitacao(sol_id):
     if not _solicitacao_visivel(s, user):
         return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
 
-    cfg = _config()
-    out = s.to_dict(incluir_detalhes=True)
-    out['pode_aprovar'] = _eh_aprovador(user, cfg)
-    out['limite_valor'] = cfg.limite_valor if cfg else None
-    out['pode_cancelar'] = (s.status in _STATUS_ABERTOS
-                            and (user.role == 'master' or s.solicitante_id == user.id))
-    return jsonify(out), 200
+    return jsonify(_payload_detalhe(s, user)), 200
+
+
+@solicitacoes_bp.route('/<int:sol_id>', methods=['PUT'])
+@jwt_required()
+def editar_solicitacao(sol_id):
+    """Ajustes na solicitação enquanto ela não foi decidida.
+
+    Itens são casados pelo `id`: os enviados com id existente são atualizados,
+    os ausentes removidos (cascade delete-orphan) e os sem id criados — assim
+    um ajuste de quantidade não recria todas as linhas.
+
+    Campos omitidos no payload ficam como estão; `itens` é sempre obrigatório
+    (a solicitação não pode ficar sem item). Se já há cotações, os responsáveis
+    pela pesquisa de preços são avisados — o que foi cotado pode ter mudado."""
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if user.role != 'master' and s.solicitante_id != user.id:
+        return jsonify({"erro": "Só o solicitante ou o master podem editar a solicitação."}), 403
+    if s.status in _STATUS_DECIDIDOS:
+        return jsonify({"erro": f"Solicitação {s.status.lower()} não pode ser editada."}), 400
+
+    dados = request.get_json(silent=True) or {}
+
+    obra_id = _to_int(dados.get('obra_id')) or s.obra_id
+    if obra_id != s.obra_id:
+        obra = Obra.query.get(obra_id)
+        if not obra:
+            return jsonify({"erro": "Obra não encontrada."}), 400
+        if not user_has_access_to_obra(user, obra_id):
+            return jsonify({"erro": "Você não tem acesso a esta obra."}), 403
+        if getattr(obra, 'arquivada', False):
+            return jsonify({"erro": "Obra arquivada — não é possível mover a solicitação."}), 400
+
+    tipo = (dados.get('tipo') or s.tipo).strip()
+    if tipo not in _TIPOS:
+        return jsonify({"erro": f"tipo inválido (use {sorted(_TIPOS)})"}), 400
+
+    itens_limpos, erro = _validar_itens(dados.get('itens'))
+    if erro:
+        return jsonify({"erro": erro}), 400
+
+    try:
+        s.obra_id = obra_id
+        s.tipo = tipo
+        if 'data_necessidade' in dados:
+            s.data_necessidade = _parse_date(dados.get('data_necessidade'))
+        if 'observacao' in dados:
+            s.observacao = (dados.get('observacao') or '').strip() or None
+
+        # pop: id repetido no payload vira item novo em vez de duplicar a linha.
+        existentes = {i.id: i for i in s.itens}
+        atualizados = []
+        for item in itens_limpos:
+            alvo = existentes.pop(item['id'], None) or SolicitacaoItem()
+            alvo.descricao = item['descricao']
+            alvo.quantidade = item['quantidade']
+            alvo.unidade = item['unidade']
+            alvo.observacao = item['observacao']
+            atualizados.append(alvo)
+        s.itens = atualizados  # o que ficou de fora cai no delete-orphan
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao editar solicitação: %s", e)
+        return jsonify({"erro": "Erro interno ao editar solicitação."}), 500
+
+    if s.cotacoes:
+        cfg = _config()
+        destinos = set(cfg.alertados_ids or []) if cfg else set()
+        if s.status == 'Aguardando aprovação' and cfg:
+            destinos.update(cfg.aprovadores_ids or [])
+        _notificar_ids(
+            list(destinos),
+            tipo='solicitacao_editada',
+            titulo=f"✏️ Solicitação #{s.id} ajustada",
+            mensagem=(f"{user.username} ajustou a solicitação ({_resumo_itens(s)}) — "
+                      "confira se as cotações registradas continuam válidas."),
+            solicitacao=s, origem_id=user.id,
+        )
+    return jsonify(_payload_detalhe(s, user)), 200
 
 
 @solicitacoes_bp.route('/<int:sol_id>/cancelar', methods=['PATCH'])
