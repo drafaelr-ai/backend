@@ -1,10 +1,14 @@
 """Blueprint do módulo Solicitações — solicitação de compras de materiais,
 insumos e equipamentos por obra.
 
-Fluxo: Aberta → Em cotação (1ª cotação) → Aguardando aprovação → Aprovada |
-Rejeitada | Cancelada. Ao aprovar (ou efetivar direto, quando a cotação
-escolhida está dentro do limite configurado) é criado um PagamentoFuturo
+Fluxo: Aberta → Em cotação (1ª cotação) → Aguardando aprovação → Aprovada →
+Atendida (| Rejeitada | Cancelada). Ao aprovar (ou efetivar direto, quando a
+cotação escolhida está dentro do limite configurado) é criado um PagamentoFuturo
 ('Previsto') na obra — o financeiro completa depois pelos fluxos existentes.
+
+'Atendida' é a baixa do comprador: compra feita/entregue. Solicitações
+atendidas somem da lista de compras (`GET /solicitacoes`) e passam a viver no
+histórico (`GET /solicitacoes?historico=true`).
 
 Config (linha única id=1): usuários alertados na criação (pesquisa de preços),
 aprovadores e limite de valor. Limite ausente = toda compra exige aprovador.
@@ -60,7 +64,9 @@ BUCKET_SOLICITACOES = 'solicitacoes-arquivos'
 
 _TIPOS = {'Material', 'Equipamentos', 'Mão de Obra', 'Despesa'}
 _STATUS_ABERTOS = {'Aberta', 'Em cotação', 'Aguardando aprovação'}
-_STATUS_DECIDIDOS = {'Aprovada', 'Rejeitada', 'Cancelada'}
+_STATUS_DECIDIDOS = {'Aprovada', 'Rejeitada', 'Cancelada', 'Atendida'}
+# Status que saem da lista de compras e vão para o histórico.
+_STATUS_HISTORICO = ('Atendida',)
 
 
 # ---------------------------------------------------------------- helpers
@@ -154,6 +160,38 @@ def _eh_aprovador(user, cfg):
     return bool(cfg and user.id in (cfg.aprovadores_ids or []))
 
 
+def _eh_comprador(user, cfg, s=None):
+    """Quem dá baixa na compra: master, aprovadores, os compradores
+    configurados (alertados — quem faz a pesquisa de preços) e quem registrou
+    a cotação escolhida (foi quem comprou).
+
+    Sem comprador nem aprovador configurado, qualquer usuário do módulo com
+    acesso à solicitação pode dar baixa — senão a baixa fica impossível em
+    instalações que nunca abriram a tela de configuração."""
+    if user.role == 'master':
+        return True
+    if cfg and (user.id in (cfg.alertados_ids or [])
+                or user.id in (cfg.aprovadores_ids or [])):
+        return True
+    if s is not None and s.cotacao_aprovada_id:
+        cot = next((c for c in s.cotacoes if c.id == s.cotacao_aprovada_id), None)
+        if cot and cot.criado_por_id == user.id:
+            return True
+    return not (cfg and ((cfg.alertados_ids or []) or (cfg.aprovadores_ids or [])))
+
+
+def _pode_atender(s, user, cfg):
+    """Só compra aprovada é atendida — antes disso não há o que dar baixa."""
+    return s.status == 'Aprovada' and _eh_comprador(user, cfg, s)
+
+
+def _pode_reabrir(s, user):
+    """Desfazer a baixa: só o master ou quem marcou como atendida (evita que
+    um clique errado enterre a compra no histórico sem volta)."""
+    return s.status == 'Atendida' and (user.role == 'master'
+                                       or s.atendida_por_id == user.id)
+
+
 def _pode_efetivar(cfg, valor):
     """Efetivação direta (sem aprovador) só quando há limite configurado e a
     cotação escolhida está dentro dele."""
@@ -190,18 +228,37 @@ def _resumo_itens(s, limite=180):
 @solicitacoes_bp.route('', methods=['GET'])
 @jwt_required()
 def listar_solicitacoes():
+    """Lista de compras (default) ou histórico (`?historico=true`).
+
+    Compras atendidas saem da lista e só aparecem no histórico — ou quando
+    pedidas explicitamente via `?status=Atendida`."""
     user = get_current_user()
     query = _filtro_visibilidade(SolicitacaoCompra.query, user)
 
+    historico = (request.args.get('historico') or '').strip().lower() in ('1', 'true', 'sim')
     status = (request.args.get('status') or '').strip()
     if status:
         query = query.filter(SolicitacaoCompra.status == status)
+    elif historico:
+        query = query.filter(SolicitacaoCompra.status.in_(_STATUS_HISTORICO))
+    else:
+        query = query.filter(~SolicitacaoCompra.status.in_(_STATUS_HISTORICO))
+
     obra_id = _to_int(request.args.get('obra_id'))
     if obra_id:
         query = query.filter(SolicitacaoCompra.obra_id == obra_id)
 
-    solicitacoes = query.order_by(SolicitacaoCompra.data_criacao.desc()).all()
-    return jsonify([s.to_dict() for s in solicitacoes]), 200
+    ordem = (SolicitacaoCompra.data_atendimento.desc() if historico
+             else SolicitacaoCompra.data_criacao.desc())
+    solicitacoes = query.order_by(ordem).all()
+
+    cfg = _config()
+    saida = []
+    for s in solicitacoes:
+        out = s.to_dict()
+        out['pode_atender'] = _pode_atender(s, user, cfg)
+        saida.append(out)
+    return jsonify(saida), 200
 
 
 @solicitacoes_bp.route('', methods=['POST'])
@@ -287,6 +344,8 @@ def detalhe_solicitacao(sol_id):
     out['limite_valor'] = cfg.limite_valor if cfg else None
     out['pode_cancelar'] = (s.status in _STATUS_ABERTOS
                             and (user.role == 'master' or s.solicitante_id == user.id))
+    out['pode_atender'] = _pode_atender(s, user, cfg)
+    out['pode_reabrir'] = _pode_reabrir(s, user)
     return jsonify(out), 200
 
 
@@ -374,8 +433,8 @@ def remover_cotacao(sol_id, cot_id):
         return jsonify({"erro": "Cotação não encontrada."}), 404
     if user.role != 'master' and cotacao.criado_por_id != user.id:
         return jsonify({"erro": "Só quem registrou a cotação (ou o master) pode removê-la."}), 403
-    if s.status == 'Aprovada':
-        return jsonify({"erro": "Solicitação aprovada — cotações não podem ser removidas."}), 400
+    if s.status in ('Aprovada', 'Atendida'):
+        return jsonify({"erro": f"Solicitação {s.status.lower()} — cotações não podem ser removidas."}), 400
     try:
         db.session.delete(cotacao)
         db.session.commit()
@@ -556,6 +615,92 @@ def rejeitar_solicitacao(sol_id):
         solicitacao=s, origem_id=user.id,
     )
     return jsonify(s.to_dict(incluir_detalhes=True)), 200
+
+
+# ---------------------------------------------------------------- atendimento (comprador)
+
+@solicitacoes_bp.route('/<int:sol_id>/atender', methods=['PATCH'])
+@jwt_required()
+def atender_solicitacao(sol_id):
+    """Baixa do comprador: compra feita/entregue.
+
+    A solicitação sai da lista de compras e passa para o histórico. Não mexe
+    no PagamentoFuturo — a conta a pagar segue seu ciclo no financeiro."""
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+    if s.status == 'Atendida':
+        return jsonify({"erro": "Solicitação já atendida."}), 400
+    if s.status != 'Aprovada':
+        return jsonify({"erro": "Só compras aprovadas podem ser marcadas como atendidas."}), 400
+
+    cfg = _config()
+    if not _eh_comprador(user, cfg, s):
+        return jsonify({"erro": "Só o comprador ou um aprovador pode dar baixa na compra."}), 403
+
+    dados = request.get_json(silent=True) or {}
+    try:
+        s.status = 'Atendida'
+        s.atendida_por_id = user.id
+        s.data_atendimento = datetime.utcnow()
+        s.observacao_atendimento = (dados.get('observacao') or '').strip()[:300] or None
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao atender: %s", e)
+        return jsonify({"erro": "Erro interno ao marcar a compra como atendida."}), 500
+
+    destinos = {s.solicitante_id}
+    if cfg:
+        destinos.update(cfg.alertados_ids or [])
+    _notificar_ids(
+        list(destinos),
+        tipo='solicitacao_atendida',
+        titulo=f"📦 Compra da solicitação #{s.id} atendida",
+        mensagem=(f"{_resumo_itens(s)} — obra {s.obra.nome if s.obra else ''}. "
+                  f"Baixa por {user.username}."),
+        solicitacao=s, origem_id=user.id,
+    )
+    out = s.to_dict(incluir_detalhes=True)
+    out['pode_atender'] = False
+    out['pode_reabrir'] = _pode_reabrir(s, user)
+    return jsonify(out), 200
+
+
+@solicitacoes_bp.route('/<int:sol_id>/reabrir', methods=['PATCH'])
+@jwt_required()
+def reabrir_solicitacao(sol_id):
+    """Desfaz a baixa (Atendida → Aprovada) — volta da lista de histórico
+    para a lista de compras. Só master ou quem marcou como atendida."""
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+    if s.status != 'Atendida':
+        return jsonify({"erro": "Só solicitações atendidas podem ser reabertas."}), 400
+    if not _pode_reabrir(s, user):
+        return jsonify({"erro": "Só quem deu a baixa (ou o master) pode reabrir a compra."}), 403
+
+    try:
+        s.status = 'Aprovada'
+        s.atendida_por_id = None
+        s.data_atendimento = None
+        s.observacao_atendimento = None
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao reabrir: %s", e)
+        return jsonify({"erro": "Erro interno ao reabrir a compra."}), 500
+
+    out = s.to_dict(incluir_detalhes=True)
+    out['pode_atender'] = _pode_atender(s, user, _config())
+    out['pode_reabrir'] = False
+    return jsonify(out), 200
 
 
 # ---------------------------------------------------------------- config (master)

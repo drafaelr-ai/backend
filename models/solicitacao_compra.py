@@ -6,9 +6,12 @@ from extensions import db
 class SolicitacaoCompra(db.Model):
     """Solicitação de compra de materiais/insumos/equipamentos de uma obra.
 
-    Fluxo: Aberta -> Em cotação -> Aguardando aprovação -> Aprovada | Rejeitada | Cancelada.
+    Fluxo: Aberta -> Em cotação -> Aguardando aprovação -> Aprovada -> Atendida
+    (| Rejeitada | Cancelada).
     Ao aprovar/efetivar, é criado um PagamentoFuturo ('Previsto') na obra e o elo
     fica em `pagamento_futuro_id` (referência fraca — não altera schema existente).
+    'Atendida' é a baixa do comprador (compra feita/entregue): sai da lista de
+    compras ativas e passa a viver no histórico.
     `token_publico` permite visualização read-only sem login (compartilhável no WhatsApp).
     """
     __tablename__ = 'solicitacao_compra'
@@ -34,6 +37,11 @@ class SolicitacaoCompra(db.Model):
     data_decisao = db.Column(db.DateTime, nullable=True)
     motivo_rejeicao = db.Column(db.String(300), nullable=True)
 
+    # Baixa do comprador (status 'Atendida') — também referências fracas
+    atendida_por_id = db.Column(db.Integer, nullable=True)
+    data_atendimento = db.Column(db.DateTime, nullable=True)
+    observacao_atendimento = db.Column(db.String(300), nullable=True)
+
     obra = db.relationship('Obra', lazy=True)
     solicitante = db.relationship('User', foreign_keys=[solicitante_id], lazy=True)
     itens = db.relationship(
@@ -45,14 +53,22 @@ class SolicitacaoCompra(db.Model):
         backref='solicitacao', order_by='SolicitacaoCotacao.id',
     )
 
-    def _aprovador_nome(self):
-        if not self.aprovador_id:
+    def _nome_usuario(self, user_id):
+        """Nome de um usuário referenciado sem FK (aprovador / comprador)."""
+        if not user_id:
             return None
         from models.user import User
-        u = User.query.get(self.aprovador_id)
+        u = User.query.get(user_id)
         return u.username if u else None
 
+    def _cotacao_aprovada(self):
+        """Cotação vencedora já carregada — evita query extra no to_dict()."""
+        if not self.cotacao_aprovada_id:
+            return None
+        return next((c for c in self.cotacoes if c.id == self.cotacao_aprovada_id), None)
+
     def to_dict(self, incluir_detalhes=False):
+        cot = self._cotacao_aprovada()
         out = {
             'id': self.id,
             'obra_id': self.obra_id,
@@ -71,10 +87,15 @@ class SolicitacaoCompra(db.Model):
                        ) if self.itens else None,
             'qtd_cotacoes': len(self.cotacoes),
             'cotacao_aprovada_id': self.cotacao_aprovada_id,
+            'valor_aprovado': float(cot.valor_total) if cot and cot.valor_total is not None else None,
+            'fornecedor_aprovado': cot.fornecedor if cot else None,
             'pagamento_futuro_id': self.pagamento_futuro_id,
-            'aprovador_nome': self._aprovador_nome(),
+            'aprovador_nome': self._nome_usuario(self.aprovador_id),
             'data_decisao': self.data_decisao.isoformat() if self.data_decisao else None,
             'motivo_rejeicao': self.motivo_rejeicao,
+            'atendida_por_nome': self._nome_usuario(self.atendida_por_id),
+            'data_atendimento': self.data_atendimento.isoformat() if self.data_atendimento else None,
+            'observacao_atendimento': self.observacao_atendimento,
         }
         if incluir_detalhes:
             out['itens'] = [i.to_dict() for i in self.itens]

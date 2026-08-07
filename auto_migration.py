@@ -876,7 +876,10 @@ def run_auto_migration():
                 pagamento_futuro_id INTEGER,
                 aprovador_id        INTEGER,
                 data_decisao        TIMESTAMP,
-                motivo_rejeicao     VARCHAR(300)
+                motivo_rejeicao     VARCHAR(300),
+                atendida_por_id     INTEGER,
+                data_atendimento    TIMESTAMP,
+                observacao_atendimento VARCHAR(300)
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_solicitacao_token ON solicitacao_compra (token_publico);
             CREATE INDEX IF NOT EXISTS idx_solicitacao_obra ON solicitacao_compra (obra_id);
@@ -921,8 +924,15 @@ def run_auto_migration():
             );
         """)
 
+        # Baixa do comprador (status 'Atendida') — colunas aditivas em bases
+        # que já tinham o módulo. atendida_por_id é referência FRACA (sem FK).
+        cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS atendida_por_id INTEGER;")
+        cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS data_atendimento TIMESTAMP;")
+        cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS observacao_atendimento VARCHAR(300);")
+
         logger.info("✅ SOLICITAÇÕES: 4 tabelas garantidas (solicitacao_compra, "
-                    "solicitacao_item, solicitacao_cotacao, solicitacao_config)")
+                    "solicitacao_item, solicitacao_cotacao, solicitacao_config) "
+                    "+ colunas de atendimento")
 
         # =================================================================
         # MÓDULO ALMOXARIFADO (externo) — catálogo e histórico de estoque.

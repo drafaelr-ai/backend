@@ -348,8 +348,84 @@ with app.app_context():
         r = c.get(f'/solicitacoes?obra_id={obra2_id}', headers=h_master)
         check('filtro obra_id sem resultados', len(json.loads(r.data)) == 0)
 
+        print('\n=== atendimento (baixa do comprador) ===')
+        r = c.patch(f'/solicitacoes/{sol3["id"]}/atender', headers=h_alert)
+        check('atender rejeitada -> 400', r.status_code == 400, f'got {r.status_code}')
+        r = c.patch(f'/solicitacoes/{sol_id}/atender', headers=h_outro)
+        check('atender sem acesso à obra -> 403', r.status_code == 403)
+        r = c.patch(f'/solicitacoes/{sol_id}/atender', headers=h_sol)
+        check('atender por não-comprador -> 403', r.status_code == 403, f'got {r.status_code}')
+
+        r = c.get(f'/solicitacoes/{sol_id}', headers=h_alert)
+        det_alert = json.loads(r.data)
+        check('detalhe: pode_atender p/ comprador', det_alert['pode_atender'] is True)
+        check('detalhe: pode_reabrir False antes da baixa', det_alert['pode_reabrir'] is False)
+        r = c.get(f'/solicitacoes/{sol_id}', headers=h_sol)
+        check('detalhe: pode_atender False p/ solicitante',
+              json.loads(r.data)['pode_atender'] is False)
+
+        r = c.patch(f'/solicitacoes/{sol_id}/atender',
+                    json={'observacao': 'NF 4521 — entregue no canteiro'}, headers=h_alert)
+        check('comprador atende -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')
+        atendida = json.loads(r.data)
+        check('status Atendida', atendida['status'] == 'Atendida')
+        check('atendida_por_nome gravado', atendida['atendida_por_nome'] == 'alertado_smoke')
+        check('data_atendimento gravada', bool(atendida['data_atendimento']))
+        check('observação do atendimento gravada',
+              atendida['observacao_atendimento'] == 'NF 4521 — entregue no canteiro')
+        check('valor_aprovado no payload', atendida['valor_aprovado'] == 2400.0)
+        check('fornecedor_aprovado no payload', atendida['fornecedor_aprovado'] == 'Depósito B')
+        check('notif: solicitante recebeu atendida',
+              len(notifs(ids['solicitante_smoke'], 'solicitacao_atendida')) == 1)
+        pf_baixa = PagamentoFuturo.query.get(atendida['pagamento_futuro_id'])
+        check('baixa não mexe na conta a pagar', pf_baixa is not None and pf_baixa.status == 'Previsto')
+        r = c.patch(f'/solicitacoes/{sol_id}/atender', headers=h_alert)
+        check('atender 2x -> 400', r.status_code == 400)
+        r = c.post(f'/solicitacoes/{sol_id}/cotacoes',
+                   json={'fornecedor': 'F4', 'valor_total': 10}, headers=h_alert)
+        check('cotação em atendida -> 400', r.status_code == 400)
+        r = c.patch(f'/solicitacoes/{sol_id}/cancelar', headers=h_master)
+        check('cancelar atendida -> 400', r.status_code == 400)
+
+        print('\n=== sai da lista de compras, entra no histórico ===')
+        r = c.get('/solicitacoes', headers=h_master)
+        lista_ativa = json.loads(r.data)
+        check('atendida fora da lista de compras', all(x['id'] != sol_id for x in lista_ativa))
+        check('demais solicitações seguem na lista', len(lista_ativa) == 3, f'got {len(lista_ativa)}')
+        r = c.get('/solicitacoes?historico=true', headers=h_master)
+        hist = json.loads(r.data)
+        check('histórico traz só a atendida', len(hist) == 1 and hist[0]['id'] == sol_id,
+              f'got {len(hist)}')
+        r = c.get('/solicitacoes?status=Atendida', headers=h_master)
+        check('filtro status=Atendida explícito', len(json.loads(r.data)) == 1)
+        r = c.get('/solicitacoes?historico=true', headers=h_outro)
+        check('histórico respeita visibilidade', len(json.loads(r.data)) == 0)
+        r = c.get('/solicitacoes', headers=h_alert)
+        check('lista expõe pode_atender p/ comprador',
+              any(x['pode_atender'] for x in json.loads(r.data)))
+        r = c.get('/solicitacoes', headers=h_sol)
+        check('lista não expõe pode_atender p/ solicitante',
+              not any(x['pode_atender'] for x in json.loads(r.data)))
+
+        print('\n=== reabrir (desfaz a baixa) ===')
+        r = c.patch(f'/solicitacoes/{sol_id}/reabrir', headers=h_aprov)
+        check('reabrir por quem não deu a baixa -> 403', r.status_code == 403, f'got {r.status_code}')
+        r = c.patch(f'/solicitacoes/{sol2["id"]}/reabrir', headers=h_master)
+        check('reabrir não-atendida -> 400', r.status_code == 400)
+        r = c.patch(f'/solicitacoes/{sol_id}/reabrir', headers=h_alert)
+        check('comprador reabre -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')
+        reaberta = json.loads(r.data)
+        check('volta para Aprovada', reaberta['status'] == 'Aprovada')
+        check('campos de atendimento limpos',
+              reaberta['data_atendimento'] is None and reaberta['atendida_por_nome'] is None)
+        r = c.get('/solicitacoes?historico=true', headers=h_master)
+        check('histórico vazio após reabrir', len(json.loads(r.data)) == 0)
+        r = c.get('/solicitacoes', headers=h_master)
+        check('reaberta volta para a lista de compras',
+              any(x['id'] == sol_id for x in json.loads(r.data)))
+
         rotas = [r for r in app.url_map.iter_rules() if str(r).startswith('/solicitacoes')]
-        check('blueprint: >= 12 rotas /solicitacoes', len(rotas) >= 12, f'encontrado: {len(rotas)}')
+        check('blueprint: >= 14 rotas /solicitacoes', len(rotas) >= 14, f'encontrado: {len(rotas)}')
 
 print(f'\n{"=" * 40}')
 print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')
