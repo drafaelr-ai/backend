@@ -42,6 +42,9 @@ class SolicitacaoCompra(db.Model):
     data_atendimento = db.Column(db.DateTime, nullable=True)
     observacao_atendimento = db.Column(db.String(300), nullable=True)
 
+    # Anexo da própria solicitação (lista de materiais, projeto) — path no bucket
+    arquivo_url = db.Column(db.String(500), nullable=True)
+
     obra = db.relationship('Obra', lazy=True)
     solicitante = db.relationship('User', foreign_keys=[solicitante_id], lazy=True)
     itens = db.relationship(
@@ -96,6 +99,7 @@ class SolicitacaoCompra(db.Model):
             'atendida_por_nome': self._nome_usuario(self.atendida_por_id),
             'data_atendimento': self.data_atendimento.isoformat() if self.data_atendimento else None,
             'observacao_atendimento': self.observacao_atendimento,
+            'tem_arquivo': bool(self.arquivo_url),
         }
         if incluir_detalhes:
             out['itens'] = [i.to_dict() for i in self.itens]

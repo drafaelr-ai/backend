@@ -924,7 +924,8 @@ def run_auto_migration():
                 motivo_rejeicao     VARCHAR(300),
                 atendida_por_id     INTEGER,
                 data_atendimento    TIMESTAMP,
-                observacao_atendimento VARCHAR(300)
+                observacao_atendimento VARCHAR(300),
+                arquivo_url         VARCHAR(500)
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_solicitacao_token ON solicitacao_compra (token_publico);
             CREATE INDEX IF NOT EXISTS idx_solicitacao_obra ON solicitacao_compra (obra_id);
@@ -975,9 +976,12 @@ def run_auto_migration():
         cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS data_atendimento TIMESTAMP;")
         cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS observacao_atendimento VARCHAR(300);")
 
+        # Anexo da própria solicitação (lista de materiais/projeto) — aditivo.
+        cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS arquivo_url VARCHAR(500);")
+
         logger.info("✅ SOLICITAÇÕES: 4 tabelas garantidas (solicitacao_compra, "
                     "solicitacao_item, solicitacao_cotacao, solicitacao_config) "
-                    "+ colunas de atendimento")
+                    "+ colunas de atendimento e anexo")
 
         # =================================================================
         # MÓDULO ALMOXARIFADO (externo) — catálogo e histórico de estoque.

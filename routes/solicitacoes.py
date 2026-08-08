@@ -20,6 +20,7 @@ Visibilidade: master/administrador veem tudo; comum vê solicitações de suas
 obras permitidas e as que ele mesmo criou.
 Erros de validação são SEMPRE 400 — nunca 422 (fetchWithAuth desloga em 401/422).
 """
+import json
 import logging
 import secrets
 from datetime import datetime, date, timedelta
@@ -265,7 +266,7 @@ def listar_solicitacoes():
 @jwt_required()
 def criar_solicitacao():
     user = get_current_user()
-    dados = request.get_json(silent=True) or {}
+    dados, arquivo = _dados_e_arquivo()
 
     obra_id = _to_int(dados.get('obra_id'))
     if not obra_id:
@@ -283,6 +284,12 @@ def criar_solicitacao():
         return jsonify({"erro": f"tipo inválido (use {sorted(_TIPOS)})"}), 400
 
     itens_dados = dados.get('itens')
+    if isinstance(itens_dados, str):
+        # multipart/form-data: itens vem como JSON string no form
+        try:
+            itens_dados = json.loads(itens_dados)
+        except ValueError:
+            itens_dados = None
     if not isinstance(itens_dados, list) or not itens_dados:
         return jsonify({"erro": "Informe ao menos um item na solicitação."}), 400
     itens = []
@@ -317,6 +324,19 @@ def criar_solicitacao():
         logger.exception("Solicitações: erro ao criar solicitação: %s", e)
         return jsonify({"erro": "Erro interno ao criar solicitação."}), 500
 
+    # Anexo depois do commit (o id nomeia a pasta) — upload nunca desfaz o save.
+    upload_falhou = False
+    if arquivo:
+        arquivo_url, upload_falhou = _upload_best_effort(arquivo, f'solicitacoes/{solicitacao.id}')
+        if arquivo_url:
+            try:
+                solicitacao.arquivo_url = arquivo_url
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                logger.exception("Solicitações: erro ao salvar anexo da solicitação: %s", e)
+                upload_falhou = True
+
     cfg = _config()
     _notificar_ids(
         cfg.alertados_ids if cfg else [],
@@ -325,7 +345,10 @@ def criar_solicitacao():
         mensagem=f"{user.username} solicitou {_resumo_itens(solicitacao)} para a obra {obra.nome}.",
         solicitacao=solicitacao, origem_id=user.id,
     )
-    return jsonify(solicitacao.to_dict(incluir_detalhes=True)), 201
+    out = solicitacao.to_dict(incluir_detalhes=True)
+    if upload_falhou:
+        out['aviso'] = 'Solicitação criada, mas o upload do anexo falhou. Tente anexar novamente.'
+    return jsonify(out), 201
 
 
 @solicitacoes_bp.route('/<int:sol_id>', methods=['GET'])
@@ -369,6 +392,25 @@ def cancelar_solicitacao(sol_id):
         db.session.rollback()
         logger.exception("Solicitações: erro ao cancelar: %s", e)
         return jsonify({"erro": "Erro interno ao cancelar solicitação."}), 500
+
+
+@solicitacoes_bp.route('/<int:sol_id>/arquivo', methods=['GET'])
+@jwt_required()
+def arquivo_solicitacao(sol_id):
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+    if not s.arquivo_url:
+        return jsonify({"erro": "Solicitação sem arquivo."}), 404
+    try:
+        url = storage_service.signed_url(s.arquivo_url, bucket=BUCKET_SOLICITACOES)
+        return jsonify({"url": url}), 200
+    except Exception as e:
+        logger.exception("Solicitações: erro ao gerar URL do arquivo: %s", e)
+        return jsonify({"erro": "Erro ao gerar link do arquivo."}), 500
 
 
 # ---------------------------------------------------------------- cotações
