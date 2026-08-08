@@ -846,9 +846,54 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_frota_multa_status ON frota_multa (status_pagamento);
         """)
 
-        logger.info("✅ FROTA: 7 tabelas garantidas (frota_condutor, frota_veiculo, "
+        # Abastecimento via link do motorista — colunas aditivas no registro de
+        # abastecimento + a tabela de autorização. `solicitacao_id` e
+        # `criado_por_id` são referências FRACAS (sem FK), no mesmo padrão do
+        # módulo Solicitações.
+        cur.execute("ALTER TABLE frota_abastecimento ADD COLUMN IF NOT EXISTS preco_litro NUMERIC(10,3);")
+        cur.execute("ALTER TABLE frota_abastecimento ADD COLUMN IF NOT EXISTS comprovante_url VARCHAR(500);")
+        cur.execute("ALTER TABLE frota_abastecimento ADD COLUMN IF NOT EXISTS origem VARCHAR(20);")
+        cur.execute("ALTER TABLE frota_abastecimento ADD COLUMN IF NOT EXISTS solicitacao_id INTEGER;")
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_abastecimento_solicitacao (
+                id                   SERIAL PRIMARY KEY,
+                veiculo_id           INTEGER NOT NULL REFERENCES frota_veiculo(id) ON DELETE CASCADE,
+                condutor_id          INTEGER REFERENCES frota_condutor(id) ON DELETE SET NULL,
+                token                VARCHAR(64) NOT NULL,
+                status               VARCHAR(20) NOT NULL DEFAULT 'pendente',
+                combustivel          VARCHAR(20),
+                limite_valor         NUMERIC(12,2),
+                observacao           VARCHAR(300),
+                criado_por_id        INTEGER,
+                criado_em            TIMESTAMP DEFAULT NOW(),
+                expira_em            TIMESTAMP NOT NULL,
+                km                   INTEGER,
+                litros               NUMERIC(10,2),
+                preco_litro          NUMERIC(10,3),
+                valor_total          NUMERIC(12,2),
+                posto                VARCHAR(160),
+                data_abastecimento   DATE,
+                comprovante_url      VARCHAR(500),
+                observacao_motorista VARCHAR(300),
+                enviado_em           TIMESTAMP,
+                ocr_status           VARCHAR(20),
+                ocr_dados            JSONB,
+                ocr_tentativas       INTEGER NOT NULL DEFAULT 0,
+                abastecimento_id     INTEGER
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_frota_abast_sol_token
+                ON frota_abastecimento_solicitacao (token);
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_sol_veiculo
+                ON frota_abastecimento_solicitacao (veiculo_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_sol_status
+                ON frota_abastecimento_solicitacao (status);
+        """)
+
+        logger.info("✅ FROTA: 8 tabelas garantidas (frota_condutor, frota_veiculo, "
                     "frota_movimentacao, frota_documento, frota_manutencao, "
-                    "frota_abastecimento, frota_multa)")
+                    "frota_abastecimento, frota_multa, "
+                    "frota_abastecimento_solicitacao)")
 
         # =================================================================
         # MÓDULO SOLICITAÇÕES (compras) — 4 tabelas (aditivo, idempotente)

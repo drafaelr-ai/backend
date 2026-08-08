@@ -2,6 +2,11 @@
 condutores, documentos, manutenções, abastecimentos e multas. Todas as rotas
 exigem JWT.
 
+Abastecimento tem duas vias: o lançamento manual (POST /abastecimentos) e o
+link do motorista — a compradora gera uma autorização aqui e o motorista
+preenche km/litros/comprovante na rota pública (routes/abastecimento_publico.py),
+que é quem cria o abastecimento no fim.
+
 Alocação: denormalizada em frota_veiculo (local_tipo/obra_id/imovel_id/imovel_nome);
 toda mudança passa por POST /veiculos/<id>/movimentacoes, que grava o histórico e
 atualiza o veículo na MESMA transação. Imóvel é referência fraca ao banco admin
@@ -12,6 +17,7 @@ Visibilidade: master/administrador veem tudo. Usuário comum vê veículos sem o
 Erros de validação são SEMPRE 400 — nunca 422 (fetchWithAuth desloga em 401/422).
 """
 import re
+import secrets
 import logging
 from calendar import monthrange
 from datetime import datetime, date, timedelta
@@ -28,10 +34,12 @@ from models.frota_movimentacao import FrotaMovimentacao
 from models.frota_documento import FrotaDocumento
 from models.frota_manutencao import FrotaManutencao
 from models.frota_abastecimento import FrotaAbastecimento
+from models.frota_abastecimento_solicitacao import FrotaAbastecimentoSolicitacao
 from models.frota_multa import FrotaMulta
 from models.funcionario import Funcionario
 from models.obra import Obra
 from services import storage_service, admin_read_service
+from services import abastecimento_service
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
 
 logger = logging.getLogger(__name__)
@@ -211,13 +219,9 @@ def _aplicar_destino(veiculo, destino):
 
 
 def _snapshot_local(veiculo):
-    """Snapshot do local atual do veículo p/ custos (manutenção/abastecimento)."""
-    return {
-        'local_tipo': veiculo.local_tipo,
-        'obra_id': veiculo.obra_id,
-        'imovel_id': veiculo.imovel_id,
-        'local_nome': veiculo.local_nome(),
-    }
+    """Snapshot do local atual do veículo p/ custos (manutenção/abastecimento).
+    Mora no service porque a rota pública do motorista também precisa dele."""
+    return abastecimento_service.snapshot_local(veiculo)
 
 
 def _competencia_range(competencia):
@@ -1055,6 +1059,156 @@ def remover_abastecimento(item_id):
         return jsonify({"erro": "Erro ao remover abastecimento"}), 500
 
 
+# ------------------------------------------ solicitações de abastecimento
+
+_SOLICITACAO_VALIDADE_HORAS = 48
+
+
+def _solicitacao_visivel(sol, user):
+    return _veiculo_visivel(sol.veiculo, user) if sol.veiculo else True
+
+
+@frota_bp.route('/abastecimento-solicitacoes', methods=['GET'])
+@jwt_required()
+def listar_solicitacoes_abastecimento():
+    """?status=pendente|concluida|cancelada|expirada &veiculo_id=
+
+    'expirada' não existe no banco (é derivado de expira_em), então esse
+    filtro é aplicado em memória sobre as pendentes."""
+    try:
+        user = get_current_user()
+        query = FrotaAbastecimentoSolicitacao.query.join(
+            FrotaVeiculo, FrotaAbastecimentoSolicitacao.veiculo_id == FrotaVeiculo.id,
+        )
+        query = _filtro_visibilidade(query, FrotaVeiculo.obra_id, user)
+        veiculo_id = _to_int(request.args.get('veiculo_id'))
+        if veiculo_id:
+            query = query.filter(FrotaAbastecimentoSolicitacao.veiculo_id == veiculo_id)
+
+        status = (request.args.get('status') or '').strip()
+        if status in ('pendente', 'expirada'):
+            query = query.filter(FrotaAbastecimentoSolicitacao.status == 'pendente')
+        elif status:
+            query = query.filter(FrotaAbastecimentoSolicitacao.status == status)
+
+        itens = query.order_by(FrotaAbastecimentoSolicitacao.criado_em.desc()).all()
+        saida = [s.to_dict() for s in itens]
+        if status in ('pendente', 'expirada'):
+            saida = [s for s in saida if s['status'] == status]
+        return jsonify(saida), 200
+    except Exception:
+        logger.exception("Erro em GET /frota/abastecimento-solicitacoes")
+        return jsonify({"erro": "Erro ao listar solicitações de abastecimento"}), 500
+
+
+@frota_bp.route('/abastecimento-solicitacoes', methods=['POST'])
+@jwt_required()
+def criar_solicitacao_abastecimento():
+    """Gera o link que o motorista abre pra registrar o abastecimento."""
+    try:
+        dados = request.get_json(silent=True) or {}
+        veiculo_id = _to_int(dados.get('veiculo_id'))
+        if not veiculo_id:
+            return jsonify({"erro": "veiculo_id é obrigatório"}), 400
+        veiculo = db.session.get(FrotaVeiculo, veiculo_id)
+        if not veiculo:
+            return jsonify({"erro": "Veículo não encontrado"}), 404
+        user = get_current_user()
+        if not _veiculo_visivel(veiculo, user):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        if veiculo.status in ('vendido', 'inativo'):
+            return jsonify({"erro": f"Veículo {veiculo.status} — não é possível autorizar abastecimento"}), 400
+
+        condutor_id = _to_int(dados.get('condutor_id')) or veiculo.condutor_atual_id
+        if condutor_id and not db.session.get(FrotaCondutor, condutor_id):
+            return jsonify({"erro": "Condutor não encontrado"}), 400
+
+        limite_valor = _to_num(dados.get('limite_valor'))
+        if limite_valor is not None and limite_valor <= 0:
+            return jsonify({"erro": "limite_valor deve ser maior que zero"}), 400
+
+        horas = _to_int(dados.get('validade_horas')) or _SOLICITACAO_VALIDADE_HORAS
+        if horas < 1 or horas > 720:
+            return jsonify({"erro": "validade_horas deve estar entre 1 e 720"}), 400
+
+        # Colisão de token é praticamente impossível com 24 bytes, mas o retry
+        # evita um 500 se acontecer.
+        token = None
+        for _ in range(5):
+            candidato = secrets.token_urlsafe(24)
+            if not FrotaAbastecimentoSolicitacao.query.filter_by(token=candidato).first():
+                token = candidato
+                break
+        if not token:
+            return jsonify({"erro": "Não foi possível gerar o link. Tente novamente."}), 500
+
+        sol = FrotaAbastecimentoSolicitacao(
+            veiculo_id=veiculo.id,
+            condutor_id=condutor_id,
+            token=token,
+            status='pendente',
+            combustivel=(dados.get('combustivel') or veiculo.combustivel or None),
+            limite_valor=limite_valor,
+            observacao=(dados.get('observacao') or '').strip()[:300] or None,
+            criado_por_id=user.id if user else None,
+            expira_em=datetime.utcnow() + timedelta(hours=horas),
+        )
+        db.session.add(sol)
+        db.session.commit()
+        out = sol.to_dict()
+        out['url'] = f'https://obraly.uk/abastecimento/{token}'
+        return jsonify(out), 201
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em POST /frota/abastecimento-solicitacoes")
+        return jsonify({"erro": "Erro ao criar solicitação de abastecimento"}), 500
+
+
+@frota_bp.route('/abastecimento-solicitacoes/<int:sol_id>/cancelar', methods=['PATCH'])
+@jwt_required()
+def cancelar_solicitacao_abastecimento(sol_id):
+    """Invalida o link — o motorista que já o tiver recebido não consegue mais
+    enviar. Solicitação concluída não volta atrás (o abastecimento já existe;
+    para desfazê-lo, remova o abastecimento)."""
+    try:
+        sol = db.session.get(FrotaAbastecimentoSolicitacao, sol_id)
+        if not sol:
+            return jsonify({"erro": "Solicitação não encontrada"}), 404
+        if not _solicitacao_visivel(sol, get_current_user()):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        if sol.status == 'concluida':
+            return jsonify({"erro": "Solicitação já concluída — remova o abastecimento"}), 400
+        sol.status = 'cancelada'
+        db.session.commit()
+        return jsonify(sol.to_dict()), 200
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em PATCH /frota/abastecimento-solicitacoes/<id>/cancelar")
+        return jsonify({"erro": "Erro ao cancelar solicitação"}), 500
+
+
+@frota_bp.route('/veiculos/<int:veiculo_id>/consumo', methods=['GET'])
+@jwt_required()
+def consumo_veiculo(veiculo_id):
+    """Histórico de abastecimentos do veículo com km/l, R$/km e médias."""
+    try:
+        veiculo = db.session.get(FrotaVeiculo, veiculo_id)
+        if not veiculo:
+            return jsonify({"erro": "Veículo não encontrado"}), 404
+        if not _veiculo_visivel(veiculo, get_current_user()):
+            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        out = abastecimento_service.historico_consumo(
+            veiculo_id,
+            de=_parse_date(request.args.get('de')),
+            ate=_parse_date(request.args.get('ate')),
+        )
+        out['veiculo'] = veiculo.to_dict()
+        return jsonify(out), 200
+    except Exception:
+        logger.exception("Erro em GET /frota/veiculos/<id>/consumo")
+        return jsonify({"erro": "Erro ao calcular consumo do veículo"}), 500
+
+
 # ---------------------------------------------------------------- multas
 
 @frota_bp.route('/multas', methods=['GET'])
@@ -1220,20 +1374,25 @@ def listar_imoveis_admin():
 @frota_bp.route('/arquivo/<tipo>/<int:item_id>', methods=['GET'])
 @jwt_required()
 def obter_arquivo(tipo, item_id):
-    """Retorna signed URL do arquivo (documento | manutencao | multa) sob auth."""
+    """Retorna signed URL do arquivo sob auth.
+
+    O abastecimento guarda o comprovante em `comprovante_url` (os demais usam
+    `arquivo_url`) — daí o campo por tipo em vez de um atributo fixo."""
     try:
         modelos = {
-            'documento': FrotaDocumento,
-            'manutencao': FrotaManutencao,
-            'multa': FrotaMulta,
+            'documento': (FrotaDocumento, 'arquivo_url'),
+            'manutencao': (FrotaManutencao, 'arquivo_url'),
+            'multa': (FrotaMulta, 'arquivo_url'),
+            'abastecimento': (FrotaAbastecimento, 'comprovante_url'),
         }
-        modelo = modelos.get(tipo)
-        if not modelo:
-            return jsonify({"erro": "tipo inválido (use documento|manutencao|multa)"}), 400
+        entrada = modelos.get(tipo)
+        if not entrada:
+            return jsonify({"erro": "tipo inválido (use documento|manutencao|multa|abastecimento)"}), 400
+        modelo, campo = entrada
         obj = db.session.get(modelo, item_id)
         if obj and not _veiculo_visivel(obj.veiculo, get_current_user()):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
-        path = obj.arquivo_url if obj else None
+        path = getattr(obj, campo) if obj else None
         if not path:
             return jsonify({"erro": "Arquivo não encontrado"}), 404
         return jsonify({"url": storage_service.signed_url(path, bucket=BUCKET_FROTA)}), 200

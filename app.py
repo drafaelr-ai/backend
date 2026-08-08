@@ -80,8 +80,8 @@ from routes import (
     notificacoes_bp, bi_bp, diario_bp, auth_bp, admin_bp, sid_bp,
     caixa_bp, servicos_bp, boletos_bp, lancamentos_bp,
     cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
-    rh_bp, frota_bp, solicitacoes_bp, almoxarifado_bp, home_bp,
-    planejamento_bp,
+    rh_bp, frota_bp, abastecimento_publico_bp, solicitacoes_bp,
+    almoxarifado_bp, home_bp, planejamento_bp,
 )
 
 setup_logging()
@@ -170,6 +170,7 @@ def create_app(config_class=Config):
     app.register_blueprint(superlink_bp)
     app.register_blueprint(rh_bp)
     app.register_blueprint(frota_bp)
+    app.register_blueprint(abastecimento_publico_bp)
     app.register_blueprint(solicitacoes_bp)
     app.register_blueprint(almoxarifado_bp)
     app.register_blueprint(home_bp)

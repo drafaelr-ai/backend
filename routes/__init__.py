@@ -14,6 +14,7 @@ from routes.obras import obras_bp  # noqa: F401
 from routes.superlink import superlink_bp  # noqa: F401
 from routes.rh import rh_bp  # noqa: F401
 from routes.frota import frota_bp  # noqa: F401
+from routes.abastecimento_publico import abastecimento_publico_bp  # noqa: F401
 from routes.solicitacoes import solicitacoes_bp  # noqa: F401
 from routes.almoxarifado import almoxarifado_bp  # noqa: F401
 from routes.home import home_bp  # noqa: F401

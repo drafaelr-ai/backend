@@ -29,6 +29,13 @@ class FrotaAbastecimento(db.Model):
     observacao = db.Column(db.String(300), nullable=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Preço por litro e comprovante — preenchidos pelo OCR do cupom quando o
+    # abastecimento vem do link do motorista. `origem` distingue as duas vias.
+    preco_litro = db.Column(db.Numeric(10, 3), nullable=True)
+    comprovante_url = db.Column(db.String(500), nullable=True)
+    origem = db.Column(db.String(20), nullable=True)        # manual | superlink
+    solicitacao_id = db.Column(db.Integer, nullable=True)   # referência fraca
+
     veiculo = db.relationship('FrotaVeiculo', lazy=True)
     condutor = db.relationship('FrotaCondutor', lazy=True)
 
@@ -51,5 +58,9 @@ class FrotaAbastecimento(db.Model):
             'imovel_id': self.imovel_id,
             'local_nome': self.local_nome,
             'observacao': self.observacao,
+            'preco_litro': float(self.preco_litro) if self.preco_litro is not None else None,
+            'tem_comprovante': bool(self.comprovante_url),
+            'origem': self.origem or 'manual',
+            'solicitacao_id': self.solicitacao_id,
             'data_criacao': self.data_criacao.isoformat() if self.data_criacao else None,
         }
