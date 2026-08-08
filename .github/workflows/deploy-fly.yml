@@ -1,0 +1,47 @@
+# Deploy do obraly-api no Fly.io a cada push na main.
+#
+# Por quê: o frontend já sobe sozinho (Vercel no push da main), mas o backend
+# dependia de alguém rodar `fly deploy` na máquina. Isso deixava as duas
+# pontas fora de sincronia — a tela nova aparecia no ar chamando endpoints que
+# ainda não existiam (405 no console).
+#
+# Pré-requisito, uma vez só:
+#   fly tokens create deploy -x 999999h
+# e salvar a saída em Settings → Secrets and variables → Actions →
+# New repository secret, com o nome FLY_API_TOKEN.
+#
+# O comando de deploy é exatamente o do deploy_fly.ps1 (linha 43).
+name: Deploy obraly-api (Fly.io)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'deploy_fly.ps1'
+      - '.github/**'
+  workflow_dispatch:   # permite disparar o deploy pela aba Actions
+
+# Um deploy por vez: dois pushes seguidos não podem disputar a mesma máquina.
+concurrency:
+  group: deploy-obraly-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: fly deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy
+        run: >
+          flyctl deploy
+          --app obraly-api
+          --config fly.obraly.toml
+          --dockerfile Dockerfile.obraly
+          --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
