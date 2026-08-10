@@ -193,6 +193,16 @@ def _pode_reabrir(s, user):
                                        or s.atendida_por_id == user.id)
 
 
+def _pode_editar(s, user):
+    """A lista pode mudar somente antes de existir pesquisa de preços.
+
+    Depois da primeira cotação, alterar quantidade/itens invalidaria os valores
+    recebidos e, após a aprovação, poderia divergir do financeiro.
+    """
+    return s.status == 'Aberta' and (user.role == 'master'
+                                     or s.solicitante_id == user.id)
+
+
 def _pode_efetivar(cfg, valor):
     """Efetivação direta (sem aprovador) só quando há limite configurado e a
     cotação escolhida está dentro dele."""
@@ -369,6 +379,100 @@ def detalhe_solicitacao(sol_id):
                             and (user.role == 'master' or s.solicitante_id == user.id))
     out['pode_atender'] = _pode_atender(s, user, cfg)
     out['pode_reabrir'] = _pode_reabrir(s, user)
+    out['pode_editar'] = _pode_editar(s, user)
+    return jsonify(out), 200
+
+
+@solicitacoes_bp.route('/<int:sol_id>', methods=['PATCH'])
+@jwt_required()
+def editar_solicitacao(sol_id):
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+    if not _pode_editar(s, user):
+        if s.status != 'Aberta':
+            return jsonify({"erro": "Só é possível editar uma solicitação enquanto ela está Aberta, antes das cotações."}), 400
+        return jsonify({"erro": "Só o solicitante ou o master podem editar esta solicitação."}), 403
+
+    dados, arquivo = _dados_e_arquivo()
+    obra_id = _to_int(dados.get('obra_id'))
+    if not obra_id:
+        return jsonify({"erro": "obra_id é obrigatório."}), 400
+    obra = Obra.query.get(obra_id)
+    if not obra:
+        return jsonify({"erro": "Obra não encontrada."}), 400
+    if not user_has_access_to_obra(user, obra_id):
+        return jsonify({"erro": "Você não tem acesso a esta obra."}), 403
+    if getattr(obra, 'arquivada', False):
+        return jsonify({"erro": "Obra arquivada — não é possível mover a solicitação para ela."}), 400
+
+    tipo = (dados.get('tipo') or 'Material').strip()
+    if tipo not in _TIPOS:
+        return jsonify({"erro": f"tipo inválido (use {sorted(_TIPOS)})"}), 400
+
+    itens_dados = dados.get('itens')
+    if isinstance(itens_dados, str):
+        try:
+            itens_dados = json.loads(itens_dados)
+        except ValueError:
+            itens_dados = None
+    if not isinstance(itens_dados, list) or not itens_dados:
+        return jsonify({"erro": "Informe ao menos um item na solicitação."}), 400
+
+    novos_itens = []
+    for idx, item in enumerate(itens_dados, start=1):
+        descricao = (item.get('descricao') or '').strip() if isinstance(item, dict) else ''
+        quantidade = _to_num(item.get('quantidade')) if isinstance(item, dict) else None
+        if not descricao:
+            return jsonify({"erro": f"Item {idx}: descrição é obrigatória."}), 400
+        if not quantidade or quantidade <= 0:
+            return jsonify({"erro": f"Item {idx}: quantidade deve ser maior que zero."}), 400
+        novos_itens.append(SolicitacaoItem(
+            descricao=descricao[:300],
+            quantidade=quantidade,
+            unidade=(item.get('unidade') or '').strip()[:20] or None,
+            observacao=(item.get('observacao') or '').strip()[:300] or None,
+        ))
+
+    try:
+        s.obra_id = obra_id
+        s.tipo = tipo
+        s.data_necessidade = _parse_date(dados.get('data_necessidade'))
+        s.observacao = (dados.get('observacao') or '').strip() or None
+        s.itens = novos_itens
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao editar solicitação: %s", e)
+        return jsonify({"erro": "Erro interno ao editar solicitação."}), 500
+
+    upload_falhou = False
+    if arquivo:
+        arquivo_url, upload_falhou = _upload_best_effort(arquivo, f'solicitacoes/{s.id}')
+        if arquivo_url:
+            try:
+                s.arquivo_url = arquivo_url
+                db.session.commit()
+            except Exception as e:
+                db.session.rollback()
+                logger.exception("Solicitações: erro ao substituir anexo: %s", e)
+                upload_falhou = True
+
+    cfg = _config()
+    _notificar_ids(
+        cfg.alertados_ids if cfg else [],
+        tipo='solicitacao_editada',
+        titulo=f"✏️ Solicitação de compra #{s.id} atualizada",
+        mensagem=f"{user.username} atualizou {_resumo_itens(s)} para a obra {obra.nome}.",
+        solicitacao=s, origem_id=user.id,
+    )
+    out = s.to_dict(incluir_detalhes=True)
+    out['pode_editar'] = True
+    if upload_falhou:
+        out['aviso'] = 'Alterações salvas, mas o upload do novo anexo falhou.'
     return jsonify(out), 200
 
 
@@ -684,10 +788,21 @@ def atender_solicitacao(sol_id):
         return jsonify({"erro": "Só o comprador ou um aprovador pode dar baixa na compra."}), 403
 
     dados = request.get_json(silent=True) or {}
+    data_atendimento = _parse_date(dados.get('data_atendimento'))
+    if dados.get('data_atendimento') and not data_atendimento:
+        return jsonify({"erro": "data_atendimento inválida."}), 400
+    if data_atendimento and data_atendimento > date.today():
+        return jsonify({"erro": "A data do atendimento não pode estar no futuro."}), 400
+    if (data_atendimento and s.data_criacao
+            and data_atendimento < s.data_criacao.date()):
+        return jsonify({"erro": "A data do atendimento não pode ser anterior à solicitação."}), 400
+
     try:
+        agora = datetime.utcnow()
         s.status = 'Atendida'
         s.atendida_por_id = user.id
-        s.data_atendimento = datetime.utcnow()
+        s.data_atendimento = (datetime.combine(data_atendimento, agora.time())
+                              if data_atendimento else agora)
         s.observacao_atendimento = (dados.get('observacao') or '').strip()[:300] or None
         db.session.commit()
     except Exception as e:
@@ -703,7 +818,7 @@ def atender_solicitacao(sol_id):
         tipo='solicitacao_atendida',
         titulo=f"📦 Compra da solicitação #{s.id} atendida",
         mensagem=(f"{_resumo_itens(s)} — obra {s.obra.nome if s.obra else ''}. "
-                  f"Baixa por {user.username}."),
+                  f"Atendida em {s.data_atendimento.strftime('%d/%m/%Y')} por {user.username}."),
         solicitacao=s, origem_id=user.id,
     )
     out = s.to_dict(incluir_detalhes=True)

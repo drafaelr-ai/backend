@@ -172,6 +172,39 @@ with app.app_context():
         check('notif: solicitante NÃO recebeu a própria',
               len(notifs(ids['solicitante_smoke'], 'solicitacao_criada')) == 0)
 
+        print('\n=== edição de solicitação aberta ===')
+        edit_payload = {
+            'obra_id': obra1_id,
+            'tipo': 'Material',
+            'data_necessidade': (date.today() + timedelta(days=20)).isoformat(),
+            'observacao': 'Entrega ajustada após conferência',
+            'itens': [
+                {'descricao': 'Cimento CP-III', 'quantidade': '60', 'unidade': 'sc',
+                 'observacao': 'Preferência por lote único'},
+                {'descricao': 'Areia média', 'quantidade': 20, 'unidade': 'm³'},
+            ],
+        }
+        r = c.patch(f'/solicitacoes/{sol_id}', json=edit_payload, headers=h_alert)
+        check('PATCH por não-solicitante -> 403', r.status_code == 403)
+        r = c.patch(f'/solicitacoes/{sol_id}', json={**edit_payload, 'itens': []}, headers=h_sol)
+        check('PATCH sem itens -> 400', r.status_code == 400)
+        r = c.patch(f'/solicitacoes/{sol_id}', json=edit_payload, headers=h_sol)
+        check('PATCH pelo solicitante -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:300]}')
+        editada = json.loads(r.data)
+        check('edição substituiu itens', len(editada['itens']) == 2
+              and editada['itens'][0]['descricao'] == 'Cimento CP-III'
+              and editada['itens'][0]['quantidade'] == 60.0)
+        check('edição preservou autoria e criação', editada['solicitante_id'] == ids['solicitante_smoke']
+              and editada['data_criacao'] == sol['data_criacao'])
+        check('edição notificou responsável por preços',
+              len(notifs(ids['alertado_smoke'], 'solicitacao_editada')) == 1)
+        r = c.patch(f'/solicitacoes/{sol_id}', json={**edit_payload, 'observacao': 'Revisada pelo master'},
+                    headers=h_master)
+        check('PATCH pelo master -> 200', r.status_code == 200)
+        r = c.get(f'/solicitacoes/{sol_id}', headers=h_sol)
+        check('detalhe aberto informa pode_editar', json.loads(r.data).get('pode_editar') is True)
+
         print('\n=== rota pública ===')
         token = sol['token_publico']
         r = c.get(f'/solicitacoes/publico/{token}')
@@ -212,7 +245,11 @@ with app.app_context():
         check('cotação: valor BR parseado', cot1['valor_total'] == 2640.0)
         check('cotação: criado_por_nome', cot1['criado_por_nome'] == 'alertado_smoke')
         r = c.get(f'/solicitacoes/{sol_id}', headers=h_master)
-        check('status virou Em cotação', json.loads(r.data)['status'] == 'Em cotação')
+        detalhe_cotacao = json.loads(r.data)
+        check('status virou Em cotação', detalhe_cotacao['status'] == 'Em cotação')
+        check('com cotação não pode mais editar', detalhe_cotacao.get('pode_editar') is False)
+        r = c.patch(f'/solicitacoes/{sol_id}', json=edit_payload, headers=h_master)
+        check('PATCH após cotação -> 400', r.status_code == 400)
 
         r = c.post(f'/solicitacoes/{sol_id}/cotacoes', json={
             'fornecedor': 'Depósito B', 'valor_total': 2400.0,
@@ -254,7 +291,7 @@ with app.app_context():
         check('PF: status Previsto', pf.status == 'Previsto')
         check('PF: tipo da solicitação', pf.tipo == 'Material')
         check('PF: vencimento = data_necessidade',
-              pf.data_vencimento == date.today() + timedelta(days=15))
+              pf.data_vencimento == date.today() + timedelta(days=20))
         check('PF: descrição referencia a solicitação', f'#{sol_id}' in pf.descricao)
         check('notif: solicitante recebeu aprovada',
               len(notifs(ids['solicitante_smoke'], 'solicitacao_aprovada')) == 1)
@@ -356,6 +393,11 @@ with app.app_context():
         r = c.patch(f'/solicitacoes/{sol_id}/atender', headers=h_sol)
         check('atender por não-comprador -> 403', r.status_code == 403, f'got {r.status_code}')
 
+        r = c.patch(f'/solicitacoes/{sol_id}/atender',
+                    json={'data_atendimento': (date.today() + timedelta(days=1)).isoformat()},
+                    headers=h_alert)
+        check('atender com data futura -> 400', r.status_code == 400)
+
         r = c.get(f'/solicitacoes/{sol_id}', headers=h_alert)
         det_alert = json.loads(r.data)
         check('detalhe: pode_atender p/ comprador', det_alert['pode_atender'] is True)
@@ -365,12 +407,16 @@ with app.app_context():
               json.loads(r.data)['pode_atender'] is False)
 
         r = c.patch(f'/solicitacoes/{sol_id}/atender',
-                    json={'observacao': 'NF 4521 — entregue no canteiro'}, headers=h_alert)
+                    json={
+                        'data_atendimento': date.today().isoformat(),
+                        'observacao': 'NF 4521 — entregue no canteiro',
+                    }, headers=h_alert)
         check('comprador atende -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')
         atendida = json.loads(r.data)
         check('status Atendida', atendida['status'] == 'Atendida')
         check('atendida_por_nome gravado', atendida['atendida_por_nome'] == 'alertado_smoke')
-        check('data_atendimento gravada', bool(atendida['data_atendimento']))
+        check('data_atendimento escolhida gravada',
+              atendida['data_atendimento'][:10] == date.today().isoformat())
         check('observação do atendimento gravada',
               atendida['observacao_atendimento'] == 'NF 4521 — entregue no canteiro')
         check('valor_aprovado no payload', atendida['valor_aprovado'] == 2400.0)
