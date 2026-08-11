@@ -131,6 +131,67 @@ def get_obras():
         ).filter(
             Boleto.status == 'Pago'
         ).group_by(Boleto.obra_id).subquery()
+
+        # Resumo de vencimentos para o acesso rápido do painel financeiro.
+        # Mantém as mesmas fontes canônicas do cronograma: pagamentos únicos,
+        # parcelas e boletos. "A vencer no mês" começa hoje e não mistura
+        # valores já vencidos.
+        hoje = date.today()
+        if hoje.month == 12:
+            primeiro_dia_proximo_mes = date(hoje.year + 1, 1, 1)
+        else:
+            primeiro_dia_proximo_mes = date(hoje.year, hoje.month + 1, 1)
+        ultimo_dia_mes = primeiro_dia_proximo_mes - timedelta(days=1)
+
+        pagamentos_futuros_vencimento_sum = db.session.query(
+            PagamentoFuturo.obra_id,
+            func.sum(case(
+                (PagamentoFuturo.data_vencimento < hoje, PagamentoFuturo.valor),
+                else_=0,
+            )).label('futuros_vencidos'),
+            func.sum(case(
+                (
+                    PagamentoFuturo.data_vencimento.between(hoje, ultimo_dia_mes),
+                    PagamentoFuturo.valor,
+                ),
+                else_=0,
+            )).label('futuros_mes'),
+        ).filter(
+            PagamentoFuturo.status.in_(['Previsto', 'Pendente'])
+        ).group_by(PagamentoFuturo.obra_id).subquery()
+
+        parcelas_vencimento_sum = db.session.query(
+            PagamentoParcelado.obra_id,
+            func.sum(case(
+                (ParcelaIndividual.data_vencimento < hoje, ParcelaIndividual.valor_parcela),
+                else_=0,
+            )).label('parcelas_vencidas'),
+            func.sum(case(
+                (
+                    ParcelaIndividual.data_vencimento.between(hoje, ultimo_dia_mes),
+                    ParcelaIndividual.valor_parcela,
+                ),
+                else_=0,
+            )).label('parcelas_mes'),
+        ).select_from(ParcelaIndividual) \
+         .join(PagamentoParcelado, ParcelaIndividual.pagamento_parcelado_id == PagamentoParcelado.id) \
+         .filter(ParcelaIndividual.status == 'Previsto') \
+         .group_by(PagamentoParcelado.obra_id) \
+         .subquery()
+
+        boletos_vencimento_sum = db.session.query(
+            Boleto.obra_id,
+            func.sum(case(
+                (Boleto.data_vencimento < hoje, Boleto.valor),
+                else_=0,
+            )).label('boletos_vencidos'),
+            func.sum(case(
+                (Boleto.data_vencimento.between(hoje, ultimo_dia_mes), Boleto.valor),
+                else_=0,
+            )).label('boletos_mes'),
+        ).filter(
+            Boleto.status.in_(['Pendente', 'Vencido'])
+        ).group_by(Boleto.obra_id).subquery()
         
         # NOVO: 4b. Pagamentos Futuros SEM serviço (Despesas Extras)
         pagamentos_futuros_extra_sum = db.session.query(
@@ -236,6 +297,16 @@ def get_obras():
             func.coalesce(parcelas_pagas_sem_servico_sum.c.total_parcelas_pagas_sem, 0).label('parcelas_pagas_sem_servico'),
             func.coalesce(pagamentos_futuros_pagos_sum.c.total_futuro_pago, 0).label('futuro_pago'),
             func.coalesce(boletos_pagos_sum.c.total_boletos_pagos, 0).label('boletos_pagos'),
+            (
+                func.coalesce(pagamentos_futuros_vencimento_sum.c.futuros_vencidos, 0) +
+                func.coalesce(parcelas_vencimento_sum.c.parcelas_vencidas, 0) +
+                func.coalesce(boletos_vencimento_sum.c.boletos_vencidos, 0)
+            ).label('valor_vencido'),
+            (
+                func.coalesce(pagamentos_futuros_vencimento_sum.c.futuros_mes, 0) +
+                func.coalesce(parcelas_vencimento_sum.c.parcelas_mes, 0) +
+                func.coalesce(boletos_vencimento_sum.c.boletos_mes, 0)
+            ).label('valor_a_vencer_mes'),
             func.coalesce(orcamento_eng_sum.c.total_orcamento_eng, 0).label('orcamento_eng'),
             func.coalesce(servicos_orcamento_sum.c.total_servicos_orcamento, 0).label('servicos_orcamento')
         ).outerjoin(
@@ -260,6 +331,15 @@ def get_obras():
             pagamentos_futuros_pagos_sum, Obra.id == pagamentos_futuros_pagos_sum.c.obra_id
         ).outerjoin(
             boletos_pagos_sum, Obra.id == boletos_pagos_sum.c.obra_id
+        ).outerjoin(
+            pagamentos_futuros_vencimento_sum,
+            Obra.id == pagamentos_futuros_vencimento_sum.c.obra_id
+        ).outerjoin(
+            parcelas_vencimento_sum,
+            Obra.id == parcelas_vencimento_sum.c.obra_id
+        ).outerjoin(
+            boletos_vencimento_sum,
+            Obra.id == boletos_vencimento_sum.c.obra_id
         ).outerjoin(
             orcamento_eng_sum, Obra.id == orcamento_eng_sum.c.obra_id
         ).outerjoin(
@@ -297,7 +377,7 @@ def get_obras():
 
         # 8. Formata a Saída com os 4 KPIs
         resultados = []
-        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico, parcelas_pagas_sem_servico, futuro_pago, boletos_pagos, orcamento_eng, servicos_orcamento in obras_com_totais:
+        for obra, lanc_geral, lanc_pago, lanc_pendente, serv_budget_mo, serv_budget_mat, pag_pago, pag_pendente, futuro_previsto, parcelas_previstas, futuro_extra, parcelas_extra, parcelas_pagas_com_servico, parcelas_pagas_sem_servico, futuro_pago, boletos_pagos, valor_vencido, valor_a_vencer_mes, orcamento_eng, servicos_orcamento in obras_com_totais:
             
             # Calcular valores COM serviço
             futuro_com_servico = float(futuro_previsto) - float(futuro_extra)
@@ -339,7 +419,9 @@ def get_obras():
                 "orcamento_total": orcamento_total,
                 "total_pago": total_pago,
                 "liberado_pagamento": liberado_pagamento,
-                "despesas_extras": despesas_extras
+                "despesas_extras": despesas_extras,
+                "valor_vencido": float(valor_vencido),
+                "valor_a_vencer_mes": float(valor_a_vencer_mes),
             })
         
         return jsonify(resultados)
@@ -889,9 +971,9 @@ def get_obra_detalhes(obra_id):
         historico_unificado.sort(key=lambda x: x['data'] if x['data'] else datetime.date(1900, 1, 1), reverse=True)
         
         for item in historico_unificado:
-            if item['data']:
+            if item['data'] and hasattr(item['data'], 'isoformat'):
                 item['data'] = item['data'].isoformat()
-            if item.get('data_vencimento'):
+            if item.get('data_vencimento') and hasattr(item['data_vencimento'], 'isoformat'):
                 item['data_vencimento'] = item['data_vencimento'].isoformat()
             
         # --- Cálculo dos totais de serviço ---

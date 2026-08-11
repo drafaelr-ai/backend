@@ -25,6 +25,7 @@ from services import (
     user_has_access_to_obra,
 )
 from services.financeiro_service import calcular_totais_pagos_obra
+from services.orcamento_service import normalizar_quantidade_item_orcamento
 from utils import formatar_real
 
 logger = logging.getLogger(__name__)
@@ -604,6 +605,18 @@ def criar_item_orcamento(obra_id):
         etapa = OrcamentoEngEtapa.query.get_or_404(etapa_id)
         if etapa.obra_id != obra_id:
             return jsonify({"erro": "Etapa não pertence a esta obra"}), 400
+
+        try:
+            quantidade_normalizada = normalizar_quantidade_item_orcamento(
+                unidade=dados.get('unidade'),
+                quantidade=dados.get('quantidade', 0),
+                tipo_composicao=dados.get('tipo_composicao', 'separado'),
+                preco_mao_obra=dados.get('preco_mao_obra'),
+                preco_material=dados.get('preco_material'),
+                preco_unitario=dados.get('preco_unitario'),
+            )
+        except ValueError as exc:
+            return jsonify({"erro": str(exc)}), 400
         
         # Gerar código automaticamente se não fornecido
         if not dados.get('codigo'):
@@ -627,7 +640,7 @@ def criar_item_orcamento(obra_id):
             codigo=dados['codigo'],
             descricao=dados['descricao'],
             unidade=dados['unidade'],
-            quantidade=dados.get('quantidade', 0),
+            quantidade=quantidade_normalizada,
             tipo_composicao=dados.get('tipo_composicao', 'separado'),
             preco_mao_obra=dados.get('preco_mao_obra'),
             preco_material=dados.get('preco_material'),
@@ -737,6 +750,18 @@ def editar_item_orcamento(obra_id, item_id):
             return jsonify({"erro": "Item não pertence a esta obra"}), 404
         dados = request.json
 
+        try:
+            quantidade_normalizada = normalizar_quantidade_item_orcamento(
+                unidade=dados.get('unidade', item.unidade),
+                quantidade=dados.get('quantidade', item.quantidade),
+                tipo_composicao=dados.get('tipo_composicao', item.tipo_composicao),
+                preco_mao_obra=dados.get('preco_mao_obra', item.preco_mao_obra),
+                preco_material=dados.get('preco_material', item.preco_material),
+                preco_unitario=dados.get('preco_unitario', item.preco_unitario),
+            )
+        except ValueError as exc:
+            return jsonify({"erro": str(exc)}), 400
+
         # Guardar totais antigos para atualizar serviço
         totais_antigos = item.calcular_totais() if item.servico_id else None
         
@@ -747,8 +772,7 @@ def editar_item_orcamento(obra_id, item_id):
             item.descricao = dados['descricao']
         if 'unidade' in dados:
             item.unidade = dados['unidade']
-        if 'quantidade' in dados:
-            item.quantidade = dados['quantidade']
+        item.quantidade = quantidade_normalizada
         if 'tipo_composicao' in dados:
             item.tipo_composicao = dados['tipo_composicao']
         if 'preco_mao_obra' in dados:

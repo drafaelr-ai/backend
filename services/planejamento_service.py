@@ -184,7 +184,12 @@ def automatic_status(atividade):
         return 'concluido'
     if executed > 0:
         return 'em_andamento'
-    if atividade.data_inicio and atividade.data_fim:
+    if (
+        atividade.data_inicio
+        and atividade.data_fim
+        and atividade.responsavel
+        and atividade.equipe
+    ):
         return 'pronto'
     return 'a_planejar'
 

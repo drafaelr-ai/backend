@@ -27,7 +27,7 @@ class PagamentoParcelado(db.Model):
     parcelas_pagas = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(20), nullable=False, default='Ativo')  # Ativo/Concluído/Cancelado
     observacoes = db.Column(db.Text, nullable=True)
-    pix = db.Column(db.String(255), nullable=True)
+    pix = db.Column(db.Text, nullable=True)
     forma_pagamento = db.Column(db.String(20), nullable=True, default='PIX')
 
     # Vínculo com item do orçamento (orcamento_eng_item). Coluna+FK já existem no banco.

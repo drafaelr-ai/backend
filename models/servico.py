@@ -9,7 +9,7 @@ class Servico(db.Model):
     responsavel = db.Column(db.String(150))
     valor_global_mao_de_obra = db.Column(db.Float, nullable=False, default=0.0)
     valor_global_material = db.Column(db.Float, nullable=False, default=0.0)
-    pix = db.Column(db.String(100))
+    pix = db.Column(db.Text)
     concluido = db.Column(db.Boolean, default=False)  # NOVO: Marcar serviço como concluído
     data_conclusao = db.Column(db.Date, nullable=True)  # NOVO: Data da conclusão
     pagamentos = db.relationship('PagamentoServico', backref='servico', lazy=True, cascade="all, delete-orphan")

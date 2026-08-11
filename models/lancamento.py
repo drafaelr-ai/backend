@@ -16,7 +16,8 @@ class Lancamento(db.Model):
     data = db.Column(db.Date, nullable=False)
     data_vencimento = db.Column(db.Date, nullable=True)
     status = db.Column(db.String(20), nullable=False, default='A Pagar')
-    pix = db.Column(db.String(100))
+    # Aceita chave PIX e payload completo "Pix Copia e Cola" (BR Code/EMV).
+    pix = db.Column(db.Text)
     prioridade = db.Column(db.Integer, nullable=False, default=0)
     fornecedor = db.Column(db.String(150), nullable=True)
 

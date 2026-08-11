@@ -9,7 +9,7 @@ class Orcamento(db.Model):
     descricao = db.Column(db.String(255), nullable=False)
     fornecedor = db.Column(db.String(150), nullable=True)
     valor = db.Column(db.Float, nullable=False)
-    dados_pagamento = db.Column(db.String(150), nullable=True)
+    dados_pagamento = db.Column(db.Text, nullable=True)
     tipo = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False, default='Pendente')
 

@@ -244,8 +244,7 @@ def create_planejamento_atividade(obra_id):
         apply_activity_fields(activity, fields)
         db.session.add(activity)
         db.session.flush()
-        if not data.get('status'):
-            activity.status = automatic_status(activity)
+        activity.status = automatic_status(activity)
         db.session.commit()
         return jsonify(activity.to_dict()), 201
     except PlanejamentoValidationError as exc:
@@ -293,8 +292,7 @@ def update_planejamento_atividade(activity_id):
                 'data_fim não pode ser anterior a data_inicio.', 'data_fim'
             )
         apply_activity_fields(activity, fields)
-        if 'status' not in data:
-            activity.status = automatic_status(activity)
+        activity.status = automatic_status(activity)
         db.session.commit()
         return jsonify(activity.to_dict())
     except (TypeError, ValueError) as exc:

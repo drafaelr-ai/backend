@@ -73,12 +73,40 @@ def notifications():
     return jsonify([])
 
 
+@app.get('/me')
+@jwt_required()
+def current_profile():
+    user = get_current_user()
+    return jsonify(user.to_dict())
+
+
+@app.get('/home/alertas')
+@jwt_required()
+def home_alerts():
+    return jsonify({
+        'pendencias': [],
+        'resumo': {
+            'obras': {'vencidos': 0, 'a_vencer': 0},
+            'admin': {'vencidos': 0, 'a_vencer': 0},
+        },
+    })
+
+
 @app.get('/obras')
 @jwt_required()
 def list_works():
     user = get_current_user()
     rows = Obra.query.order_by(Obra.id).all()
-    return jsonify([row.to_dict() for row in rows if user_has_access_to_obra(user, row.id)])
+    accessible = [row for row in rows if user_has_access_to_obra(user, row.id)]
+    return jsonify([{
+        **row.to_dict(),
+        'orcamento_total': 1850000 + index * 250000,
+        'total_pago': 620000 + index * 125000,
+        'liberado_pagamento': 80000 + index * 10000,
+        'despesas_extras': 12000 + index * 2000,
+        'valor_vencido': index * 12800,
+        'valor_a_vencer_mes': 32000 + index * 11350,
+    } for index, row in enumerate(accessible)])
 
 
 @app.get('/obras/<int:work_id>')

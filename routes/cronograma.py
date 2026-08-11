@@ -2,6 +2,7 @@
 import base64
 import calendar
 import logging
+import math
 import traceback
 from datetime import datetime, date, timedelta
 
@@ -695,8 +696,18 @@ def inserir_pagamento(obra_id):
         if not user_has_access_to_obra(user, obra_id):
             return jsonify({"erro": "Acesso negado a esta obra."}), 403
         
-        dados = request.json
-        logger.info(f"📋 Dados recebidos: {dados}")
+        dados = request.get_json(silent=True)
+        if not isinstance(dados, dict):
+            return jsonify({"erro": "Dados do pagamento são obrigatórios"}), 400
+
+        logger.info(
+            "📋 Pagamento recebido: descricao=%r tipo=%r status=%r forma=%r item_orcamento=%r",
+            dados.get('descricao'),
+            dados.get('tipo'),
+            dados.get('status'),
+            dados.get('tipo_forma_pagamento'),
+            dados.get('orcamento_item_id'),
+        )
         
         # DEBUG: Verificar campos de entrada especificamente
         logger.info(f"🔍 DEBUG ENTRADA:")
@@ -706,21 +717,56 @@ def inserir_pagamento(obra_id):
         logger.info(f"   data_entrada: {dados.get('data_entrada')}")
         
         # Campos obrigatórios
-        descricao = dados.get('descricao')
-        valor_total = float(dados.get('valor', 0))
+        descricao = str(dados.get('descricao') or '').strip()
+        if not descricao:
+            return jsonify({"erro": "Descrição é obrigatória"}), 400
+
+        try:
+            valor_total = float(dados.get('valor', 0))
+        except (TypeError, ValueError):
+            return jsonify({"erro": "Valor do pagamento é inválido"}), 400
+        if not math.isfinite(valor_total) or valor_total <= 0:
+            return jsonify({"erro": "Valor do pagamento deve ser maior que zero"}), 400
+
         tipo = dados.get('tipo')  # 'Material' ou 'Mão de Obra'
+        if tipo not in {'Material', 'Mão de Obra', 'Serviço', 'Equipamentos', 'Equipamento', 'Despesa'}:
+            return jsonify({"erro": "Tipo de pagamento é inválido"}), 400
         status = dados.get('status', 'A Pagar')  # 'Pago' ou 'A Pagar'
-        data = date.fromisoformat(dados.get('data'))
+        if status not in {'Pago', 'A Pagar'}:
+            return jsonify({"erro": "Status deve ser Pago ou A Pagar"}), 400
+        try:
+            data = date.fromisoformat(str(dados.get('data') or ''))
+        except ValueError:
+            return jsonify({"erro": "Data do pagamento é inválida"}), 400
         
         # Campos opcionais
         servico_id = dados.get('servico_id')
+        servico = None
+        if servico_id not in (None, ''):
+            try:
+                servico_id = int(servico_id)
+            except (TypeError, ValueError):
+                return jsonify({"erro": "Serviço vinculado é inválido"}), 400
+            servico = db.session.get(Servico, servico_id)
+            if not servico or servico.obra_id != obra_id:
+                return jsonify({"erro": "Serviço vinculado não pertence à obra"}), 400
         fornecedor = dados.get('fornecedor')
         data_vencimento = dados.get('data_vencimento')
-        pix = dados.get('pix')
-        prioridade = int(dados.get('prioridade', 0))
+        try:
+            data_vencimento_parsed = date.fromisoformat(str(data_vencimento)) if data_vencimento else None
+        except ValueError:
+            return jsonify({"erro": "Data de vencimento é inválida"}), 400
+        pix = str(dados.get('pix') or '').strip() or None
+        meio_pagamento = str(dados.get('meio_pagamento') or 'PIX').strip() or 'PIX'
+        try:
+            prioridade = int(dados.get('prioridade', 0))
+        except (TypeError, ValueError):
+            return jsonify({"erro": "Prioridade é inválida"}), 400
         
         # 🆕 NOVOS CAMPOS PARA PARCELAMENTO
         tipo_forma_pagamento = dados.get('tipo_forma_pagamento', 'avista')  # 'avista' ou 'parcelado'
+        if tipo_forma_pagamento not in {'avista', 'parcelado'}:
+            return jsonify({"erro": "Forma de pagamento deve ser à vista ou parcelado"}), 400
         numero_parcelas = dados.get('numero_parcelas')
         periodicidade = dados.get('periodicidade')  # 'Semanal', 'Quinzenal', 'Mensal'
         data_primeira_parcela = dados.get('data_primeira_parcela')
@@ -738,25 +784,53 @@ def inserir_pagamento(obra_id):
             if not numero_parcelas or not periodicidade or not data_primeira_parcela:
                 return jsonify({"erro": "Parcelas, periodicidade e data da primeira parcela são obrigatórios para parcelamento"}), 400
             
-            numero_parcelas = int(numero_parcelas)
-            data_primeira = date.fromisoformat(data_primeira_parcela)
+            try:
+                numero_parcelas = int(numero_parcelas)
+            except (TypeError, ValueError):
+                return jsonify({"erro": "Número de parcelas é inválido"}), 400
+            if numero_parcelas < 1 or numero_parcelas > 60:
+                return jsonify({"erro": "Número de parcelas deve ficar entre 1 e 60"}), 400
+            if periodicidade not in {'Semanal', 'Quinzenal', 'Mensal'}:
+                return jsonify({"erro": "Periodicidade inválida"}), 400
+            try:
+                data_primeira = date.fromisoformat(str(data_primeira_parcela))
+            except ValueError:
+                return jsonify({"erro": "Data da primeira parcela é inválida"}), 400
             
             # 🆕 Verificar se tem entrada
             tem_entrada = dados.get('tem_entrada', False)
-            valor_entrada = float(dados.get('valor_entrada', 0)) if tem_entrada else 0
+            try:
+                valor_entrada = float(dados.get('valor_entrada', 0)) if tem_entrada else 0
+                percentual_entrada = float(dados.get('percentual_entrada', 0)) if tem_entrada else 0
+            except (TypeError, ValueError):
+                return jsonify({"erro": "Dados da entrada são inválidos"}), 400
+            if tem_entrada and (
+                not math.isfinite(valor_entrada)
+                or valor_entrada <= 0
+                or valor_entrada >= valor_total
+            ):
+                return jsonify({"erro": "Valor da entrada deve ser maior que zero e menor que o total"}), 400
+            if not math.isfinite(percentual_entrada) or percentual_entrada < 0 or percentual_entrada > 100:
+                return jsonify({"erro": "Percentual da entrada deve ficar entre 0 e 100"}), 400
             data_entrada = dados.get('data_entrada')
-            percentual_entrada = float(dados.get('percentual_entrada', 0)) if tem_entrada else 0
             
             # 🆕 Parcelas customizadas (boletos com valores/códigos por parcela)
             parcelas_customizadas = dados.get('parcelas_customizadas') or []
             usar_customizadas = (
                 isinstance(parcelas_customizadas, list)
                 and len(parcelas_customizadas) == numero_parcelas
-                and all(p.get('valor') not in (None, '') for p in parcelas_customizadas)
+                and all(isinstance(p, dict) and p.get('valor') not in (None, '')
+                        for p in parcelas_customizadas)
             )
             if usar_customizadas:
+                try:
+                    valores_customizados = [float(p['valor']) for p in parcelas_customizadas]
+                except (TypeError, ValueError):
+                    return jsonify({"erro": "Valor de parcela personalizada é inválido"}), 400
+                if any(not math.isfinite(valor) or valor <= 0 for valor in valores_customizados):
+                    return jsonify({"erro": "Parcelas personalizadas devem ter valor maior que zero"}), 400
                 # valor_total passa a ser a soma real dos boletos + entrada
-                soma_custom = round(sum(float(p['valor']) for p in parcelas_customizadas), 2)
+                soma_custom = round(sum(valores_customizados), 2)
                 valor_total = round(soma_custom + valor_entrada, 2)
 
             # Calcular valor das parcelas (após entrada) — arredondado; o resíduo
@@ -784,7 +858,9 @@ def inserir_pagamento(obra_id):
                 data_primeira_parcela=data_primeira,
                 periodicidade=periodicidade,
                 parcelas_pagas=0,
-                status='Ativo'
+                status='Ativo',
+                pix=pix,
+                forma_pagamento=meio_pagamento,
             )
             db.session.add(novo_parcelado)
             db.session.flush()
@@ -816,7 +892,7 @@ def inserir_pagamento(obra_id):
                     data_vencimento=data_entrada_parsed,
                     status='Pago' if status == 'Pago' else 'Previsto',
                     data_pagamento=data_entrada_parsed if status == 'Pago' else None,
-                    forma_pagamento=pix if status == 'Pago' else None,
+                    forma_pagamento=meio_pagamento if status == 'Pago' else None,
                     observacao=f'ENTRADA ({percentual_entrada:.0f}%)'
                 )
                 db.session.add(parcela_entrada)
@@ -873,7 +949,7 @@ def inserir_pagamento(obra_id):
                     data_vencimento=data_venc,
                     status=parcela_status,
                     data_pagamento=parcela_data_pagamento,
-                    forma_pagamento=pix if status == 'Pago' else None,
+                    forma_pagamento=meio_pagamento if status == 'Pago' else None,
                     codigo_barras=codigo_barras_i,
                 )
                 db.session.add(nova_parcela)
@@ -906,7 +982,6 @@ def inserir_pagamento(obra_id):
             
             # CASO 1: STATUS "PAGO" COM SERVIÇO VINCULADO
             if servico_id and status == 'Pago':
-                servico = Servico.query.get_or_404(servico_id)
                 tipo_pagamento = ('mao_de_obra' if tipo == 'Mão de Obra'
                                    else 'equipamento' if tipo == 'Equipamentos'
                                    else 'material')
@@ -923,10 +998,12 @@ def inserir_pagamento(obra_id):
                     valor_total=valor_total,
                     valor_pago=valor_pago,
                     data=data,
-                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
+                    data_vencimento=data_vencimento_parsed,
                     status=status,
                     prioridade=prioridade,
                     fornecedor=fornecedor,
+                    forma_pagamento=meio_pagamento,
+                    pix=pix,
                     orcamento_item_id=oid,
                 )
                 db.session.add(novo_pagamento)
@@ -952,13 +1029,11 @@ def inserir_pagamento(obra_id):
             
             # CASO 2: STATUS "A PAGAR" COM SERVIÇO VINCULADO
             elif servico_id and status == 'A Pagar':
-                servico = Servico.query.get_or_404(servico_id)
-                
                 novo_futuro = PagamentoFuturo(
                     obra_id=obra_id,
                     descricao=f"{descricao} (Serviço: {servico.nome})",
                     valor=valor_total,
-                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
+                    data_vencimento=data_vencimento_parsed or data,
                     fornecedor=fornecedor,
                     pix=pix,
                     observacoes=f"Vinculado ao serviço {servico.nome}",
@@ -988,7 +1063,7 @@ def inserir_pagamento(obra_id):
                     obra_id=obra_id,
                     descricao=descricao,
                     valor=valor_total,
-                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else data,
+                    data_vencimento=data_vencimento_parsed or data,
                     fornecedor=fornecedor,
                     pix=pix,
                     observacoes=f"Tipo: {tipo}",
@@ -1021,7 +1096,7 @@ def inserir_pagamento(obra_id):
                     valor_total=valor_total,
                     valor_pago=valor_pago,
                     data=data,
-                    data_vencimento=date.fromisoformat(data_vencimento) if data_vencimento else None,
+                    data_vencimento=data_vencimento_parsed,
                     status=status,
                     pix=pix,
                     prioridade=prioridade,

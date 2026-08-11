@@ -32,6 +32,28 @@ def run_auto_migration():
         cur = conn.cursor()
         cur.execute("SET statement_timeout = '900s';")
 
+        # Tokens FCM são vinculados à conta autenticada pela API. A tabela não
+        # é acessível diretamente pelo Data API do Supabase.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS push_device (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+                token TEXT NOT NULL UNIQUE,
+                plataforma VARCHAR(20) NOT NULL DEFAULT 'android',
+                ativo BOOLEAN NOT NULL DEFAULT TRUE,
+                criado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                atualizado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ultimo_acesso_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_push_device_user_ativo
+                ON push_device (user_id, ativo);
+            ALTER TABLE push_device ENABLE ROW LEVEL SECURITY;
+            REVOKE ALL ON TABLE push_device FROM anon, authenticated, service_role;
+            REVOKE ALL ON SEQUENCE push_device_id_seq FROM anon, authenticated, service_role;
+            """
+        )
+
         # 1. Verificar colunas em pagamento_futuro
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'pagamento_futuro' AND column_name = 'servico_id';")
         if not cur.fetchone():
@@ -50,6 +72,34 @@ def run_auto_migration():
         if not cur.fetchone():
             cur.execute("ALTER TABLE pagamento_parcelado_v2 ADD COLUMN segmento VARCHAR(50) DEFAULT 'Material';")
             logger.info("✅ Coluna segmento adicionada")
+
+        # PIX pode ser uma chave simples ou o payload completo "Pix Copia e
+        # Cola". VARCHAR(100/255) rejeitava BR Codes longos e fazia o endpoint
+        # devolver erro 500. TEXT é aditivo e preserva integralmente os dados.
+        for table_name, column_name in (
+            ('lancamento', 'pix'),
+            ('pagamento_futuro', 'pix'),
+            ('pagamento_servico', 'pix'),
+            ('servico', 'pix'),
+            ('pagamento_parcelado_v2', 'pix'),
+            ('orcamento', 'dados_pagamento'),
+        ):
+            cur.execute(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = %s
+                  AND column_name = %s;
+                """,
+                (table_name, column_name),
+            )
+            column = cur.fetchone()
+            if column and column[0] != 'text':
+                cur.execute(
+                    f'ALTER TABLE {table_name} ALTER COLUMN {column_name} TYPE TEXT;'
+                )
+                logger.info("✅ %s.%s ampliado para TEXT", table_name, column_name)
 
         # 2.5 NOVO: Adicionar campos de pagamento na tabela orcamento
         cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'orcamento' AND column_name = 'data_vencimento';")
