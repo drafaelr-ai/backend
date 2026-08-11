@@ -40,6 +40,11 @@ class FrotaAbastecimento(db.Model):
     condutor = db.relationship('FrotaCondutor', lazy=True)
 
     def to_dict(self):
+        preco_litro = self.preco_litro
+        # Registros manuais antigos não gravavam esta coluna. Calculá-la na
+        # saída corrige o histórico imediatamente, sem alterar dados originais.
+        if preco_litro is None and self.valor is not None and self.litros:
+            preco_litro = round(float(self.valor) / float(self.litros), 3)
         return {
             'id': self.id,
             'veiculo_id': self.veiculo_id,
@@ -58,7 +63,7 @@ class FrotaAbastecimento(db.Model):
             'imovel_id': self.imovel_id,
             'local_nome': self.local_nome,
             'observacao': self.observacao,
-            'preco_litro': float(self.preco_litro) if self.preco_litro is not None else None,
+            'preco_litro': float(preco_litro) if preco_litro is not None else None,
             'tem_comprovante': bool(self.comprovante_url),
             'origem': self.origem or 'manual',
             'solicitacao_id': self.solicitacao_id,

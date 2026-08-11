@@ -20,12 +20,13 @@ Visibilidade: master/administrador veem tudo; comum vê solicitações de suas
 obras permitidas e as que ele mesmo criou.
 Erros de validação são SEMPRE 400 — nunca 422 (fetchWithAuth desloga em 401/422).
 """
+import io
 import json
 import logging
 import secrets
 from datetime import datetime, date, timedelta
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required, verify_jwt_in_request
 from sqlalchemy import or_
 
@@ -40,6 +41,12 @@ from models.user import User
 from services import storage_service
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
 from services.notificacao_service import criar_notificacao
+from services.solicitacao_document_service import (
+    PedidoLeituraError,
+    gerar_pdf,
+    gerar_xlsx,
+    ler_pedido,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +243,22 @@ def _resumo_itens(s, limite=180):
 
 # ---------------------------------------------------------------- solicitações
 
+@solicitacoes_bp.route('/ler-pedido', methods=['POST'])
+@jwt_required()
+def ler_pedido_solicitacao():
+    """Extrai somente os campos úteis de um Excel/PDF para revisão no formulário."""
+    arquivo = request.files.get('arquivo') or request.files.get('file')
+    if not arquivo:
+        return jsonify({"erro": "Selecione um arquivo Excel (.xlsx) ou PDF."}), 400
+    try:
+        return jsonify(ler_pedido(arquivo)), 200
+    except PedidoLeituraError as exc:
+        return jsonify({"erro": str(exc)}), 400
+    except Exception as exc:
+        logger.exception("Solicitações: erro inesperado ao ler pedido: %s", exc)
+        return jsonify({"erro": "Não foi possível ler o pedido enviado."}), 500
+
+
 @solicitacoes_bp.route('', methods=['GET'])
 @jwt_required()
 def listar_solicitacoes():
@@ -381,6 +404,56 @@ def detalhe_solicitacao(sol_id):
     out['pode_reabrir'] = _pode_reabrir(s, user)
     out['pode_editar'] = _pode_editar(s, user)
     return jsonify(out), 200
+
+
+def _solicitacao_para_exportar(sol_id):
+    user = get_current_user()
+    solicitacao = SolicitacaoCompra.query.get(sol_id)
+    if not solicitacao:
+        return None, (jsonify({"erro": "Solicitação não encontrada."}), 404)
+    if not _solicitacao_visivel(solicitacao, user):
+        return None, (jsonify({"erro": "Acesso negado a esta solicitação."}), 403)
+    return solicitacao, None
+
+
+@solicitacoes_bp.route('/<int:sol_id>/exportar.xlsx', methods=['GET'])
+@jwt_required()
+def exportar_solicitacao_xlsx(sol_id):
+    solicitacao, erro = _solicitacao_para_exportar(sol_id)
+    if erro:
+        return erro
+    try:
+        resposta = send_file(
+            io.BytesIO(gerar_xlsx(solicitacao)),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=f'solicitacao_{solicitacao.id}.xlsx',
+        )
+        resposta.headers['Cache-Control'] = 'private, no-store'
+        return resposta
+    except Exception as exc:
+        logger.exception("Solicitações: erro ao exportar Excel #%s: %s", sol_id, exc)
+        return jsonify({"erro": "Não foi possível gerar o Excel da solicitação."}), 500
+
+
+@solicitacoes_bp.route('/<int:sol_id>/exportar.pdf', methods=['GET'])
+@jwt_required()
+def exportar_solicitacao_pdf(sol_id):
+    solicitacao, erro = _solicitacao_para_exportar(sol_id)
+    if erro:
+        return erro
+    try:
+        resposta = send_file(
+            io.BytesIO(gerar_pdf(solicitacao)),
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'solicitacao_{solicitacao.id}.pdf',
+        )
+        resposta.headers['Cache-Control'] = 'private, no-store'
+        return resposta
+    except Exception as exc:
+        logger.exception("Solicitações: erro ao exportar PDF #%s: %s", sol_id, exc)
+        return jsonify({"erro": "Não foi possível gerar o PDF da solicitação."}), 500
 
 
 @solicitacoes_bp.route('/<int:sol_id>', methods=['PATCH'])

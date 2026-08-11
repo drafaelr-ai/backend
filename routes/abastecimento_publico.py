@@ -255,8 +255,9 @@ def enviar_abastecimento(token):
             valor_total = round(litros * preco_litro, 2)
         if not valor_total or valor_total <= 0:
             return jsonify({"erro": "Informe o valor total do abastecimento."}), 400
-        if not preco_litro or preco_litro <= 0:
-            preco_litro = round(valor_total / litros, 3)
+        # Total e litros são a fonte da verdade; mantém o R$/L consistente
+        # mesmo quando o OCR ou o motorista informarem valores divergentes.
+        preco_litro = abastecimento_service.calcular_preco_litro(valor_total, litros)
         if sol.limite_valor is not None and valor_total > float(sol.limite_valor):
             return jsonify({
                 "erro": f"Valor acima do limite autorizado "

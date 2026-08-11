@@ -17,6 +17,17 @@ from models.frota_abastecimento import FrotaAbastecimento
 logger = logging.getLogger(__name__)
 
 
+def calcular_preco_litro(valor, litros):
+    """Deriva R$/L a partir do total e dos litros."""
+    if valor is None or litros is None:
+        return None
+    valor = float(valor)
+    litros = float(litros)
+    if valor <= 0 or litros <= 0:
+        return None
+    return round(valor / litros, 3)
+
+
 def snapshot_local(veiculo):
     """Local atual do veículo, congelado no lançamento do custo. Mover o
     veículo depois não reescreve o histórico."""
@@ -38,13 +49,14 @@ def registrar_abastecimento(veiculo, dados, origem='manual', solicitacao_id=None
     opcionais.
     """
     km = dados.get('km')
+    preco_litro = calcular_preco_litro(dados['valor'], dados.get('litros'))
     abast = FrotaAbastecimento(
         veiculo_id=veiculo.id,
         data=dados['data'],
         litros=dados.get('litros'),
         valor=dados['valor'],
         km=km,
-        preco_litro=dados.get('preco_litro'),
+        preco_litro=preco_litro,
         combustivel=(dados.get('combustivel') or None),
         posto=(dados.get('posto') or None),
         condutor_id=dados.get('condutor_id'),

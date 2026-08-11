@@ -10,7 +10,10 @@ Uso: cd backend && python scripts/smoke_solicitacoes_local.py
 import os
 import sys
 import json
+import io
 from datetime import date, timedelta
+
+from openpyxl import Workbook
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -171,6 +174,66 @@ with app.app_context():
               len(notifs(ids['alertado_smoke'], 'solicitacao_criada')) == 1)
         check('notif: solicitante NÃO recebeu a própria',
               len(notifs(ids['solicitante_smoke'], 'solicitacao_criada')) == 0)
+
+        print('\n=== leitura e exportação de pedido ===')
+        r = c.post('/solicitacoes/ler-pedido', headers=h_sol)
+        check('ler pedido sem arquivo -> 400', r.status_code == 400)
+        r = c.post('/solicitacoes/ler-pedido', data={
+            'arquivo': (io.BytesIO(b'nao-e-planilha'), 'pedido.txt'),
+        }, headers=h_sol, content_type='multipart/form-data')
+        check('ler pedido com formato inválido -> 400', r.status_code == 400)
+        r = c.post('/solicitacoes/ler-pedido', data={
+            'arquivo': (io.BytesIO(b'PK\x03\x04arquivo-corrompido'), 'pedido.xlsx'),
+        }, headers=h_sol, content_type='multipart/form-data')
+        check('ler Excel corrompido -> 400 seguro', r.status_code == 400)
+
+        wb_pedido = Workbook()
+        ws_pedido = wb_pedido.active
+        ws_pedido.append(['COBERTURA — 2 ITENS'])
+        ws_pedido.append(['Sistema', 'Categoria', 'Material', 'Especificação', 'Quantidade', 'Unidade'])
+        ws_pedido.append(['Ventilação', 'PVC Esgoto', 'Terminal de ventilação', '50 mm', 3, 'pç'])
+        ws_pedido.append(['Ventilação', 'PVC Esgoto', 'Tubo rígido c/ ponta lisa', '50 mm - 2"', 10.51, 'm'])
+        ws_pedido.append(['SUPERIOR — 1 ITEM'])
+        ws_pedido.append(['Sistema', 'Categoria', 'Material', 'Especificação', 'Quantidade', 'Unidade'])
+        ws_pedido.append(['Esgoto', 'PVC Acessórios', 'Caixa sifonada', '150 x 150 x 50 mm', 3, 'pç'])
+        pedido_xlsx = io.BytesIO()
+        wb_pedido.save(pedido_xlsx)
+        r = c.post('/solicitacoes/ler-pedido', data={
+            'arquivo': (io.BytesIO(pedido_xlsx.getvalue()), 'pedido_materiais.xlsx'),
+        }, headers=h_sol, content_type='multipart/form-data')
+        pedido_lido = json.loads(r.data) if r.status_code == 200 else {}
+        check('ler Excel estruturado -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')
+        check('Excel: ignora seção e importa 3 materiais', len(pedido_lido.get('itens', [])) == 3)
+        check('Excel: material vira descrição', pedido_lido.get('itens', [{}])[0].get('descricao') == 'Terminal de ventilação')
+        check('Excel: categoria e especificação preservadas na observação',
+              'Categoria: PVC Esgoto' in pedido_lido.get('itens', [{}])[0].get('observacao', '')
+              and 'Especificação: 50 mm' in pedido_lido.get('itens', [{}])[0].get('observacao', ''))
+        check('Excel: quantidade decimal preservada', pedido_lido.get('itens', [{}, {}])[1].get('quantidade') == 10.51)
+
+        r = c.get(f'/solicitacoes/{sol_id}/exportar.xlsx', headers=h_sol)
+        xlsx_exportado = r.data
+        check('exportar solicitação em Excel -> 200', r.status_code == 200 and xlsx_exportado.startswith(b'PK'))
+        check('Excel exportado força download', 'attachment' in (r.headers.get('Content-Disposition') or ''))
+        r = c.post('/solicitacoes/ler-pedido', data={
+            'arquivo': (io.BytesIO(xlsx_exportado), 'solicitacao_exportada.xlsx'),
+        }, headers=h_sol, content_type='multipart/form-data')
+        check('Excel exportado pode ser lido novamente',
+              r.status_code == 200 and len(json.loads(r.data).get('itens', [])) == 2,
+              f'got {r.status_code}: {r.data[:300]}')
+
+        r = c.get(f'/solicitacoes/{sol_id}/exportar.pdf', headers=h_sol)
+        pdf_exportado = r.data
+        check('exportar solicitação em PDF -> 200', r.status_code == 200 and pdf_exportado.startswith(b'%PDF'))
+        r = c.post('/solicitacoes/ler-pedido', data={
+            'arquivo': (io.BytesIO(pdf_exportado), 'solicitacao_exportada.pdf'),
+        }, headers=h_sol, content_type='multipart/form-data')
+        check('PDF exportado pode ser lido novamente',
+              r.status_code == 200 and len(json.loads(r.data).get('itens', [])) == 2,
+              f'got {r.status_code}: {r.data[:300]}')
+        r = c.get(f'/solicitacoes/{sol_id}/exportar.pdf', headers=h_outro)
+        check('exportação respeita visibilidade da obra -> 403', r.status_code == 403)
+        r = c.get(f'/solicitacoes/{sol_id}/exportar.xlsx')
+        check('exportação sem token -> 401', r.status_code == 401)
 
         print('\n=== edição de solicitação aberta ===')
         edit_payload = {

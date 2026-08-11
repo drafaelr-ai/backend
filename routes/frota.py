@@ -975,13 +975,15 @@ def criar_abastecimento():
         if condutor_id and not db.session.get(FrotaCondutor, condutor_id):
             return jsonify({"erro": "Condutor não encontrado"}), 400
 
+        litros = _to_num(dados.get('litros'))
         km = _to_int(dados.get('km'))
         abast = FrotaAbastecimento(
             veiculo_id=veiculo.id,
             data=data,
-            litros=_to_num(dados.get('litros')),
+            litros=litros,
             valor=valor,
             km=km,
+            preco_litro=abastecimento_service.calcular_preco_litro(valor, litros),
             combustivel=(dados.get('combustivel') or '').strip() or None,
             posto=(dados.get('posto') or '').strip() or None,
             condutor_id=condutor_id,
@@ -1032,6 +1034,10 @@ def editar_abastecimento(item_id):
         for campo in ('combustivel', 'posto', 'observacao'):
             if campo in dados:
                 setattr(abast, campo, (dados.get(campo) or '').strip() or None)
+
+        abast.preco_litro = abastecimento_service.calcular_preco_litro(
+            abast.valor, abast.litros,
+        )
 
         db.session.commit()
         return jsonify(abast.to_dict()), 200

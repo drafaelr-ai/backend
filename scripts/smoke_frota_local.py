@@ -241,6 +241,20 @@ with app.app_context():
         check('POST abastecimento -> 201', r.status_code == 201, f'got {r.status_code}: {r.data[:300]}')
         check('abastecimento: condutor_nome', json.loads(r.data)['condutor_nome'] == 'João Smoke')
 
+        abast = json.loads(r.data)
+        check('abastecimento: R$/L calculado automaticamente',
+              abast['preco_litro'] == round(350.5 / 60, 3),
+              f"got {abast['preco_litro']}")
+        abast_id = abast['id']
+
+        r = c.put(f'/frota/abastecimentos/{abast_id}', json={
+            'valor': 420, 'litros': 60,
+        }, headers=h_master)
+        check('PUT abastecimento -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:300]}')
+        check('abastecimento editado: R$/L recalculado',
+              json.loads(r.data)['preco_litro'] == 7.0)
+
         print('\n=== multas ===')
         r = c.post('/frota/multas', json={
             'veiculo_id': veic_id, 'data_infracao': date.today().isoformat(),
@@ -261,9 +275,9 @@ with app.app_context():
         dash = json.loads(r.data)
         check('dashboard: veiculos_ativos=1', dash['veiculos_ativos'] == 1)
         check('dashboard: custo manutenções', dash['custo_mes']['manutencoes'] == 1250.0)
-        check('dashboard: custo abastecimentos', dash['custo_mes']['abastecimentos'] == 350.5)
+        check('dashboard: custo abastecimentos', dash['custo_mes']['abastecimentos'] == 420.0)
         check('dashboard: multas pagas', dash['custo_mes']['multas_pagas'] == 195.23)
-        check('dashboard: total soma', dash['custo_mes']['total'] == round(1250.0 + 350.5 + 195.23, 2))
+        check('dashboard: total soma', dash['custo_mes']['total'] == round(1250.0 + 420.0 + 195.23, 2))
         check('dashboard: doc vencido listado', len(dash['documentos_vencidos']) == 1)
         check('dashboard: CNH a vencer listada', len(dash['cnhs_a_vencer']) == 1)
         check('dashboard: custo_por_local não-vazio', len(dash['custo_por_local']) >= 1)
