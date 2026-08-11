@@ -63,6 +63,35 @@ def ensure_bucket(bucket=BUCKET):
         return False
 
 
+def _bucket_nao_encontrado(resp):
+    """Reconhece as duas formas usadas pela API do Storage para bucket ausente.
+
+    O Storage pode devolver HTTP 400 contendo ``statusCode: 404`` e
+    ``code: NoSuchBucket``. Limitar a deteccao ao status HTTP 404 impedia a
+    criacao lazy do bucket e fazia o primeiro upload de modulos novos falhar.
+    """
+    if resp.status_code not in (400, 404):
+        return False
+
+    try:
+        payload = resp.json()
+    except (TypeError, ValueError):
+        payload = {}
+
+    codigo = str(payload.get('code') or '').lower()
+    status_interno = str(payload.get('statusCode') or '').lower()
+    mensagem = ' '.join((
+        str(payload.get('error') or ''),
+        str(payload.get('message') or ''),
+        getattr(resp, 'text', '') or '',
+    )).lower()
+    return (
+        codigo == 'nosuchbucket'
+        or (status_interno == '404' and 'bucket' in mensagem)
+        or 'bucket not found' in mensagem
+    )
+
+
 def upload_arquivo(file, pasta, bucket=BUCKET):
     """Sobe um arquivo (werkzeug FileStorage) ao bucket, retorna o path salvo.
 
@@ -84,7 +113,7 @@ def upload_arquivo(file, pasta, bucket=BUCKET):
     url = f'{_base_url()}/storage/v1/object/{bucket}/{path}'
     headers = _headers({'Content-Type': content_type, 'x-upsert': 'true'})
     resp = requests.post(url, headers=headers, data=data, timeout=60)
-    if resp.status_code == 404 and 'bucket' in resp.text.lower():
+    if _bucket_nao_encontrado(resp):
         # Bucket ainda não existe — criação lazy + 1 retry.
         if ensure_bucket(bucket):
             resp = requests.post(url, headers=headers, data=data, timeout=60)
