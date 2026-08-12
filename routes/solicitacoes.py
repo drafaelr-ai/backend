@@ -34,6 +34,7 @@ from extensions import db
 from models.solicitacao_compra import SolicitacaoCompra
 from models.solicitacao_item import SolicitacaoItem
 from models.solicitacao_cotacao import SolicitacaoCotacao
+from models.solicitacao_comentario import SolicitacaoComentario
 from models.solicitacao_config import SolicitacaoConfig
 from models.pagamento_futuro import PagamentoFuturo
 from models.obra import Obra
@@ -228,6 +229,30 @@ def _notificar_ids(user_ids, tipo, titulo, mensagem, solicitacao, origem_id):
                 item_id=solicitacao.id, item_type='solicitacao_compra',
                 usuario_origem_id=origem_id,
             )
+
+
+def _usuarios_do_modulo():
+    """Usuários mencionáveis (@usuario): qualquer um com o módulo liberado."""
+    return [u for u in User.query.order_by(User.username).all()
+            if user_tem_modulo(u, 'solicitacoes')]
+
+
+def _resolver_mencionados(texto, ids_payload):
+    """União do que o front marcou (ids) com @username achado no texto —
+    menção digitada à mão sem o autocomplete também vale. Só usuários do
+    módulo contam; ids desconhecidos são descartados em silêncio."""
+    usuarios = _usuarios_do_modulo()
+    por_id = {u.id: u for u in usuarios}
+    texto_lower = (texto or '').lower()
+    ids = set()
+    for v in (ids_payload or []):
+        uid = _to_int(v)
+        if uid and uid in por_id:
+            ids.add(uid)
+    for u in usuarios:
+        if f'@{u.username}'.lower() in texto_lower:
+            ids.add(u.id)
+    return sorted(ids)
 
 
 def _resumo_itens(s, limite=180):
@@ -931,6 +956,110 @@ def reabrir_solicitacao(sol_id):
     out['pode_atender'] = _pode_atender(s, user, _config())
     out['pode_reabrir'] = False
     return jsonify(out), 200
+
+
+# ---------------------------------------------------------------- comentários (@menção)
+
+@solicitacoes_bp.route('/usuarios-mencao', methods=['GET'])
+@jwt_required()
+def usuarios_mencao():
+    """Usuários mencionáveis no @ — qualquer usuário do módulo pode consultar
+    (a lista de config usa /admin/users, que é só do master). Expõe apenas
+    id/username/role — nada sensível."""
+    return jsonify([
+        {'id': u.id, 'username': u.username, 'role': u.role}
+        for u in _usuarios_do_modulo()
+    ]), 200
+
+
+@solicitacoes_bp.route('/<int:sol_id>/comentarios', methods=['GET'])
+@jwt_required()
+def listar_comentarios(sol_id):
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+    return jsonify([c.to_dict() for c in s.comentarios]), 200
+
+
+@solicitacoes_bp.route('/<int:sol_id>/comentarios', methods=['POST'])
+@jwt_required()
+def criar_comentario(sol_id):
+    """Comentário na conversa da solicitação. Cada @usuario citado recebe
+    notificação de menção; o solicitante é avisado de qualquer comentário
+    de terceiros (mesmo sem menção), como dono da solicitação."""
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+
+    dados = request.get_json(silent=True) or {}
+    texto = (dados.get('texto') or '').strip()
+    if not texto:
+        return jsonify({"erro": "Escreva o comentário antes de enviar."}), 400
+    if len(texto) > 1000:
+        return jsonify({"erro": "Comentário muito longo (máximo 1000 caracteres)."}), 400
+
+    mencionados = _resolver_mencionados(texto, dados.get('mencionados_ids'))
+
+    try:
+        comentario = SolicitacaoComentario(
+            solicitacao_id=s.id,
+            autor_id=user.id,
+            texto=texto,
+            mencionados_ids=mencionados,
+        )
+        db.session.add(comentario)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao comentar: %s", e)
+        return jsonify({"erro": "Erro interno ao salvar o comentário."}), 500
+
+    # Notificações só DEPOIS do commit (criar_notificacao commita internamente).
+    obra_nome = s.obra.nome if s.obra else ''
+    _notificar_ids(
+        mencionados,
+        tipo='solicitacao_mencao',
+        titulo=f"💬 {user.username} mencionou você na solicitação #{s.id}",
+        mensagem=f"\"{texto[:200]}\" — obra {obra_nome}.",
+        solicitacao=s, origem_id=user.id,
+    )
+    if s.solicitante_id and s.solicitante_id not in mencionados:
+        _notificar_ids(
+            [s.solicitante_id],
+            tipo='solicitacao_comentario',
+            titulo=f"💬 Novo comentário na solicitação #{s.id}",
+            mensagem=f"{user.username}: \"{texto[:200]}\" — obra {obra_nome}.",
+            solicitacao=s, origem_id=user.id,
+        )
+    return jsonify(comentario.to_dict()), 201
+
+
+@solicitacoes_bp.route('/<int:sol_id>/comentarios/<int:com_id>', methods=['DELETE'])
+@jwt_required()
+def remover_comentario(sol_id, com_id):
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    comentario = SolicitacaoComentario.query.filter_by(id=com_id, solicitacao_id=sol_id).first()
+    if not comentario:
+        return jsonify({"erro": "Comentário não encontrado."}), 404
+    if user.role != 'master' and comentario.autor_id != user.id:
+        return jsonify({"erro": "Só o autor do comentário (ou o master) pode removê-lo."}), 403
+    try:
+        db.session.delete(comentario)
+        db.session.commit()
+        return jsonify({"mensagem": "Comentário removido."}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao remover comentário: %s", e)
+        return jsonify({"erro": "Erro interno ao remover o comentário."}), 500
 
 
 # ---------------------------------------------------------------- config (master)

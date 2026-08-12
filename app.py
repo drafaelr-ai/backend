@@ -81,7 +81,7 @@ from routes import (
     caixa_bp, servicos_bp, boletos_bp, lancamentos_bp,
     cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
     rh_bp, frota_bp, abastecimento_publico_bp, solicitacoes_bp,
-    almoxarifado_bp, home_bp, planejamento_bp,
+    almoxarifado_bp, home_bp, planejamento_bp, telegram_bp,
 )
 
 setup_logging()
@@ -175,6 +175,7 @@ def create_app(config_class=Config):
     app.register_blueprint(almoxarifado_bp)
     app.register_blueprint(home_bp)
     app.register_blueprint(planejamento_bp)
+    app.register_blueprint(telegram_bp)
 
     return app
 

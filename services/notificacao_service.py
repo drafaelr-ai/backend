@@ -23,6 +23,12 @@ def criar_notificacao(usuario_destino_id, tipo, titulo, mensagem=None, obra_id=N
         db.session.add(notificacao)
         db.session.commit()
         logger.info(f"--- [NOTIF] Notificação criada: {tipo} para usuário {usuario_destino_id} ---")
+        # Espelho no Telegram (best-effort, pós-commit): jamais desfaz o sino.
+        try:
+            from services.telegram_service import notificar_usuario as _tg
+            _tg(usuario_destino_id, titulo, mensagem)
+        except Exception as e:
+            logger.warning(f"--- [NOTIF] Telegram indisponível (segue só no sino): {e} ---")
         return notificacao
     except Exception as e:
         db.session.rollback()

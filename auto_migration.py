@@ -979,9 +979,23 @@ def run_auto_migration():
         # Anexo da própria solicitação (lista de materiais/projeto) — aditivo.
         cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS arquivo_url VARCHAR(500);")
 
-        logger.info("✅ SOLICITAÇÕES: 4 tabelas garantidas (solicitacao_compra, "
-                    "solicitacao_item, solicitacao_cotacao, solicitacao_config) "
-                    "+ colunas de atendimento e anexo")
+        # Comentários com menção @usuario (conversa solicitante ↔ comprador).
+        # autor_id SET NULL preserva a conversa se o usuário for removido.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS solicitacao_comentario (
+                id              SERIAL PRIMARY KEY,
+                solicitacao_id  INTEGER NOT NULL REFERENCES solicitacao_compra(id) ON DELETE CASCADE,
+                autor_id        INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                texto           VARCHAR(1000) NOT NULL,
+                mencionados_ids JSONB,
+                data_criacao    TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_solicitacao_coment_sol ON solicitacao_comentario (solicitacao_id);
+        """)
+
+        logger.info("✅ SOLICITAÇÕES: 5 tabelas garantidas (solicitacao_compra, "
+                    "solicitacao_item, solicitacao_cotacao, solicitacao_config, "
+                    "solicitacao_comentario) + colunas de atendimento e anexo")
 
         # =================================================================
         # MÓDULO ALMOXARIFADO (externo) — catálogo e histórico de estoque.
@@ -1190,6 +1204,26 @@ def run_auto_migration():
                 f'REVOKE ALL ON SEQUENCE {sequence_name} FROM anon, authenticated, service_role;'
             )
         logger.info("✅ PLANEJAMENTO: schema, índices e bloqueio do Data API garantidos")
+
+        # =================================================================
+        # TELEGRAM (aditivo, idempotente) — vínculo usuário ↔ chat do bot.
+        # Toda notificação do sino também sai pelo bot quando o usuário
+        # vinculou o Telegram (best-effort; exige TELEGRAM_BOT_TOKEN no app).
+        # Tabela própria — a tabela "user" não é alterada.
+        # =================================================================
+        logger.info("📝 TELEGRAM: garantindo tabela de vínculos...")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_vinculo (
+                id            SERIAL PRIMARY KEY,
+                user_id       INTEGER NOT NULL UNIQUE REFERENCES "user"(id) ON DELETE CASCADE,
+                chat_id       VARCHAR(32),
+                chat_nome     VARCHAR(120),
+                link_code     VARCHAR(32),
+                criado_em     TIMESTAMP DEFAULT NOW(),
+                atualizado_em TIMESTAMP
+            );
+        """)
+        logger.info("✅ TELEGRAM: tabela telegram_vinculo garantida")
 
         # =================================================================
         # ACESSOS POR MÓDULO (aditivo, idempotente)

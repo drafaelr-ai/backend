@@ -146,3 +146,31 @@ fly deploy --no-cache --app obraly-api
 ```bash
 fly releases rollback --app obraly-api
 ```
+
+---
+
+## Telegram — espelho das notificações do sino (12/08/2026)
+
+Toda notificação criada por `criar_notificacao` também é enviada pelo bot do
+Telegram para usuários que vincularam a conta (best-effort, em thread — nunca
+bloqueia nem desfaz o sino). Sem webhook: o vínculo usa deep-link
+`t.me/<bot>?start=<código>` e a confirmação lê o `getUpdates`.
+
+### Ativação (uma vez)
+
+1. No Telegram, falar com o **@BotFather** → `/newbot` → escolher nome e username
+   (ex.: `obraly_bot`). Guardar o token.
+2. Configurar o secret no app principal:
+
+```bash
+fly secrets set TELEGRAM_BOT_TOKEN=<token do BotFather> --config fly.obraly.toml --app obraly-api
+```
+
+3. Cada usuário vincula pelo sino (dropdown de notificações → "Conectar"):
+   abre o bot, dá Start e confirma no app.
+
+**Kill switch:** remover o secret (`fly secrets unset TELEGRAM_BOT_TOKEN ...`)
+desliga tudo — a UI de vínculo some (`GET /telegram/status` → `configurado: false`)
+e nenhum envio é tentado. Os vínculos ficam guardados em `telegram_vinculo`.
+
+Smoke local: `python scripts/smoke_telegram_local.py` (Bot API mockada).

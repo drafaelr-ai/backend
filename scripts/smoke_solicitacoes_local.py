@@ -40,6 +40,7 @@ TABELAS = [
     'user', 'user_obra_association', 'obra', 'notificacao', 'pagamento_futuro',
     'servico',  # FK de pagamento_futuro.servico_id
     'solicitacao_compra', 'solicitacao_item', 'solicitacao_cotacao', 'solicitacao_config',
+    'solicitacao_comentario',
 ]
 
 PASS = []
@@ -533,8 +534,65 @@ with app.app_context():
         check('reaberta volta para a lista de compras',
               any(x['id'] == sol_id for x in json.loads(r.data)))
 
+        print('\n=== comentários (@menção) ===')
+        r = c.get('/solicitacoes/usuarios-mencao', headers=h_restrito)
+        check('usuarios-mencao sem módulo -> 403', r.status_code == 403)
+        r = c.get('/solicitacoes/usuarios-mencao', headers=h_sol)
+        check('usuarios-mencao como comum -> 200', r.status_code == 200, f'got {r.status_code}')
+        mencionaveis = json.loads(r.data)
+        check('mencionáveis: só usuários do módulo',
+              all(u['username'] != 'restrito_smoke' for u in mencionaveis)
+              and any(u['username'] == 'alertado_smoke' for u in mencionaveis))
+        check('mencionáveis: só id/username/role',
+              all(set(u.keys()) == {'id', 'username', 'role'} for u in mencionaveis))
+
+        r = c.post(f'/solicitacoes/{sol_id}/comentarios', json={'texto': '  '}, headers=h_aprov)
+        check('comentário vazio -> 400', r.status_code == 400)
+        r = c.post(f'/solicitacoes/{sol_id}/comentarios', json={'texto': 'x' * 1001}, headers=h_aprov)
+        check('comentário longo demais -> 400', r.status_code == 400)
+        r = c.post(f'/solicitacoes/{sol_id}/comentarios', json={
+            'texto': '@alertado_smoke consegue adiantar a entrega?',
+            'mencionados_ids': [ids['alertado_smoke'], 99999],
+        }, headers=h_aprov)
+        check('POST comentário -> 201', r.status_code == 201, f'got {r.status_code}: {r.data[:300]}')
+        com1 = json.loads(r.data)
+        check('comentário: id inexistente descartado da menção',
+              com1['mencionados_ids'] == [ids['alertado_smoke']])
+        check('notif: mencionado recebeu solicitacao_mencao',
+              len(notifs(ids['alertado_smoke'], 'solicitacao_mencao')) == 1)
+        check('notif: solicitante avisado do comentário de terceiro',
+              len(notifs(ids['solicitante_smoke'], 'solicitacao_comentario')) == 1)
+
+        r = c.post(f'/solicitacoes/{sol_id}/comentarios', json={
+            'texto': '@solicitante_smoke pode confirmar a medida?',
+        }, headers=h_alert)
+        check('menção digitada à mão (sem ids) -> 201', r.status_code == 201)
+        com2 = json.loads(r.data)
+        check('menção resolvida pelo texto',
+              com2['mencionados_ids'] == [ids['solicitante_smoke']])
+        check('notif: mencionado no texto recebeu mencao',
+              len(notifs(ids['solicitante_smoke'], 'solicitacao_mencao')) == 1)
+        check('notif: mencionado não é avisado em dobro',
+              len(notifs(ids['solicitante_smoke'], 'solicitacao_comentario')) == 1)
+
+        r = c.get(f'/solicitacoes/{sol_id}/comentarios', headers=h_sol)
+        check('GET comentários -> 200 com 2', r.status_code == 200 and len(json.loads(r.data)) == 2)
+        check('comentário: autor_nome presente',
+              json.loads(r.data)[0]['autor_nome'] == 'aprovador_smoke')
+        r = c.get(f'/solicitacoes/{sol_id}/comentarios', headers=h_outro)
+        check('GET comentários sem acesso à obra -> 403', r.status_code == 403)
+
+        r = c.delete(f'/solicitacoes/{sol_id}/comentarios/{com1["id"]}', headers=h_sol)
+        check('DELETE comentário por não-autor -> 403', r.status_code == 403)
+        r = c.delete(f'/solicitacoes/{sol_id}/comentarios/{com1["id"]}', headers=h_aprov)
+        check('DELETE pelo autor -> 200', r.status_code == 200)
+        r = c.delete(f'/solicitacoes/{sol_id}/comentarios/{com2["id"]}', headers=h_master)
+        check('DELETE pelo master -> 200', r.status_code == 200)
+        r = c.get(f'/solicitacoes/{sol_id}/comentarios', headers=h_master)
+        check('conversa vazia após remoções', len(json.loads(r.data)) == 0)
+
         rotas = [r for r in app.url_map.iter_rules() if str(r).startswith('/solicitacoes')]
-        check('blueprint: >= 14 rotas /solicitacoes', len(rotas) >= 14, f'encontrado: {len(rotas)}')
+        check('blueprint: >= 18 rotas /solicitacoes', len(rotas) >= 18, f'encontrado: {len(rotas)}')
 
 print(f'\n{"=" * 40}')
 print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')
