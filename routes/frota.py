@@ -1005,6 +1005,10 @@ def criar_abastecimento():
 @jwt_required()
 def editar_abastecimento(item_id):
     try:
+        user = get_current_user()
+        if not user or user.role != 'master':
+            return jsonify({"erro": "Somente o master pode editar abastecimentos"}), 403
+
         abast = db.session.get(FrotaAbastecimento, item_id)
         if not abast:
             return jsonify({"erro": "Abastecimento não encontrado"}), 404
@@ -1016,16 +1020,26 @@ def editar_abastecimento(item_id):
             data = _parse_date(dados.get('data'))
             if not data:
                 return jsonify({"erro": "data inválida (YYYY-MM-DD)"}), 400
+            if data > date.today():
+                return jsonify({"erro": "A data do abastecimento não pode ser futura"}), 400
             abast.data = data
         if 'valor' in dados:
             valor = _to_num(dados.get('valor'))
             if valor is None:
                 return jsonify({"erro": "valor inválido"}), 400
+            if valor <= 0:
+                return jsonify({"erro": "valor deve ser maior que zero"}), 400
             abast.valor = valor
         if 'litros' in dados:
-            abast.litros = _to_num(dados.get('litros'))
+            litros = _to_num(dados.get('litros'))
+            if litros is not None and litros <= 0:
+                return jsonify({"erro": "litros deve ser maior que zero"}), 400
+            abast.litros = litros
         if 'km' in dados:
-            abast.km = _to_int(dados.get('km'))
+            km = _to_int(dados.get('km'))
+            if km is not None and km <= 0:
+                return jsonify({"erro": "km deve ser maior que zero"}), 400
+            abast.km = km
         if 'condutor_id' in dados:
             condutor_id = _to_int(dados.get('condutor_id'))
             if condutor_id and not db.session.get(FrotaCondutor, condutor_id):
@@ -1038,6 +1052,23 @@ def editar_abastecimento(item_id):
         abast.preco_litro = abastecimento_service.calcular_preco_litro(
             abast.valor, abast.litros,
         )
+
+        solicitacoes = FrotaAbastecimentoSolicitacao.query.filter(or_(
+            FrotaAbastecimentoSolicitacao.abastecimento_id == abast.id,
+            FrotaAbastecimentoSolicitacao.id == abast.solicitacao_id,
+        )).all()
+        for solicitacao in solicitacoes:
+            solicitacao.data_abastecimento = abast.data
+            solicitacao.valor_total = abast.valor
+            solicitacao.litros = abast.litros
+            solicitacao.preco_litro = abast.preco_litro
+            solicitacao.km = abast.km
+            solicitacao.posto = abast.posto
+            solicitacao.combustivel = abast.combustivel
+            solicitacao.condutor_id = abast.condutor_id
+
+        if abast.km and (abast.veiculo.km_atual is None or abast.km > abast.veiculo.km_atual):
+            abast.veiculo.km_atual = abast.km
 
         db.session.commit()
         return jsonify(abast.to_dict()), 200

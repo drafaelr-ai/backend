@@ -374,6 +374,45 @@ with app.app_context():
         r = c.get('/frota/veiculos/999999/consumo', headers=h_master)
         check('consumo de veículo inexistente -> 404', r.status_code == 404)
 
+        print('\n=== edição do abastecimento (somente master) ===')
+        r = c.put(f'/frota/abastecimentos/{abast.id}', json={
+            'data': (date.today() - timedelta(days=1)).isoformat(),
+        }, headers=h_outro)
+        check('comum não edita abastecimento -> 403', r.status_code == 403)
+
+        r = c.put(f'/frota/abastecimentos/{abast.id}', json={
+            'data': (date.today() + timedelta(days=1)).isoformat(),
+        }, headers=h_master)
+        check('master não grava data futura -> 400', r.status_code == 400)
+
+        data_corrigida = date.today() - timedelta(days=1)
+        r = c.put(f'/frota/abastecimentos/{abast.id}', json={
+            'data': data_corrigida.isoformat(), 'valor': 251.50,
+            'litros': 43, 'km': 80510, 'posto': 'Posto Editado',
+        }, headers=h_master)
+        check('master edita data, valor, litros e km -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:300]}')
+        editado = json.loads(r.data)
+        check('edição retorna os valores corrigidos',
+              editado['data'] == data_corrigida.isoformat()
+              and editado['valor'] == 251.5
+              and editado['litros'] == 43.0
+              and editado['km'] == 80510)
+        db.session.expire_all()
+        sol_db = db.session.get(FrotaAbastecimentoSolicitacao, sol_id)
+        check('autorização vinculada acompanha a correção',
+              sol_db.data_abastecimento == data_corrigida
+              and float(sol_db.valor_total) == 251.5
+              and float(sol_db.litros) == 43.0
+              and sol_db.km == 80510
+              and sol_db.posto == 'Posto Editado')
+
+        r = c.put(f'/frota/abastecimentos/{abast.id}', json={
+            'data': date.today().isoformat(), 'valor': 250.32,
+            'litros': 42.5, 'km': 80500, 'posto': 'Posto Smoke Ltda',
+        }, headers=h_master)
+        check('master restaura o abastecimento do cenário -> 200', r.status_code == 200)
+
         print('\n=== comprovante sob auth (compradora) ===')
         r = c.get(f'/frota/arquivo/abastecimento/{abast.id}', headers=h_outro)
         check('comprovante de obra alheia -> 403', r.status_code == 403, f'got {r.status_code}')
