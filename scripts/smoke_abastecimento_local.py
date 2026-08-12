@@ -328,6 +328,16 @@ with app.app_context():
         check('filtro status=pendente exclui a vencida',
               all(s['id'] != expirada['id'] for s in json.loads(r.data)))
 
+        print('\n=== exclusão segura (somente master) ===')
+        r = c.delete(f'/frota/abastecimento-solicitacoes/{expirada["id"]}', headers=h_outro)
+        check('comum não exclui autorização -> 403', r.status_code == 403)
+        r = c.delete(f'/frota/abastecimento-solicitacoes/{sol_id}', headers=h_master)
+        check('autorização concluída não é removida isoladamente -> 400', r.status_code == 400)
+        r = c.delete(f'/frota/abastecimento-solicitacoes/{expirada["id"]}', headers=h_master)
+        check('master exclui autorização expirada -> 200', r.status_code == 200)
+        check('autorização expirada saiu do banco',
+              db.session.get(FrotaAbastecimentoSolicitacao, expirada['id']) is None)
+
         print('\n=== consumo do veículo ===')
         # 80500 (do link) → 80900 com 40 L = 10 km/l → 81300 com 50 L = 8 km/l
         for km, litros, valor in ((80900, 40, 280), (81300, 50, 350)):
@@ -376,6 +386,13 @@ with app.app_context():
         check('blueprint público: 3 rotas', len(rotas_publicas) == 3, f'{rotas_publicas}')
         check('nenhuma rota /frota exposta sem JWT',
               all(not p.startswith('/frota') for p in rotas_publicas))
+
+        r = c.delete(f'/frota/abastecimentos/{abast.id}', headers=h_outro)
+        check('comum não exclui abastecimento -> 403', r.status_code == 403)
+        r = c.delete(f'/frota/abastecimentos/{abast.id}', headers=h_master)
+        check('master exclui abastecimento -> 200', r.status_code == 200)
+        check('exclusão remove autorização concluída junto',
+              db.session.get(FrotaAbastecimentoSolicitacao, sol_id) is None)
 
 print(f'\n{"=" * 40}')
 print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')

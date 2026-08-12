@@ -1051,14 +1051,27 @@ def editar_abastecimento(item_id):
 @jwt_required()
 def remover_abastecimento(item_id):
     try:
+        user = get_current_user()
+        if not user or user.role != 'master':
+            return jsonify({"erro": "Somente o master pode excluir abastecimentos"}), 403
         abast = db.session.get(FrotaAbastecimento, item_id)
         if not abast:
             return jsonify({"erro": "Abastecimento não encontrado"}), 404
-        if not _veiculo_visivel(abast.veiculo, get_current_user()):
-            return jsonify({"erro": "Acesso negado a esta obra"}), 403
+
+        # A referência entre autorização e abastecimento é fraca para manter
+        # compatibilidade com as tabelas existentes. Ao remover o abastecimento,
+        # apaga também a autorização concluída correspondente; assim ela não
+        # continua aparecendo como "Registrado" sem existir na lista.
+        solicitacoes = FrotaAbastecimentoSolicitacao.query.filter(or_(
+            FrotaAbastecimentoSolicitacao.abastecimento_id == abast.id,
+            FrotaAbastecimentoSolicitacao.id == abast.solicitacao_id,
+        )).all()
+        solicitacao_ids = [s.id for s in solicitacoes]
+        for solicitacao in solicitacoes:
+            db.session.delete(solicitacao)
         db.session.delete(abast)
         db.session.commit()
-        return jsonify({"ok": True}), 200
+        return jsonify({"ok": True, "solicitacoes_removidas": solicitacao_ids}), 200
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em DELETE /frota/abastecimentos/<id>")
@@ -1191,6 +1204,44 @@ def cancelar_solicitacao_abastecimento(sol_id):
         db.session.rollback()
         logger.exception("Erro em PATCH /frota/abastecimento-solicitacoes/<id>/cancelar")
         return jsonify({"erro": "Erro ao cancelar solicitação"}), 500
+
+
+@frota_bp.route('/abastecimento-solicitacoes/<int:sol_id>', methods=['DELETE'])
+@jwt_required()
+def remover_solicitacao_abastecimento(sol_id):
+    """Remove autorização sem abastecimento, exclusivamente pelo master.
+
+    Autorizações concluídas com abastecimento íntegro precisam ser removidas
+    pelo endpoint do abastecimento, que apaga os dois registros juntos e evita
+    deixar dados órfãos.
+    """
+    try:
+        user = get_current_user()
+        if not user or user.role != 'master':
+            return jsonify({"erro": "Somente o master pode excluir autorizações"}), 403
+
+        sol = db.session.get(FrotaAbastecimentoSolicitacao, sol_id)
+        if not sol:
+            return jsonify({"erro": "Solicitação não encontrada"}), 404
+
+        abastecimento = None
+        if sol.abastecimento_id:
+            abastecimento = db.session.get(FrotaAbastecimento, sol.abastecimento_id)
+        if not abastecimento:
+            abastecimento = FrotaAbastecimento.query.filter_by(solicitacao_id=sol.id).first()
+        if abastecimento:
+            return jsonify({
+                "erro": "Esta autorização possui abastecimento. Exclua o abastecimento; "
+                        "a autorização será removida junto."
+            }), 400
+
+        db.session.delete(sol)
+        db.session.commit()
+        return jsonify({"ok": True}), 200
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em DELETE /frota/abastecimento-solicitacoes/<id>")
+        return jsonify({"erro": "Erro ao remover autorização"}), 500
 
 
 @frota_bp.route('/veiculos/<int:veiculo_id>/consumo', methods=['GET'])
