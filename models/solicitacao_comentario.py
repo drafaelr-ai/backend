@@ -22,6 +22,9 @@ class SolicitacaoComentario(db.Model):
     )
     texto = db.Column(db.String(1000), nullable=False)
     mencionados_ids = db.Column(db.JSON, nullable=True)
+    # Comentário vindo do superlink de entrega (sem login): autor_id fica NULL
+    # e este campo identifica quem escreveu (ex.: 'Motorista (entrega)').
+    autor_nome_publico = db.Column(db.String(60), nullable=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
 
     autor = db.relationship('User', foreign_keys=[autor_id], lazy=True)
@@ -35,7 +38,8 @@ class SolicitacaoComentario(db.Model):
             'id': self.id,
             'solicitacao_id': self.solicitacao_id,
             'autor_id': self.autor_id,
-            'autor_nome': self.autor.username if self.autor else 'usuário removido',
+            'autor_nome': (self.autor.username if self.autor
+                           else self.autor_nome_publico or 'usuário removido'),
             'texto': self.texto,
             'mencionados_ids': self.mencionados_ids or [],
             'data_criacao': self.data_criacao.isoformat() if self.data_criacao else None,

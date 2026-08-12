@@ -36,6 +36,7 @@ from models.solicitacao_item import SolicitacaoItem
 from models.solicitacao_cotacao import SolicitacaoCotacao
 from models.solicitacao_comentario import SolicitacaoComentario
 from models.solicitacao_config import SolicitacaoConfig
+from models.solicitacao_entrega import SolicitacaoEntrega
 from models.pagamento_futuro import PagamentoFuturo
 from models.obra import Obra
 from models.user import User
@@ -63,7 +64,11 @@ def _gate_modulo_solicitacoes():
     senão o link morre com 401)."""
     if request.method == 'OPTIONS':
         return None
-    if request.endpoint == 'solicitacoes.publico_solicitacao':
+    if request.endpoint in ('solicitacoes.publico_solicitacao',
+                            'solicitacoes.publico_entrega',
+                            'solicitacoes.publico_entrega_confirmar',
+                            'solicitacoes.publico_entrega_mensagem',
+                            'solicitacoes.publico_entrega_pdf'):
         return None
     verify_jwt_in_request()
     if not user_tem_modulo(get_current_user(), 'solicitacoes'):
@@ -429,6 +434,7 @@ def detalhe_solicitacao(sol_id):
     out['pode_reabrir'] = _pode_reabrir(s, user)
     out['pode_editar'] = _pode_editar(s, user)
     out['pode_desaprovar'] = s.status == 'Aprovada' and _eh_aprovador(user, cfg)
+    out['entrega'] = s.entrega.to_dict() if s.entrega else None
     return jsonify(out), 200
 
 
@@ -893,6 +899,10 @@ def devolver_solicitacao(sol_id):
     try:
         if pf:
             db.session.delete(pf)
+        # O link de entrega aponta pra uma compra que deixou de existir —
+        # some junto (se a compra for re-aprovada, gera-se outro).
+        if s.entrega:
+            db.session.delete(s.entrega)
         s.status = 'Em cotação'
         s.cotacao_aprovada_id = None
         s.pagamento_futuro_id = None
@@ -1187,6 +1197,185 @@ def salvar_config():
         db.session.rollback()
         logger.exception("Solicitações: erro ao salvar config: %s", e)
         return jsonify({"erro": "Erro interno ao salvar configuração."}), 500
+
+
+# ---------------------------------------------------------------- entrega (superlink)
+
+@solicitacoes_bp.route('/<int:sol_id>/entrega', methods=['POST'])
+@jwt_required()
+def gerar_entrega(sol_id):
+    """Gera (ou regenera) o superlink de entrega pro motorista.
+
+    Só para compra Aprovada — antes disso não há fornecedor definido; depois
+    de Atendida a entrega já aconteceu. Regenerar troca o token e invalida o
+    link anterior (compartilhou com o motorista errado? gera outro)."""
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+    cfg = _config()
+    if not _eh_comprador(user, cfg, s):
+        return jsonify({"erro": "Só o comprador ou um aprovador pode gerar o link de entrega."}), 403
+    if s.status != 'Aprovada':
+        return jsonify({"erro": "O link de entrega só existe para compras aprovadas."}), 400
+
+    try:
+        entrega = SolicitacaoEntrega.query.filter_by(solicitacao_id=s.id).first()
+        if not entrega:
+            entrega = SolicitacaoEntrega(solicitacao_id=s.id)
+            db.session.add(entrega)
+        entrega.token = secrets.token_urlsafe(24)
+        entrega.criado_por_id = user.id
+        entrega.criado_em = datetime.utcnow()
+        db.session.commit()
+        return jsonify(entrega.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao gerar link de entrega: %s", e)
+        return jsonify({"erro": "Erro interno ao gerar o link de entrega."}), 500
+
+
+def _entrega_por_token(token):
+    return SolicitacaoEntrega.query.filter_by(token=token).first()
+
+
+@solicitacoes_bp.route('/entrega/<token>', methods=['GET'])
+def publico_entrega(token):
+    """Snapshot público da entrega (motorista, sem login).
+
+    Mostra itens, fornecedor da cotação escolhida e obra — NUNCA valores
+    nem cotações (mesma regra do link público da solicitação)."""
+    entrega = _entrega_por_token(token)
+    if not entrega:
+        return jsonify({"erro": "Link de entrega não encontrado."}), 404
+    s = entrega.solicitacao
+    cot = next((c for c in s.cotacoes if c.id == s.cotacao_aprovada_id), None)
+    return jsonify({
+        'numero': s.id,
+        'status': s.status,
+        'obra_nome': s.obra.nome if s.obra else None,
+        'tipo': s.tipo,
+        'data_necessidade': s.data_necessidade.isoformat() if s.data_necessidade else None,
+        'observacao': s.observacao,
+        'fornecedor': cot.fornecedor if cot else None,
+        'prazo_entrega': cot.prazo_entrega if cot else None,
+        'itens': [i.to_dict() for i in s.itens],
+        'entregue_em': entrega.entregue_em.isoformat() if entrega.entregue_em else None,
+        'observacao_entrega': entrega.observacao_entrega,
+    }), 200
+
+
+@solicitacoes_bp.route('/entrega/<token>/confirmar', methods=['POST'])
+def publico_entrega_confirmar(token):
+    """Motorista confirma a entrega na obra (com observação opcional).
+
+    Não dá a baixa oficial — a compra segue Aprovada até o comprador marcar
+    como Atendida; a confirmação registra e avisa comprador + solicitante."""
+    entrega = _entrega_por_token(token)
+    if not entrega:
+        return jsonify({"erro": "Link de entrega não encontrado."}), 404
+    if entrega.entregue_em:
+        return jsonify({"erro": "Entrega já confirmada."}), 400
+    s = entrega.solicitacao
+    if s.status not in ('Aprovada', 'Atendida'):
+        return jsonify({"erro": f"Solicitação {s.status.lower()} — não há entrega em aberto."}), 400
+
+    dados = request.get_json(silent=True) or {}
+    try:
+        entrega.entregue_em = datetime.utcnow()
+        entrega.observacao_entrega = (dados.get('observacao') or '').strip()[:500] or None
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao confirmar entrega: %s", e)
+        return jsonify({"erro": "Erro interno ao confirmar a entrega."}), 500
+
+    cfg = _config()
+    destinos = {s.solicitante_id}
+    if cfg:
+        destinos.update(cfg.alertados_ids or [])
+    obs = f" Obs.: {entrega.observacao_entrega}" if entrega.observacao_entrega else ""
+    _notificar_ids(
+        list(destinos),
+        tipo='solicitacao_entregue',
+        titulo=f"🚚 Entrega confirmada — solicitação #{s.id}",
+        mensagem=f"{_resumo_itens(s)} entregue na obra {s.obra.nome if s.obra else ''}.{obs}",
+        solicitacao=s, origem_id=None,
+    )
+    return jsonify({
+        'entregue_em': entrega.entregue_em.isoformat(),
+        'observacao_entrega': entrega.observacao_entrega,
+    }), 200
+
+
+@solicitacoes_bp.route('/entrega/<token>/mensagem', methods=['POST'])
+def publico_entrega_mensagem(token):
+    """Mensagem do motorista pro comprador (dificuldade na retirada/entrega).
+
+    Vira comentário na conversa da solicitação como 'Motorista (entrega)' e
+    notifica comprador + solicitante no sino/Telegram."""
+    entrega = _entrega_por_token(token)
+    if not entrega:
+        return jsonify({"erro": "Link de entrega não encontrado."}), 404
+    s = entrega.solicitacao
+
+    dados = request.get_json(silent=True) or {}
+    texto = (dados.get('texto') or '').strip()
+    if not texto:
+        return jsonify({"erro": "Escreva a mensagem antes de enviar."}), 400
+    if len(texto) > 500:
+        return jsonify({"erro": "Mensagem muito longa (máximo 500 caracteres)."}), 400
+
+    try:
+        comentario = SolicitacaoComentario(
+            solicitacao_id=s.id,
+            autor_id=None,
+            autor_nome_publico='Motorista (entrega)',
+            texto=texto,
+        )
+        db.session.add(comentario)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro na mensagem do motorista: %s", e)
+        return jsonify({"erro": "Erro interno ao enviar a mensagem."}), 500
+
+    cfg = _config()
+    destinos = {s.solicitante_id}
+    if cfg:
+        destinos.update(cfg.alertados_ids or [])
+    _notificar_ids(
+        list(destinos),
+        tipo='solicitacao_mensagem_motorista',
+        titulo=f"🚚 Mensagem do motorista — solicitação #{s.id}",
+        mensagem=f"\"{texto[:200]}\" — obra {s.obra.nome if s.obra else ''}.",
+        solicitacao=s, origem_id=None,
+    )
+    return jsonify({"mensagem": "Mensagem enviada ao comprador."}), 201
+
+
+@solicitacoes_bp.route('/entrega/<token>/pedido.pdf', methods=['GET'])
+def publico_entrega_pdf(token):
+    """Pedido em PDF pelo link de entrega — lista completa pra conferência
+    na retirada (itens grandes ficam melhores no papel). Sem valores."""
+    entrega = _entrega_por_token(token)
+    if not entrega:
+        return jsonify({"erro": "Link de entrega não encontrado."}), 404
+    s = entrega.solicitacao
+    try:
+        resposta = send_file(
+            io.BytesIO(gerar_pdf(s)),
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'pedido_solicitacao_{s.id}.pdf',
+        )
+        resposta.headers['Cache-Control'] = 'private, no-store'
+        return resposta
+    except Exception as exc:
+        logger.exception("Solicitações: erro no PDF do link de entrega #%s: %s", s.id, exc)
+        return jsonify({"erro": "Não foi possível gerar o PDF do pedido."}), 500
 
 
 # ---------------------------------------------------------------- rota pública

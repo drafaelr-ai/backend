@@ -46,6 +46,7 @@ from .solicitacao_compra import SolicitacaoCompra  # noqa: F401
 from .solicitacao_item import SolicitacaoItem  # noqa: F401
 from .solicitacao_cotacao import SolicitacaoCotacao  # noqa: F401
 from .solicitacao_comentario import SolicitacaoComentario  # noqa: F401
+from .solicitacao_entrega import SolicitacaoEntrega  # noqa: F401
 from .telegram_vinculo import TelegramVinculo  # noqa: F401
 from .solicitacao_config import SolicitacaoConfig  # noqa: F401
 # --- Módulo Almoxarifado ---

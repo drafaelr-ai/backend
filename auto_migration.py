@@ -993,9 +993,27 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_solicitacao_coment_sol ON solicitacao_comentario (solicitacao_id);
         """)
 
-        logger.info("✅ SOLICITAÇÕES: 5 tabelas garantidas (solicitacao_compra, "
+        # Superlink de entrega (motorista, sem login) — um por solicitação;
+        # regenerar troca o token e invalida o link anterior.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS solicitacao_entrega (
+                id                 SERIAL PRIMARY KEY,
+                solicitacao_id     INTEGER NOT NULL UNIQUE REFERENCES solicitacao_compra(id) ON DELETE CASCADE,
+                token              VARCHAR(64) NOT NULL UNIQUE,
+                criado_por_id      INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                criado_em          TIMESTAMP DEFAULT NOW(),
+                entregue_em        TIMESTAMP,
+                observacao_entrega VARCHAR(500)
+            );
+        """)
+
+        # Comentário do superlink de entrega: autor_id NULL + nome público.
+        cur.execute("ALTER TABLE solicitacao_comentario ADD COLUMN IF NOT EXISTS autor_nome_publico VARCHAR(60);")
+
+        logger.info("✅ SOLICITAÇÕES: 6 tabelas garantidas (solicitacao_compra, "
                     "solicitacao_item, solicitacao_cotacao, solicitacao_config, "
-                    "solicitacao_comentario) + colunas de atendimento e anexo")
+                    "solicitacao_comentario, solicitacao_entrega) "
+                    "+ colunas de atendimento, anexo e autor público")
 
         # =================================================================
         # MÓDULO ALMOXARIFADO (externo) — catálogo e histórico de estoque.

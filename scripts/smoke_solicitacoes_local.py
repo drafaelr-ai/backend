@@ -40,7 +40,7 @@ TABELAS = [
     'user', 'user_obra_association', 'obra', 'notificacao', 'pagamento_futuro',
     'servico',  # FK de pagamento_futuro.servico_id
     'solicitacao_compra', 'solicitacao_item', 'solicitacao_cotacao', 'solicitacao_config',
-    'solicitacao_comentario',
+    'solicitacao_comentario', 'solicitacao_entrega',
 ]
 
 PASS = []
@@ -624,8 +624,94 @@ with app.app_context():
         r = c.get(f'/solicitacoes/{sol_id}/comentarios', headers=h_master)
         check('conversa vazia após remoções', len(json.loads(r.data)) == 0)
 
+        print('\n=== superlink de entrega (motorista) ===')
+        # sol_id voltou a ficar Aprovada na seção do devolver (re-aprovada).
+        r = c.post(f'/solicitacoes/{sol_id}/entrega', headers=h_sol)
+        check('gerar entrega por não-comprador -> 403', r.status_code == 403, f'got {r.status_code}')
+        r = c.post(f'/solicitacoes/{sol3["id"]}/entrega', headers=h_alert)
+        check('gerar entrega em rejeitada -> 400', r.status_code == 400)
+        r = c.post(f'/solicitacoes/{sol_id}/entrega', headers=h_alert)
+        check('comprador gera o link -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:200]}')
+        token_entrega_1 = json.loads(r.data)['token']
+
+        r = c.post(f'/solicitacoes/{sol_id}/entrega', headers=h_alert)
+        token_entrega = json.loads(r.data)['token']
+        check('regenerar troca o token', token_entrega != token_entrega_1)
+        r = c.get(f'/solicitacoes/entrega/{token_entrega_1}')
+        check('token antigo morre -> 404', r.status_code == 404)
+
+        r = c.get(f'/solicitacoes/entrega/{token_entrega}')
+        check('GET entrega sem JWT -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:200]}')
+        pub_ent = json.loads(r.data)
+        check('entrega: fornecedor da cotação escolhida', pub_ent['fornecedor'] == 'Depósito B')
+        check('entrega: itens presentes', len(pub_ent['itens']) == 2)
+        check('entrega: NUNCA expõe valores',
+              'valor' not in json.dumps(pub_ent).lower() and 'cotacoes' not in pub_ent)
+
+        r = c.get(f'/solicitacoes/entrega/{token_entrega}/pedido.pdf')
+        check('PDF público do pedido -> 200', r.status_code == 200 and r.data.startswith(b'%PDF'))
+
+        # Lista GRANDE: 60 itens (um com descrição de 300 chars) — o link e o
+        # PDF precisam aguentar sem estourar.
+        r = c.post('/solicitacoes', json={
+            'obra_id': obra1_id,
+            'itens': [{'descricao': (f'Item volumoso {n} ' + 'x' * 280)[:300],
+                       'quantidade': n + 1, 'unidade': 'un'} for n in range(60)],
+        }, headers=h_sol)
+        sol_grande = json.loads(r.data)
+        r = c.post(f'/solicitacoes/{sol_grande["id"]}/cotacoes',
+                   json={'fornecedor': 'Atacadão', 'valor_total': 900}, headers=h_alert)
+        cot_grande = json.loads(r.data)
+        c.post(f'/solicitacoes/{sol_grande["id"]}/aprovar',
+               json={'cotacao_id': cot_grande['id']}, headers=h_alert)
+        r = c.post(f'/solicitacoes/{sol_grande["id"]}/entrega', headers=h_alert)
+        token_grande = json.loads(r.data)['token']
+        r = c.get(f'/solicitacoes/entrega/{token_grande}')
+        check('entrega com 60 itens -> 200 completa', r.status_code == 200
+              and len(json.loads(r.data)['itens']) == 60)
+        r = c.get(f'/solicitacoes/entrega/{token_grande}/pedido.pdf')
+        check('PDF com 60 itens longos -> 200', r.status_code == 200 and r.data.startswith(b'%PDF'),
+              f'got {r.status_code}')
+
+        print('\n=== entrega: mensagem do motorista e confirmação ===')
+        r = c.post(f'/solicitacoes/entrega/{token_entrega}/mensagem', json={})
+        check('mensagem vazia -> 400', r.status_code == 400)
+        r = c.post(f'/solicitacoes/entrega/{token_entrega}/mensagem',
+                   json={'texto': 'Caminhão não entra na rua — descarrego na esquina?'})
+        check('mensagem do motorista -> 201', r.status_code == 201, f'got {r.status_code}: {r.data[:200]}')
+        r = c.get(f'/solicitacoes/{sol_id}/comentarios', headers=h_alert)
+        com_mot = json.loads(r.data)
+        check('mensagem vira comentário na conversa', len(com_mot) == 1
+              and com_mot[0]['autor_nome'] == 'Motorista (entrega)'
+              and 'esquina' in com_mot[0]['texto'])
+        check('notif: comprador avisado da mensagem',
+              len(notifs(ids['alertado_smoke'], 'solicitacao_mensagem_motorista')) == 1)
+        check('notif: solicitante avisado da mensagem',
+              len(notifs(ids['solicitante_smoke'], 'solicitacao_mensagem_motorista')) == 1)
+
+        r = c.post(f'/solicitacoes/entrega/{token_entrega}/confirmar',
+                   json={'observacao': 'Entregue no portão, NF 4521'})
+        check('confirmar entrega -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:200]}')
+        check('confirmação registrada', bool(json.loads(r.data)['entregue_em']))
+        r = c.post(f'/solicitacoes/entrega/{token_entrega}/confirmar', json={})
+        check('confirmar 2x -> 400', r.status_code == 400)
+        check('notif: comprador avisado da entrega',
+              len(notifs(ids['alertado_smoke'], 'solicitacao_entregue')) == 1)
+        r = c.get(f'/solicitacoes/{sol_id}', headers=h_alert)
+        det_ent = json.loads(r.data)
+        check('detalhe expõe a entrega confirmada',
+              det_ent['entrega'] and det_ent['entrega']['entregue_em']
+              and det_ent['entrega']['observacao_entrega'] == 'Entregue no portão, NF 4521')
+        check('baixa oficial segue com o comprador', det_ent['status'] == 'Aprovada'
+              and det_ent['pode_atender'] is True)
+
+        r = c.patch(f'/solicitacoes/{sol_grande["id"]}/devolver', headers=h_aprov)
+        check('devolver mata o link de entrega', r.status_code == 200)
+        r = c.get(f'/solicitacoes/entrega/{token_grande}')
+        check('link de entrega devolvida -> 404', r.status_code == 404)
+
         rotas = [r for r in app.url_map.iter_rules() if str(r).startswith('/solicitacoes')]
-        check('blueprint: >= 18 rotas /solicitacoes', len(rotas) >= 18, f'encontrado: {len(rotas)}')
+        check('blueprint: >= 23 rotas /solicitacoes', len(rotas) >= 23, f'encontrado: {len(rotas)}')
 
 print(f'\n{"=" * 40}')
 print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')
