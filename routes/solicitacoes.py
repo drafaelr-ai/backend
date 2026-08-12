@@ -428,6 +428,7 @@ def detalhe_solicitacao(sol_id):
     out['pode_atender'] = _pode_atender(s, user, cfg)
     out['pode_reabrir'] = _pode_reabrir(s, user)
     out['pode_editar'] = _pode_editar(s, user)
+    out['pode_desaprovar'] = s.status == 'Aprovada' and _eh_aprovador(user, cfg)
     return jsonify(out), 200
 
 
@@ -859,6 +860,64 @@ def rejeitar_solicitacao(sol_id):
         solicitacao=s, origem_id=user.id,
     )
     return jsonify(s.to_dict(incluir_detalhes=True)), 200
+
+
+@solicitacoes_bp.route('/<int:sol_id>/devolver', methods=['PATCH'])
+@jwt_required()
+def devolver_solicitacao(sol_id):
+    """Desfaz a aprovação (Aprovada → Em cotação): o comprador volta a mexer
+    nas cotações e uma nova decisão pode ser tomada. Só aprovador/master.
+
+    A conta a pagar 'Previsto' criada na aprovação é removida junto; se o
+    financeiro já mexeu nela (status != Previsto), bloqueia — desfazer a
+    compra sem desfazer o dinheiro divergiria os dois módulos."""
+    user = get_current_user()
+    s = SolicitacaoCompra.query.get(sol_id)
+    if not s:
+        return jsonify({"erro": "Solicitação não encontrada."}), 404
+    if not _solicitacao_visivel(s, user):
+        return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
+    cfg = _config()
+    if not _eh_aprovador(user, cfg):
+        return jsonify({"erro": "Só um aprovador (ou o master) pode devolver a compra para cotação."}), 403
+    if s.status == 'Atendida':
+        return jsonify({"erro": "Compra atendida — reabra a compra antes de devolvê-la para cotação."}), 400
+    if s.status != 'Aprovada':
+        return jsonify({"erro": f"Solicitação {s.status.lower()} não pode ser devolvida para cotação."}), 400
+
+    pf = PagamentoFuturo.query.get(s.pagamento_futuro_id) if s.pagamento_futuro_id else None
+    if pf and (pf.status or '') != 'Previsto':
+        return jsonify({"erro": "A conta a pagar desta compra já foi movimentada no financeiro "
+                                f"(status: {pf.status}) — ajuste lá antes de devolver."}), 400
+
+    try:
+        if pf:
+            db.session.delete(pf)
+        s.status = 'Em cotação'
+        s.cotacao_aprovada_id = None
+        s.pagamento_futuro_id = None
+        s.aprovador_id = None
+        s.data_decisao = None
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Solicitações: erro ao devolver para cotação: %s", e)
+        return jsonify({"erro": "Erro interno ao devolver a compra para cotação."}), 500
+
+    destinos = {s.solicitante_id}
+    if cfg:
+        destinos.update(cfg.alertados_ids or [])
+    _notificar_ids(
+        list(destinos),
+        tipo='solicitacao_devolvida',
+        titulo=f"↩️ Compra da solicitação #{s.id} devolvida para cotação",
+        mensagem=(f"{user.username} desfez a aprovação de {_resumo_itens(s)} — "
+                  "a conta a pagar prevista foi removida do financeiro."),
+        solicitacao=s, origem_id=user.id,
+    )
+    out = s.to_dict(incluir_detalhes=True)
+    out['pode_desaprovar'] = False
+    return jsonify(out), 200
 
 
 # ---------------------------------------------------------------- atendimento (comprador)

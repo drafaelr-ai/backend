@@ -534,6 +534,39 @@ with app.app_context():
         check('reaberta volta para a lista de compras',
               any(x['id'] == sol_id for x in json.loads(r.data)))
 
+        print('\n=== devolver para cotação (desfaz a aprovação) ===')
+        # sol_id está Aprovada (reaberta acima), com o PF 'Previsto' intacto.
+        r = c.patch(f'/solicitacoes/{sol_id}/devolver', headers=h_sol)
+        check('devolver por não-aprovador -> 403', r.status_code == 403, f'got {r.status_code}')
+        r = c.patch(f'/solicitacoes/{sol3["id"]}/devolver', headers=h_aprov)
+        check('devolver rejeitada -> 400', r.status_code == 400)
+
+        pf_movida = PagamentoFuturo.query.get(sol2_aprovada['pagamento_futuro_id'])
+        pf_movida.status = 'Pago'
+        db.session.commit()
+        r = c.patch(f'/solicitacoes/{sol2["id"]}/devolver', headers=h_aprov)
+        check('devolver com PF já movimentado -> 400', r.status_code == 400, f'got {r.status_code}')
+        pf_movida.status = 'Previsto'
+        db.session.commit()
+
+        pfs_antes = PagamentoFuturo.query.count()
+        r = c.patch(f'/solicitacoes/{sol_id}/devolver', headers=h_aprov)
+        check('aprovador devolve -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')
+        devolvida = json.loads(r.data)
+        check('devolvida: status Em cotação', devolvida['status'] == 'Em cotação')
+        check('devolvida: decisão limpa', devolvida['cotacao_aprovada_id'] is None
+              and devolvida['pagamento_futuro_id'] is None
+              and devolvida['aprovador_nome'] is None)
+        check('devolvida: PF Previsto removido', PagamentoFuturo.query.count() == pfs_antes - 1)
+        check('notif: solicitante avisado da devolução',
+              len(notifs(ids['solicitante_smoke'], 'solicitacao_devolvida')) == 1)
+        r = c.patch(f'/solicitacoes/{sol_id}/devolver', headers=h_aprov)
+        check('devolver 2x -> 400 (não está aprovada)', r.status_code == 400)
+
+        r = c.post(f'/solicitacoes/{sol_id}/aprovar', json={'cotacao_id': cot2['id']}, headers=h_aprov)
+        check('re-aprovar depois de devolver -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')
+        check('re-aprovação recria o PF', PagamentoFuturo.query.count() == pfs_antes)
+
         print('\n=== comentários (@menção) ===')
         r = c.get('/solicitacoes/usuarios-mencao', headers=h_restrito)
         check('usuarios-mencao sem módulo -> 403', r.status_code == 403)
