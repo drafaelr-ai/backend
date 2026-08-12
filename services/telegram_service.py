@@ -21,6 +21,33 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 8  # segundos — só vale nas threads de envio e nas rotas de vínculo
 _bot_username_cache = None
 
+# Categorias de notificação que o usuário escolhe no sino (PUT /telegram/
+# preferencias). telegram_vinculo.tipos = NULL → todas; [] → nenhuma.
+CATEGORIAS = {
+    'mencoes': 'Menções e comentários',
+    'solicitacoes': 'Solicitações de compra',
+    'boletos': 'Boletos e vencimentos',
+    'financeiro': 'Pagamentos e orçamentos',
+    'outros': 'Demais avisos',
+}
+
+
+def categoria_do_tipo(tipo):
+    """Mapeia o `tipo` cru da notificação na categoria escolhível.
+
+    Por prefixo de propósito: tipos novos (ex.: futuros solicitacao_*)
+    caem na categoria certa sem precisar atualizar este mapa."""
+    t = (tipo or '')
+    if t in ('solicitacao_mencao', 'solicitacao_comentario'):
+        return 'mencoes'
+    if t.startswith('solicitacao'):
+        return 'solicitacoes'
+    if t.startswith('boleto'):
+        return 'boletos'
+    if t.startswith(('pagamento', 'orcamento', 'lancamento', 'parcela')):
+        return 'financeiro'
+    return 'outros'
+
 
 def _token():
     return (os.environ.get('TELEGRAM_BOT_TOKEN') or '').strip()
@@ -74,8 +101,9 @@ def enviar_async(chat_id, texto):
     ).start()
 
 
-def notificar_usuario(user_id, titulo, mensagem=None):
-    """Espelha uma notificação do sino no Telegram, se o usuário vinculou.
+def notificar_usuario(user_id, titulo, mensagem=None, tipo=None):
+    """Espelha uma notificação do sino no Telegram, se o usuário vinculou
+    e a categoria do tipo está nas preferências dele (NULL = todas).
 
     Chamado dentro de request context (após o commit da notificação) —
     a consulta ao vínculo é aqui; o HTTP sai em thread."""
@@ -84,6 +112,8 @@ def notificar_usuario(user_id, titulo, mensagem=None):
     from models.telegram_vinculo import TelegramVinculo
     vinculo = TelegramVinculo.query.filter_by(user_id=user_id).first()
     if not vinculo or not vinculo.chat_id:
+        return
+    if vinculo.tipos is not None and categoria_do_tipo(tipo) not in vinculo.tipos:
         return
     texto = titulo if not mensagem else f"{titulo}\n{mensagem}"
     enviar_async(vinculo.chat_id, texto)

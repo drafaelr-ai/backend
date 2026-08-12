@@ -1223,7 +1223,9 @@ def run_auto_migration():
                 atualizado_em TIMESTAMP
             );
         """)
-        logger.info("✅ TELEGRAM: tabela telegram_vinculo garantida")
+        # Preferências por categoria (NULL = todas; [] = nenhuma) — aditivo.
+        cur.execute("ALTER TABLE telegram_vinculo ADD COLUMN IF NOT EXISTS tipos JSONB;")
+        logger.info("✅ TELEGRAM: tabela telegram_vinculo garantida (+ coluna tipos)")
 
         # =================================================================
         # ACESSOS POR MÓDULO (aditivo, idempotente)

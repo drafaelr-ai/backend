@@ -22,6 +22,9 @@ class TelegramVinculo(db.Model):
     chat_id = db.Column(db.String(32), nullable=True)      # preenchido na confirmação
     chat_nome = db.Column(db.String(120), nullable=True)   # nome no Telegram (exibição)
     link_code = db.Column(db.String(32), nullable=True)    # código pendente do deep-link
+    # Categorias de notificação que vão pro Telegram (chaves de
+    # telegram_service.CATEGORIAS). NULL = todas; [] = nenhuma.
+    tipos = db.Column(db.JSON, nullable=True)
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
     atualizado_em = db.Column(db.DateTime, nullable=True)
 
@@ -29,4 +32,5 @@ class TelegramVinculo(db.Model):
         return {
             'vinculado': bool(self.chat_id),
             'chat_nome': self.chat_nome,
+            'tipos': self.tipos,
         }

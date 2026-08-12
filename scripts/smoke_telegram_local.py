@@ -160,6 +160,46 @@ with app.app_context():
         criar_notificacao(u2_id, 'teste', 'Sem vínculo')
         check('usuário sem vínculo não recebe no Telegram', len(stub.enviadas) == 1)
 
+        print('\n=== preferências por categoria ===')
+        r = c.get('/telegram/status', headers=h1)
+        st = json.loads(r.data)
+        check('status expõe categorias e tipos null (todas)',
+              st['tipos'] is None and 'mencoes' in st['categorias'])
+
+        r = c.put('/telegram/preferencias', json={}, headers=h1)
+        check('preferencias sem body -> 400', r.status_code == 400)
+        r = c.put('/telegram/preferencias', json={'tipos': 'banana'}, headers=h1)
+        check('preferencias tipos string -> 400', r.status_code == 400)
+        r = c.put('/telegram/preferencias', json={'tipos': ['inexistente']}, headers=h1)
+        check('preferencias categoria inválida -> 400', r.status_code == 400)
+
+        r = c.put('/telegram/preferencias', json={'tipos': ['mencoes']}, headers=h1)
+        check('preferencias só menções -> 200', r.status_code == 200
+              and json.loads(r.data)['tipos'] == ['mencoes'])
+        stub.enviadas.clear()
+        criar_notificacao(u1_id, 'solicitacao_mencao', 'Você foi mencionado', 'oi')
+        check('menção passa no filtro', len(stub.enviadas) == 1)
+        criar_notificacao(u1_id, 'boleto_vencendo', 'Boleto vence hoje', 'R$ 100')
+        check('boleto barrado pelo filtro', len(stub.enviadas) == 1)
+        criar_notificacao(u1_id, 'solicitacao_aprovada', 'Compra aprovada', 'ok')
+        check('solicitação (não-menção) barrada', len(stub.enviadas) == 1)
+        check('sino recebeu tudo mesmo assim',
+              Notificacao.query.filter_by(usuario_destino_id=u1_id).count() >= 5)
+
+        r = c.put('/telegram/preferencias', json={'tipos': []}, headers=h1)
+        check('preferencias vazia (nenhuma) -> 200', r.status_code == 200)
+        stub.enviadas.clear()
+        criar_notificacao(u1_id, 'solicitacao_mencao', 'Outra menção', 'oi')
+        check('lista vazia barra tudo', len(stub.enviadas) == 0)
+
+        todas = list(telegram_service.CATEGORIAS.keys())
+        r = c.put('/telegram/preferencias', json={'tipos': todas}, headers=h1)
+        check('todas marcadas vira null (sem filtro)', r.status_code == 200
+              and json.loads(r.data)['tipos'] is None)
+        stub.enviadas.clear()
+        criar_notificacao(u1_id, 'boleto_vencendo', 'Boleto de novo', 'R$ 50')
+        check('sem filtro volta a enviar', len(stub.enviadas) == 1)
+
         print('\n=== desvincular ===')
         r = c.delete('/telegram/vincular', headers=h1)
         check('desvincular -> 200', r.status_code == 200)
@@ -170,6 +210,8 @@ with app.app_context():
         check('sem espelho após desvincular', len(stub.enviadas) == 0)
         r = c.delete('/telegram/vincular', headers=h1)
         check('desvincular 2x -> 200 idempotente', r.status_code == 200)
+        r = c.put('/telegram/preferencias', json={'tipos': None}, headers=h1)
+        check('preferencias sem vínculo -> 400', r.status_code == 400)
 
 print(f'\n{"=" * 40}')
 print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')

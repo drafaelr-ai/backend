@@ -12,7 +12,7 @@ import logging
 import secrets
 from datetime import datetime
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 
 from extensions import db
@@ -41,6 +41,8 @@ def status():
         'bot': telegram_service.bot_username(),
         'vinculado': bool(v and v.chat_id),
         'chat_nome': v.chat_nome if v and v.chat_id else None,
+        'tipos': v.tipos if v else None,          # null = todas as categorias
+        'categorias': telegram_service.CATEGORIAS,
     }), 200
 
 
@@ -104,6 +106,42 @@ def confirmar():
         "A partir de agora suas notificações também chegam por aqui.",
     )
     return jsonify({'vinculado': True, 'chat_nome': nome}), 200
+
+
+@telegram_bp.route('/preferencias', methods=['PUT'])
+@jwt_required()
+def preferencias():
+    """Escolhe quais categorias de notificação vão pro Telegram.
+
+    Body: {"tipos": null | ["mencoes", ...]} — null = todas; [] = nenhuma."""
+    user = get_current_user()
+    v = _vinculo(user.id)
+    if not v or not v.chat_id:
+        return jsonify({'erro': 'Vincule o Telegram antes de escolher as notificações.'}), 400
+
+    dados = request.get_json(silent=True) or {}
+    tipos = dados.get('tipos', 'ausente')
+    if tipos == 'ausente':
+        return jsonify({'erro': 'Informe "tipos" (null = todas as categorias).'}), 400
+    if tipos is not None:
+        if not isinstance(tipos, list):
+            return jsonify({'erro': 'tipos deve ser null ou uma lista de categorias.'}), 400
+        invalidas = [t for t in tipos if t not in telegram_service.CATEGORIAS]
+        if invalidas:
+            return jsonify({'erro': f'Categorias inválidas: {invalidas}.'}), 400
+        tipos = sorted(set(tipos))
+        if len(tipos) == len(telegram_service.CATEGORIAS):
+            tipos = None  # todas marcadas = sem filtro
+
+    try:
+        v.tipos = tipos
+        v.atualizado_em = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'tipos': v.tipos}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception("Telegram: erro ao salvar preferências: %s", e)
+        return jsonify({'erro': 'Erro interno ao salvar as preferências.'}), 500
 
 
 @telegram_bp.route('/vincular', methods=['DELETE'])

@@ -26,7 +26,7 @@ def criar_notificacao(usuario_destino_id, tipo, titulo, mensagem=None, obra_id=N
         # Espelho no Telegram (best-effort, pós-commit): jamais desfaz o sino.
         try:
             from services.telegram_service import notificar_usuario as _tg
-            _tg(usuario_destino_id, titulo, mensagem)
+            _tg(usuario_destino_id, titulo, mensagem, tipo=tipo)
         except Exception as e:
             logger.warning(f"--- [NOTIF] Telegram indisponível (segue só no sino): {e} ---")
         return notificacao
