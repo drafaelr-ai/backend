@@ -22,8 +22,15 @@ logger = logging.getLogger(__name__)
 
 _MODEL = os.environ.get('FROTA_RECIBO_MODEL', 'claude-opus-5')
 _MAX_BYTES = 8 * 1024 * 1024          # cupom é foto de celular; 8 MB é folga
+_MAX_PIXELS_JPEG = 50_000_000         # cobre foto de 48 MP sem abrir imagem absurda
+_MAX_PIXELS_OUTROS = 25_000_000       # PNG/WebP exigem mais memória na decodificação
 _IMAGENS = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 _PDF = 'application/pdf'
+
+
+class ImagemMuitoGrandeError(ValueError):
+    """Imagem cujo tamanho decodificado não cabe com segurança no worker."""
+
 
 _SCHEMA = {
     'type': 'object',
@@ -215,23 +222,70 @@ def extrair_dados_recibo(arquivo):
 
 
 def comprimir_imagem(dados, media_type, max_lado=1600):
-    """Reduz a foto antes de subir ao Storage (celular manda 4 MB por cupom).
+    """Reduz a foto sem decodificá-la desnecessariamente em resolução total.
 
-    Best-effort: qualquer falha devolve o original — o comprovante nunca se
-    perde por causa da compressão.
+    Um JPEG de iPhone com poucos MB pode ocupar mais de 180 MB quando aberto.
+    Para JPEG, ``draft`` pede ao decoder uma versão reduzida antes de carregar
+    os pixels. Imagens inválidas ou grandes demais são recusadas: devolver o
+    original nesses casos recolocaria justamente o risco de estouro de memória.
     """
     if media_type == _PDF:
         return dados, media_type
+    if media_type not in _IMAGENS:
+        raise ValueError('Envie uma foto (JPG, PNG ou WEBP) ou um PDF do comprovante.')
     try:
-        from PIL import Image
-        img = Image.open(io.BytesIO(dados))
-        img = img.convert('RGB')
-        if max(img.size) > max_lado:
-            escala = max_lado / max(img.size)
-            img = img.resize((int(img.width * escala), int(img.height * escala)))
-        buf = io.BytesIO()
-        img.save(buf, format='JPEG', quality=82, optimize=True)
-        return buf.getvalue(), 'image/jpeg'
-    except Exception as e:
-        logger.warning("recibo: compressão falhou, subindo original: %s", e)
-        return dados, media_type
+        from PIL import Image, ImageOps, UnidentifiedImageError
+        from PIL.Image import DecompressionBombError
+
+        with Image.open(io.BytesIO(dados)) as origem:
+            largura, altura = origem.size
+            pixels = largura * altura
+            limite = (_MAX_PIXELS_JPEG if origem.format == 'JPEG'
+                      else _MAX_PIXELS_OUTROS)
+            if largura <= 0 or altura <= 0 or pixels > limite:
+                raise ImagemMuitoGrandeError(
+                    'A foto tem resolução muito alta. Tire outra foto do '
+                    'comprovante usando a câmera do link.',
+                )
+
+            # JPEG suporta redução durante a própria decodificação. Isso evita
+            # manter uma foto de 48 MP inteira na RAM antes do resize.
+            if origem.format == 'JPEG':
+                origem.draft('RGB', (max_lado, max_lado))
+            origem.thumbnail(
+                (max_lado, max_lado),
+                Image.Resampling.LANCZOS,
+                reducing_gap=3.0,
+            )
+            orientada = ImageOps.exif_transpose(origem)
+            try:
+                if orientada.mode in ('RGBA', 'LA'):
+                    fundo = Image.new('RGB', orientada.size, 'white')
+                    alpha = orientada.getchannel('A')
+                    fundo.paste(orientada, mask=alpha)
+                    final = fundo
+                else:
+                    final = orientada.convert('RGB')
+                try:
+                    buf = io.BytesIO()
+                    final.save(buf, format='JPEG', quality=80, optimize=True)
+                    return buf.getvalue(), 'image/jpeg'
+                finally:
+                    if final is not orientada:
+                        final.close()
+            finally:
+                if orientada is not origem:
+                    orientada.close()
+    except ImagemMuitoGrandeError:
+        raise
+    except (MemoryError, DecompressionBombError) as e:
+        logger.warning("recibo: imagem excedeu a memória segura: %s", e)
+        raise ImagemMuitoGrandeError(
+            'A foto é grande demais para processar. Tire outra foto do '
+            'comprovante usando a câmera do link.',
+        ) from e
+    except UnidentifiedImageError as e:
+        raise ValueError('A imagem não pôde ser aberta. Use JPG, PNG, WEBP ou PDF.') from e
+    except OSError as e:
+        logger.warning("recibo: arquivo de imagem inválido: %s", e)
+        raise ValueError('A imagem está inválida ou incompleta. Tire outra foto.') from e

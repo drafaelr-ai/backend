@@ -149,6 +149,15 @@ def ler_comprovante(token):
             comprimido, media_final = recibo_abastecimento_service.comprimir_imagem(
                 dados_bytes, tipo,
             )
+            # A partir daqui só precisamos da versão reduzida. Libera a foto
+            # original antes de criar a cópia base64 usada pelo OCR.
+            del dados_bytes
+        except recibo_abastecimento_service.ImagemMuitoGrandeError as e:
+            logger.warning("Abastecimento público: foto grande demais: %s", e)
+            return jsonify({"erro": str(e)}), 413
+        except ValueError as e:
+            logger.warning("Abastecimento público: upload inválido: %s", e)
+            return jsonify({"erro": str(e)}), 400
         except Exception:
             logger.exception("Abastecimento público: falha ao ler o upload")
             return jsonify({"erro": "Não foi possível ler o arquivo enviado."}), 400

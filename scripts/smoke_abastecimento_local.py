@@ -13,6 +13,9 @@ import io
 import sys
 import json
 from datetime import date, timedelta
+from unittest.mock import patch
+
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -84,11 +87,44 @@ def check(label, condition, detail=''):
         print(f'  FAIL  {label}  {detail}')
 
 
+def _jpeg_fake_bytes():
+    saida = io.BytesIO()
+    Image.new('RGB', (32, 48), 'white').save(saida, format='JPEG')
+    return saida.getvalue()
+
+
+JPEG_FAKE = _jpeg_fake_bytes()
+
+
 def arquivo_fake(nome='cupom.jpg'):
-    return {'arquivo': (io.BytesIO(b'\xff\xd8\xff\xe0 conteudo de cupom'), nome)}
+    return {'arquivo': (io.BytesIO(JPEG_FAKE), nome)}
 
 
 with app.app_context():
+    print('\n=== proteção de memória do comprovante ===')
+    comprimido, tipo_comprimido = recibo_abastecimento_service.comprimir_imagem(
+        JPEG_FAKE, 'image/jpeg',
+    )
+    check('compressão válida gera JPEG', tipo_comprimido == 'image/jpeg' and len(comprimido) > 0)
+
+    class _Imagem48Mais:
+        format = 'JPEG'
+        size = (10000, 6000)  # 60 MP: acima do teto seguro de JPEG
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    recusou_imagem_gigante = False
+    with patch('PIL.Image.open', return_value=_Imagem48Mais()):
+        try:
+            recibo_abastecimento_service.comprimir_imagem(JPEG_FAKE, 'image/jpeg')
+        except recibo_abastecimento_service.ImagemMuitoGrandeError:
+            recusou_imagem_gigante = True
+    check('imagem de resolução insegura é recusada antes de decodificar', recusou_imagem_gigante)
+
     db.metadata.create_all(bind=db.engine, tables=[db.metadata.tables[t] for t in TABELAS])
 
     obra1 = Obra(nome='Obra Abast 1')
