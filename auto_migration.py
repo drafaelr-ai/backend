@@ -954,6 +954,7 @@ def run_auto_migration():
                 prazo_entrega      VARCHAR(100),
                 observacao         VARCHAR(300),
                 arquivo_url        VARCHAR(500),
+                arquivos           JSONB,
                 criado_por_id      INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
                 data_criacao       TIMESTAMP DEFAULT NOW()
             );
@@ -978,6 +979,9 @@ def run_auto_migration():
 
         # Anexo da própria solicitação (lista de materiais/projeto) — aditivo.
         cur.execute("ALTER TABLE solicitacao_compra ADD COLUMN IF NOT EXISTS arquivo_url VARCHAR(500);")
+        # Vários arquivos podem compor uma única proposta do fornecedor.
+        # `arquivo_url` permanece como legado; `arquivos` guarda a lista nova.
+        cur.execute("ALTER TABLE solicitacao_cotacao ADD COLUMN IF NOT EXISTS arquivos JSONB;")
 
         # Comentários com menção @usuario (conversa solicitante ↔ comprador).
         # autor_id SET NULL preserva a conversa se o usuário for removido.

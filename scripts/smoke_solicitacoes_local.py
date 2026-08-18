@@ -27,6 +27,7 @@ from models import (
     SolicitacaoCompra, SolicitacaoCotacao,
 )
 from routes.solicitacoes import solicitacoes_bp
+from services import storage_service
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
@@ -45,6 +46,24 @@ TABELAS = [
 
 PASS = []
 FAIL = []
+UPLOADS = []
+SIGNED_PATHS = []
+
+
+def _fake_upload(arquivo, pasta, bucket=None):
+    nome = arquivo.filename or 'arquivo'
+    path = f'{pasta}/{len(UPLOADS) + 1:032x}_{nome}'
+    UPLOADS.append({'path': path, 'pasta': pasta, 'bucket': bucket, 'nome': nome})
+    return path
+
+
+def _fake_signed_url(path, expires=3600, bucket=None):
+    SIGNED_PATHS.append({'path': path, 'bucket': bucket})
+    return f'https://storage.smoke/{path}'
+
+
+storage_service.upload_arquivo = _fake_upload
+storage_service.signed_url = _fake_signed_url
 
 
 def check(label, condition, detail=''):
@@ -308,6 +327,20 @@ with app.app_context():
         cot1 = json.loads(r.data)
         check('cotação: valor BR parseado', cot1['valor_total'] == 2640.0)
         check('cotação: criado_por_nome', cot1['criado_por_nome'] == 'alertado_smoke')
+        # Simula a única cotação antiga com `arquivo_url`, antes da coluna
+        # JSON de múltiplos anexos existir.
+        cot1_model = db.session.get(SolicitacaoCotacao, cot1['id'])
+        cot1_model.arquivo_url = 'cotacoes/legado/00000000000000000000000000000001_orcamento-antigo.pdf'
+        db.session.commit()
+        cot1_legada = cot1_model.to_dict()
+        check('cotação antiga continua expondo o anexo legado',
+              cot1_legada['quantidade_arquivos'] == 1
+              and cot1_legada['arquivos'][0]['nome'] == 'orcamento-antigo.pdf')
+        r = c.get(
+            f'/solicitacoes/{sol_id}/cotacoes/{cot1["id"]}/arquivo',
+            headers=h_alert,
+        )
+        check('rota antiga do anexo continua funcionando -> 200', r.status_code == 200)
         r = c.get(f'/solicitacoes/{sol_id}', headers=h_master)
         detalhe_cotacao = json.loads(r.data)
         check('status virou Em cotação', detalhe_cotacao['status'] == 'Em cotação')
@@ -315,11 +348,61 @@ with app.app_context():
         r = c.patch(f'/solicitacoes/{sol_id}', json=edit_payload, headers=h_master)
         check('PATCH após cotação -> 400', r.status_code == 400)
 
-        r = c.post(f'/solicitacoes/{sol_id}/cotacoes', json={
-            'fornecedor': 'Depósito B', 'valor_total': 2400.0,
-        }, headers=h_alert)
+        r = c.post(f'/solicitacoes/{sol_id}/cotacoes', data={
+            'fornecedor': 'Arquivos demais', 'valor_total': '100,00',
+            'arquivos': [
+                (io.BytesIO(b'%PDF-1.4'), f'parte-{n}.pdf') for n in range(6)
+            ],
+        }, headers=h_alert, content_type='multipart/form-data')
+        check('cotação limita cinco anexos -> 400', r.status_code == 400)
+        r = c.post(f'/solicitacoes/{sol_id}/cotacoes', data={
+            'fornecedor': 'Formato inválido', 'valor_total': '100,00',
+            'arquivos': (io.BytesIO(b'executavel'), 'arquivo.exe'),
+        }, headers=h_alert, content_type='multipart/form-data')
+        check('cotação recusa formato de anexo inseguro -> 400', r.status_code == 400)
+
+        r = c.post(f'/solicitacoes/{sol_id}/cotacoes', data={
+            'fornecedor': 'Depósito B', 'valor_total': '2400,00',
+            'arquivos': [
+                (io.BytesIO(b'%PDF-1.4 parte 1'), 'orcamento-parte-1.pdf'),
+                (io.BytesIO(b'%PDF-1.4 parte 2'), 'orcamento-parte-2.pdf'),
+            ],
+        }, headers=h_alert, content_type='multipart/form-data')
         check('POST cotação 2 -> 201', r.status_code == 201)
         cot2 = json.loads(r.data)
+        check('cotação aceita dois anexos no mesmo orçamento',
+              cot2['quantidade_arquivos'] == 2 and len(cot2['arquivos']) == 2,
+              f'got {cot2}')
+        check('cotação preserva os nomes dos dois anexos',
+              [a['nome'] for a in cot2['arquivos']] == [
+                  'orcamento-parte-1.pdf', 'orcamento-parte-2.pdf'])
+        check('Storage recebeu os dois arquivos',
+              len([u for u in UPLOADS if u['pasta'] == f'cotacoes/{sol_id}']) == 2)
+
+        r = c.get(
+            f'/solicitacoes/{sol_id}/cotacoes/{cot2["id"]}/arquivos/0',
+            headers=h_alert,
+        )
+        check('abre primeiro anexo -> 200', r.status_code == 200)
+        check('primeiro anexo assinado é a parte 1',
+              json.loads(r.data)['nome'] == 'orcamento-parte-1.pdf')
+        r = c.get(
+            f'/solicitacoes/{sol_id}/cotacoes/{cot2["id"]}/arquivos/1',
+            headers=h_alert,
+        )
+        check('abre segundo anexo -> 200', r.status_code == 200)
+        check('segundo anexo assinado é a parte 2',
+              json.loads(r.data)['nome'] == 'orcamento-parte-2.pdf')
+        r = c.get(
+            f'/solicitacoes/{sol_id}/cotacoes/{cot2["id"]}/arquivos/0',
+            headers=h_outro,
+        )
+        check('anexo respeita acesso da obra -> 403', r.status_code == 403)
+        r = c.get(
+            f'/solicitacoes/{sol_id}/cotacoes/{cot2["id"]}/arquivos/2',
+            headers=h_alert,
+        )
+        check('índice de anexo inexistente -> 404', r.status_code == 404)
 
         r = c.delete(f'/solicitacoes/{sol_id}/cotacoes/{cot2["id"]}', headers=h_sol)
         check('DELETE cotação por não-autor -> 403', r.status_code == 403)

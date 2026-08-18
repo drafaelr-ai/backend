@@ -29,6 +29,7 @@ from datetime import datetime, date, timedelta
 from flask import Blueprint, jsonify, request, send_file
 from flask_jwt_extended import jwt_required, verify_jwt_in_request
 from sqlalchemy import or_
+from werkzeug.utils import secure_filename
 
 from extensions import db
 from models.solicitacao_compra import SolicitacaoCompra
@@ -81,6 +82,13 @@ _STATUS_ABERTOS = {'Aberta', 'Em cotação', 'Aguardando aprovação'}
 _STATUS_DECIDIDOS = {'Aprovada', 'Rejeitada', 'Cancelada', 'Atendida'}
 # Status que saem da lista de compras e vão para o histórico.
 _STATUS_HISTORICO = ('Atendida',)
+_MAX_ANEXOS_COTACAO = 5
+_MAX_ANEXO_COTACAO_BYTES = 10 * 1024 * 1024
+_MAX_TOTAL_ANEXOS_COTACAO_BYTES = 30 * 1024 * 1024
+_TIPOS_ANEXO_COTACAO = {
+    'application/pdf',
+    'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+}
 
 
 # ---------------------------------------------------------------- helpers
@@ -162,6 +170,67 @@ def _upload_best_effort(arquivo, pasta):
     except Exception as e:
         logger.exception("Solicitações: upload falhou (segue sem arquivo): %s", e)
         return None, True
+
+
+def _dados_e_arquivos_cotacao():
+    """Multipart com vários `arquivos`; aceita o campo legado `arquivo`."""
+    if not (request.content_type and 'multipart/form-data' in request.content_type):
+        return (request.get_json(silent=True) or {}), []
+
+    arquivos = list(request.files.getlist('arquivos'))
+    for campo in ('arquivo', 'file'):
+        legado = request.files.get(campo)
+        if legado and legado not in arquivos:
+            arquivos.append(legado)
+    return request.form, [arquivo for arquivo in arquivos if arquivo and arquivo.filename]
+
+
+def _tamanho_arquivo(arquivo):
+    stream = arquivo.stream
+    posicao = stream.tell()
+    stream.seek(0, 2)
+    tamanho = stream.tell()
+    stream.seek(posicao)
+    return tamanho
+
+
+def _validar_arquivos_cotacao(arquivos):
+    if len(arquivos) > _MAX_ANEXOS_COTACAO:
+        return f'Envie no máximo {_MAX_ANEXOS_COTACAO} anexos por cotação.'
+
+    total = 0
+    for arquivo in arquivos:
+        tipo = (arquivo.mimetype or '').lower().split(';')[0]
+        nome = (arquivo.filename or '').lower()
+        if tipo not in _TIPOS_ANEXO_COTACAO:
+            # Alguns celulares enviam application/octet-stream. Só aceitamos
+            # esse fallback quando a extensão também é conhecida.
+            extensao_valida = nome.endswith(('.pdf', '.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'))
+            if tipo != 'application/octet-stream' or not extensao_valida:
+                return f'Formato não aceito em {arquivo.filename}. Use PDF, JPG, PNG, WEBP ou HEIC.'
+        tamanho = _tamanho_arquivo(arquivo)
+        if tamanho <= 0:
+            return f'O arquivo {arquivo.filename} está vazio.'
+        if tamanho > _MAX_ANEXO_COTACAO_BYTES:
+            return f'O arquivo {arquivo.filename} ultrapassa 10 MB.'
+        total += tamanho
+    if total > _MAX_TOTAL_ANEXOS_COTACAO_BYTES:
+        return 'Os anexos da cotação ultrapassam 30 MB no total.'
+    return None
+
+
+def _upload_arquivos_cotacao(arquivos, pasta):
+    anexos, falhas = [], 0
+    for arquivo in arquivos:
+        path, falhou = _upload_best_effort(arquivo, pasta)
+        if path:
+            anexos.append({
+                'path': path,
+                'nome': secure_filename(arquivo.filename) or 'anexo',
+            })
+        if falhou:
+            falhas += 1
+    return anexos, falhas
 
 
 def _config():
@@ -636,7 +705,7 @@ def criar_cotacao(sol_id):
     if s.status in _STATUS_DECIDIDOS:
         return jsonify({"erro": f"Solicitação {s.status.lower()} não aceita novas cotações."}), 400
 
-    dados, arquivo = _dados_e_arquivo()
+    dados, arquivos = _dados_e_arquivos_cotacao()
     fornecedor = (dados.get('fornecedor') or '').strip()
     if not fornecedor:
         return jsonify({"erro": "fornecedor é obrigatório."}), 400
@@ -644,7 +713,11 @@ def criar_cotacao(sol_id):
     if not valor_total or valor_total <= 0:
         return jsonify({"erro": "valor_total deve ser maior que zero."}), 400
 
-    arquivo_url, upload_falhou = _upload_best_effort(arquivo, f'cotacoes/{s.id}')
+    erro_arquivos = _validar_arquivos_cotacao(arquivos)
+    if erro_arquivos:
+        return jsonify({"erro": erro_arquivos}), 400
+
+    anexos, uploads_falhos = _upload_arquivos_cotacao(arquivos, f'cotacoes/{s.id}')
 
     try:
         cotacao = SolicitacaoCotacao(
@@ -654,7 +727,8 @@ def criar_cotacao(sol_id):
             condicao_pagamento=(dados.get('condicao_pagamento') or '').strip()[:200] or None,
             prazo_entrega=(dados.get('prazo_entrega') or '').strip()[:100] or None,
             observacao=(dados.get('observacao') or '').strip()[:300] or None,
-            arquivo_url=arquivo_url,
+            arquivo_url=anexos[0]['path'] if anexos else None,
+            arquivos_json=anexos or None,
             criado_por_id=user.id,
         )
         db.session.add(cotacao)
@@ -667,8 +741,11 @@ def criar_cotacao(sol_id):
         return jsonify({"erro": "Erro interno ao registrar cotação."}), 500
 
     out = cotacao.to_dict()
-    if upload_falhou:
-        out['aviso'] = 'Cotação salva, mas o upload do anexo falhou. Tente anexar novamente.'
+    if uploads_falhos:
+        out['aviso'] = (
+            f'Cotação salva com {len(anexos)} de {len(arquivos)} anexos. '
+            'Tente enviar novamente os arquivos que faltaram.'
+        )
     return jsonify(out), 201
 
 
@@ -697,8 +774,9 @@ def remover_cotacao(sol_id, cot_id):
 
 
 @solicitacoes_bp.route('/<int:sol_id>/cotacoes/<int:cot_id>/arquivo', methods=['GET'])
+@solicitacoes_bp.route('/<int:sol_id>/cotacoes/<int:cot_id>/arquivos/<int:arquivo_indice>', methods=['GET'])
 @jwt_required()
-def arquivo_cotacao(sol_id, cot_id):
+def arquivo_cotacao(sol_id, cot_id, arquivo_indice=0):
     user = get_current_user()
     s = SolicitacaoCompra.query.get(sol_id)
     if not s:
@@ -706,11 +784,17 @@ def arquivo_cotacao(sol_id, cot_id):
     if not _solicitacao_visivel(s, user):
         return jsonify({"erro": "Acesso negado a esta solicitação."}), 403
     cotacao = SolicitacaoCotacao.query.filter_by(id=cot_id, solicitacao_id=sol_id).first()
-    if not cotacao or not cotacao.arquivo_url:
+    if not cotacao:
+        return jsonify({"erro": "Cotação não encontrada."}), 404
+    anexos = cotacao.anexos_storage()
+    if not anexos:
         return jsonify({"erro": "Cotação sem arquivo."}), 404
+    if arquivo_indice < 0 or arquivo_indice >= len(anexos):
+        return jsonify({"erro": "Anexo não encontrado."}), 404
     try:
-        url = storage_service.signed_url(cotacao.arquivo_url, bucket=BUCKET_SOLICITACOES)
-        return jsonify({"url": url}), 200
+        anexo = anexos[arquivo_indice]
+        url = storage_service.signed_url(anexo['path'], bucket=BUCKET_SOLICITACOES)
+        return jsonify({"url": url, "nome": anexo['nome'], "indice": arquivo_indice}), 200
     except Exception as e:
         logger.exception("Solicitações: erro ao gerar URL do arquivo: %s", e)
         return jsonify({"erro": "Erro ao gerar link do arquivo."}), 500
