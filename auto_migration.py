@@ -858,7 +858,6 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_frota_abast_veiculo ON frota_abastecimento (veiculo_id);
             CREATE INDEX IF NOT EXISTS idx_frota_abast_obra ON frota_abastecimento (obra_id);
             CREATE INDEX IF NOT EXISTS idx_frota_abast_data ON frota_abastecimento (data);
-            CREATE INDEX IF NOT EXISTS idx_frota_abast_posto ON frota_abastecimento (posto_id);
         """)
 
         cur.execute("""
