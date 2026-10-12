@@ -33,13 +33,14 @@ from models.frota_veiculo import FrotaVeiculo
 from models.frota_movimentacao import FrotaMovimentacao
 from models.frota_documento import FrotaDocumento
 from models.frota_manutencao import FrotaManutencao
+from models.frota_posto_combustivel import FrotaPostoCombustivel
 from models.frota_abastecimento import FrotaAbastecimento
 from models.frota_abastecimento_solicitacao import FrotaAbastecimentoSolicitacao
 from models.frota_multa import FrotaMulta
 from models.funcionario import Funcionario
 from models.obra import Obra
 from services import storage_service, admin_read_service
-from services import abastecimento_service
+from services import abastecimento_service, posto_combustivel_service
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
 
 logger = logging.getLogger(__name__)
@@ -937,6 +938,49 @@ def remover_manutencao(item_id):
         return jsonify({"erro": "Erro ao remover manutenção"}), 500
 
 
+# ------------------------------------------------------ postos de combustível
+
+@frota_bp.route('/postos-combustivel', methods=['GET'])
+@jwt_required()
+def listar_postos_combustivel():
+    try:
+        postos = (FrotaPostoCombustivel.query
+                  .filter(FrotaPostoCombustivel.ativo.is_(True))
+                  .order_by(FrotaPostoCombustivel.nome.asc()).all())
+        return jsonify([posto.to_dict() for posto in postos]), 200
+    except Exception:
+        logger.exception("Erro em GET /frota/postos-combustivel")
+        return jsonify({"erro": "Erro ao listar postos de combustível"}), 500
+
+
+@frota_bp.route('/postos-combustivel', methods=['POST'])
+@jwt_required()
+def criar_posto_combustivel():
+    try:
+        dados = request.get_json(silent=True) or {}
+        nome = posto_combustivel_service.limpar_nome(dados.get('nome'))
+        if not nome:
+            return jsonify({"erro": "nome é obrigatório"}), 400
+        existente = FrotaPostoCombustivel.query.filter_by(
+            nome_normalizado=posto_combustivel_service.normalizar_nome(nome),
+        ).first()
+        posto = posto_combustivel_service.resolver_posto({
+            'novo_posto_nome': nome,
+        })
+        db.session.commit()
+        return jsonify(posto.to_dict()), 200 if existente else 201
+    except posto_combustivel_service.PostoInvalido as exc:
+        db.session.rollback()
+        return jsonify({"erro": str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"erro": "Já existe um posto com este nome"}), 409
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em POST /frota/postos-combustivel")
+        return jsonify({"erro": "Erro ao cadastrar posto de combustível"}), 500
+
+
 # ---------------------------------------------------------------- abastecimentos
 
 @frota_bp.route('/abastecimentos', methods=['GET'])
@@ -977,6 +1021,10 @@ def criar_abastecimento():
 
         litros = _to_num(dados.get('litros'))
         km = _to_int(dados.get('km'))
+        try:
+            posto_cadastro = posto_combustivel_service.resolver_posto(dados)
+        except posto_combustivel_service.PostoInvalido as exc:
+            return jsonify({"erro": str(exc)}), 400
         abast = FrotaAbastecimento(
             veiculo_id=veiculo.id,
             data=data,
@@ -985,7 +1033,8 @@ def criar_abastecimento():
             km=km,
             preco_litro=abastecimento_service.calcular_preco_litro(valor, litros),
             combustivel=(dados.get('combustivel') or '').strip() or None,
-            posto=(dados.get('posto') or '').strip() or None,
+            posto=posto_cadastro.nome if posto_cadastro else None,
+            posto_id=posto_cadastro.id if posto_cadastro else None,
             condutor_id=condutor_id,
             observacao=(dados.get('observacao') or '').strip() or None,
             **_snapshot_local(veiculo),
@@ -1045,9 +1094,16 @@ def editar_abastecimento(item_id):
             if condutor_id and not db.session.get(FrotaCondutor, condutor_id):
                 return jsonify({"erro": "Condutor não encontrado"}), 400
             abast.condutor_id = condutor_id
-        for campo in ('combustivel', 'posto', 'observacao'):
+        for campo in ('combustivel', 'observacao'):
             if campo in dados:
                 setattr(abast, campo, (dados.get(campo) or '').strip() or None)
+        if any(campo in dados for campo in ('posto_id', 'novo_posto_nome', 'posto')):
+            try:
+                posto_cadastro = posto_combustivel_service.resolver_posto(dados)
+            except posto_combustivel_service.PostoInvalido as exc:
+                return jsonify({"erro": str(exc)}), 400
+            abast.posto = posto_cadastro.nome if posto_cadastro else None
+            abast.posto_id = posto_cadastro.id if posto_cadastro else None
 
         abast.preco_litro = abastecimento_service.calcular_preco_litro(
             abast.valor, abast.litros,
@@ -1064,6 +1120,7 @@ def editar_abastecimento(item_id):
             solicitacao.preco_litro = abast.preco_litro
             solicitacao.km = abast.km
             solicitacao.posto = abast.posto
+            solicitacao.posto_id = abast.posto_id
             solicitacao.combustivel = abast.combustivel
             solicitacao.condutor_id = abast.condutor_id
 

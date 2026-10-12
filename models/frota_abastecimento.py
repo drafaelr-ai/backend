@@ -17,6 +17,11 @@ class FrotaAbastecimento(db.Model):
     km = db.Column(db.Integer, nullable=True)
     combustivel = db.Column(db.String(20), nullable=True)
     posto = db.Column(db.String(160), nullable=True)
+    posto_id = db.Column(
+        db.Integer,
+        db.ForeignKey('frota_posto_combustivel.id', ondelete='SET NULL'),
+        nullable=True,
+    )
     condutor_id = db.Column(
         db.Integer, db.ForeignKey('frota_condutor.id', ondelete='SET NULL'), nullable=True,
     )
@@ -38,6 +43,7 @@ class FrotaAbastecimento(db.Model):
 
     veiculo = db.relationship('FrotaVeiculo', lazy=True)
     condutor = db.relationship('FrotaCondutor', lazy=True)
+    posto_cadastro = db.relationship('FrotaPostoCombustivel', lazy=True)
 
     def to_dict(self):
         preco_litro = self.preco_litro
@@ -55,7 +61,8 @@ class FrotaAbastecimento(db.Model):
             'valor': float(self.valor) if self.valor is not None else None,
             'km': self.km,
             'combustivel': self.combustivel,
-            'posto': self.posto,
+            'posto': self.posto or (self.posto_cadastro.nome if self.posto_cadastro else None),
+            'posto_id': self.posto_id,
             'condutor_id': self.condutor_id,
             'condutor_nome': self.condutor.nome if self.condutor else None,
             'local_tipo': self.local_tipo,

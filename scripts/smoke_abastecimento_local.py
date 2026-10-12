@@ -25,6 +25,7 @@ from flask_jwt_extended import create_access_token
 from extensions import db, jwt, limiter
 import models  # noqa: F401 — registra todos os models no metadata
 from models import User, Obra, FrotaVeiculo, FrotaCondutor, FrotaAbastecimento
+from models import FrotaPostoCombustivel
 from models import FrotaAbastecimentoSolicitacao
 from routes.frota import frota_bp
 from routes.abastecimento_publico import abastecimento_publico_bp
@@ -44,7 +45,7 @@ app.register_blueprint(abastecimento_publico_bp)
 TABELAS = [
     'user', 'user_obra_association', 'obra', 'categoria_mo', 'funcionario',
     'frota_condutor', 'frota_veiculo', 'frota_movimentacao', 'frota_documento',
-    'frota_manutencao', 'frota_abastecimento', 'frota_multa',
+    'frota_manutencao', 'frota_posto_combustivel', 'frota_abastecimento', 'frota_multa',
     'frota_abastecimento_solicitacao',
 ]
 
@@ -158,6 +159,22 @@ with app.app_context():
     h_outro = {'Authorization': f'Bearer {create_access_token(identity=str(outro.id))}'}
 
     with app.test_client() as c:
+        print('\n=== cadastro de postos ===')
+        r = c.get('/frota/postos-combustivel', headers=h_master)
+        check('GET postos vazio -> 200', r.status_code == 200 and json.loads(r.data) == [])
+        r = c.post('/frota/postos-combustivel', json={
+            'nome': '  Posto   Central  ',
+        }, headers=h_master)
+        check('POST novo posto -> 201', r.status_code == 201,
+              f'got {r.status_code}: {r.data[:200]}')
+        posto_central = json.loads(r.data)
+        check('novo posto limpa espaços do nome', posto_central['nome'] == 'Posto Central')
+        r = c.post('/frota/postos-combustivel', json={
+            'nome': 'posto central',
+        }, headers=h_master)
+        check('POST posto repetido reaproveita cadastro -> 200',
+              r.status_code == 200 and json.loads(r.data)['id'] == posto_central['id'])
+
         print('\n=== gerar autorização (compradora) ===')
         r = c.post('/frota/abastecimento-solicitacoes', json={}, headers=h_master)
         check('POST sem veiculo_id -> 400', r.status_code == 400)
@@ -215,6 +232,8 @@ with app.app_context():
         check('público: km anterior do painel', pub['km_anterior'] == 80000)
         check('público: limite autorizado', pub['limite_valor'] == 500.0)
         check('público: instrução da compradora', 'BR-101' in (pub['observacao'] or ''))
+        check('público: oferece postos cadastrados',
+              any(p['id'] == posto_central['id'] for p in pub['postos']))
         check('público: NÃO expõe ids internos',
               'veiculo_id' not in pub and 'condutor_id' not in pub and 'id' not in pub)
         check('público: NÃO expõe o token', 'token' not in pub)
@@ -298,7 +317,7 @@ with app.app_context():
 
         r = c.post(f'/abastecimento/{token}', json={
             'km': '80.500', 'litros': '42,5', 'preco_litro': '5,89',
-            'posto': 'Posto Smoke Ltda', 'observacao': 'Tanque cheio',
+            'novo_posto_nome': 'Posto Smoke Ltda', 'observacao': 'Tanque cheio',
         })
         check('envio ok (valor derivado de litros x preço) -> 201', r.status_code == 201,
               f'got {r.status_code}: {r.data[:300]}')
@@ -318,6 +337,10 @@ with app.app_context():
         check('abastecimento: snapshot do local do veículo',
               abast.obra_id == obra1_id and abast.local_tipo == 'obra')
         check('abastecimento: comprovante vinculado', bool(abast.comprovante_url))
+        check('abastecimento: novo posto cadastrado e vinculado',
+              abast.posto_id is not None
+              and abast.posto_cadastro.nome == 'Posto Smoke Ltda'
+              and FrotaPostoCombustivel.query.count() == 2)
         veic = db.session.get(FrotaVeiculo, veic_id)
         check('km do veículo atualizado', veic.km_atual == 80500)
         sol_db = db.session.get(FrotaAbastecimentoSolicitacao, sol_id)
@@ -377,12 +400,20 @@ with app.app_context():
         print('\n=== consumo do veículo ===')
         # 80500 (do link) → 80900 com 40 L = 10 km/l → 81300 com 50 L = 8 km/l
         for km, litros, valor in ((80900, 40, 280), (81300, 50, 350)):
-            r = c.post('/frota/abastecimentos', json={
+            payload_manual = {
                 'veiculo_id': veic_id, 'data': date.today().isoformat(),
                 'km': km, 'litros': litros, 'valor': valor,
-            }, headers=h_master)
+            }
+            if km == 80900:
+                payload_manual['posto_id'] = posto_central['id']
+            r = c.post('/frota/abastecimentos', json=payload_manual, headers=h_master)
             check(f'POST abastecimento manual km={km} -> 201', r.status_code == 201,
                   f'got {r.status_code}: {r.data[:200]}')
+            if km == 80900:
+                manual = json.loads(r.data)
+                check('abastecimento manual usa posto cadastrado',
+                      manual['posto_id'] == posto_central['id']
+                      and manual['posto'] == 'Posto Central')
 
         r = c.get(f'/frota/veiculos/{veic_id}/consumo', headers=h_master)
         check('GET consumo -> 200', r.status_code == 200, f'got {r.status_code}: {r.data[:300]}')

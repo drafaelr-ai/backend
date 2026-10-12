@@ -57,3 +57,4 @@ from .planejamento_atividade import PlanejamentoAtividade  # noqa: F401
 from .planejamento_apontamento import PlanejamentoApontamento  # noqa: F401
 from .planejamento_restricao import PlanejamentoRestricao  # noqa: F401
 from .planejamento_fechamento import PlanejamentoFechamento  # noqa: F401
+from .frota_posto_combustivel import FrotaPostoCombustivel  # noqa: F401

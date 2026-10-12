@@ -40,6 +40,11 @@ class FrotaAbastecimentoSolicitacao(db.Model):
     preco_litro = db.Column(db.Numeric(10, 3), nullable=True)
     valor_total = db.Column(db.Numeric(12, 2), nullable=True)
     posto = db.Column(db.String(160), nullable=True)
+    posto_id = db.Column(
+        db.Integer,
+        db.ForeignKey('frota_posto_combustivel.id', ondelete='SET NULL'),
+        nullable=True,
+    )
     data_abastecimento = db.Column(db.Date, nullable=True)
     comprovante_url = db.Column(db.String(500), nullable=True)
     observacao_motorista = db.Column(db.String(300), nullable=True)
@@ -54,6 +59,7 @@ class FrotaAbastecimentoSolicitacao(db.Model):
 
     veiculo = db.relationship('FrotaVeiculo', lazy=True)
     condutor = db.relationship('FrotaCondutor', lazy=True)
+    posto_cadastro = db.relationship('FrotaPostoCombustivel', lazy=True)
 
     def is_expirado(self):
         return datetime.utcnow() > self.expira_em
@@ -84,6 +90,7 @@ class FrotaAbastecimentoSolicitacao(db.Model):
             'preco_litro': float(self.preco_litro) if self.preco_litro is not None else None,
             'valor_total': float(self.valor_total) if self.valor_total is not None else None,
             'posto': self.posto,
+            'posto_id': self.posto_id,
             'data_abastecimento': (self.data_abastecimento.isoformat()
                                    if self.data_abastecimento else None),
             'observacao_motorista': self.observacao_motorista,
@@ -112,6 +119,7 @@ class FrotaAbastecimentoSolicitacao(db.Model):
             'preco_litro': float(self.preco_litro) if self.preco_litro is not None else None,
             'valor_total': float(self.valor_total) if self.valor_total is not None else None,
             'posto': self.posto,
+            'posto_id': self.posto_id,
             'data_abastecimento': (self.data_abastecimento.isoformat()
                                    if self.data_abastecimento else None),
         }

@@ -805,6 +805,38 @@ def run_auto_migration():
         """)
 
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_posto_combustivel (
+                id                SERIAL PRIMARY KEY,
+                nome              VARCHAR(160) NOT NULL,
+                nome_normalizado  VARCHAR(160) NOT NULL,
+                ativo             BOOLEAN NOT NULL DEFAULT TRUE,
+                data_criacao      TIMESTAMP NOT NULL DEFAULT NOW(),
+                data_atualizacao  TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_frota_posto_nome_normalizado
+                ON frota_posto_combustivel (nome_normalizado);
+            CREATE INDEX IF NOT EXISTS idx_frota_posto_ativo_nome
+                ON frota_posto_combustivel (ativo, nome);
+
+            ALTER TABLE frota_posto_combustivel ENABLE ROW LEVEL SECURITY;
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                    REVOKE ALL ON TABLE frota_posto_combustivel FROM anon;
+                    REVOKE ALL ON SEQUENCE frota_posto_combustivel_id_seq FROM anon;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    REVOKE ALL ON TABLE frota_posto_combustivel FROM authenticated;
+                    REVOKE ALL ON SEQUENCE frota_posto_combustivel_id_seq FROM authenticated;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+                    REVOKE ALL ON TABLE frota_posto_combustivel FROM service_role;
+                    REVOKE ALL ON SEQUENCE frota_posto_combustivel_id_seq FROM service_role;
+                END IF;
+            END $$;
+        """)
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS frota_abastecimento (
                 id           SERIAL PRIMARY KEY,
                 veiculo_id   INTEGER NOT NULL REFERENCES frota_veiculo(id) ON DELETE CASCADE,
@@ -814,6 +846,7 @@ def run_auto_migration():
                 km           INTEGER,
                 combustivel  VARCHAR(20),
                 posto        VARCHAR(160),
+                posto_id     INTEGER REFERENCES frota_posto_combustivel(id) ON DELETE SET NULL,
                 condutor_id  INTEGER REFERENCES frota_condutor(id) ON DELETE SET NULL,
                 local_tipo   VARCHAR(10),
                 obra_id      INTEGER REFERENCES obra(id) ON DELETE SET NULL,
@@ -825,6 +858,7 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_frota_abast_veiculo ON frota_abastecimento (veiculo_id);
             CREATE INDEX IF NOT EXISTS idx_frota_abast_obra ON frota_abastecimento (obra_id);
             CREATE INDEX IF NOT EXISTS idx_frota_abast_data ON frota_abastecimento (data);
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_posto ON frota_abastecimento (posto_id);
         """)
 
         cur.execute("""
@@ -873,6 +907,7 @@ def run_auto_migration():
                 preco_litro          NUMERIC(10,3),
                 valor_total          NUMERIC(12,2),
                 posto                VARCHAR(160),
+                posto_id             INTEGER REFERENCES frota_posto_combustivel(id) ON DELETE SET NULL,
                 data_abastecimento   DATE,
                 comprovante_url      VARCHAR(500),
                 observacao_motorista VARCHAR(300),
@@ -890,9 +925,59 @@ def run_auto_migration():
                 ON frota_abastecimento_solicitacao (status);
         """)
 
-        logger.info("✅ FROTA: 8 tabelas garantidas (frota_condutor, frota_veiculo, "
+        # Cadastro reutilizável de postos. O texto continua no abastecimento
+        # como snapshot histórico; posto_id liga os lançamentos novos e migra
+        # nomes já existentes sem apagar nem reescrever esse snapshot.
+        cur.execute("""
+            ALTER TABLE frota_abastecimento
+                ADD COLUMN IF NOT EXISTS posto_id INTEGER
+                REFERENCES frota_posto_combustivel(id) ON DELETE SET NULL;
+            ALTER TABLE frota_abastecimento_solicitacao
+                ADD COLUMN IF NOT EXISTS posto_id INTEGER
+                REFERENCES frota_posto_combustivel(id) ON DELETE SET NULL;
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_posto
+                ON frota_abastecimento (posto_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_abast_sol_posto
+                ON frota_abastecimento_solicitacao (posto_id);
+
+            INSERT INTO frota_posto_combustivel (nome, nome_normalizado)
+            SELECT MIN(nome), nome_normalizado
+            FROM (
+                SELECT REGEXP_REPLACE(BTRIM(posto), E'\\\\s+', ' ', 'g') AS nome,
+                       LOWER(REGEXP_REPLACE(BTRIM(posto), E'\\\\s+', ' ', 'g')) AS nome_normalizado
+                FROM frota_abastecimento
+                WHERE BTRIM(COALESCE(posto, '')) <> ''
+                UNION ALL
+                SELECT REGEXP_REPLACE(BTRIM(posto), E'\\\\s+', ' ', 'g') AS nome,
+                       LOWER(REGEXP_REPLACE(BTRIM(posto), E'\\\\s+', ' ', 'g')) AS nome_normalizado
+                FROM frota_abastecimento_solicitacao
+                WHERE BTRIM(COALESCE(posto, '')) <> ''
+            ) nomes
+            GROUP BY nome_normalizado
+            ON CONFLICT (nome_normalizado) DO NOTHING;
+
+            UPDATE frota_abastecimento abastecimento
+            SET posto_id = posto.id
+            FROM frota_posto_combustivel posto
+            WHERE abastecimento.posto_id IS NULL
+              AND BTRIM(COALESCE(abastecimento.posto, '')) <> ''
+              AND posto.nome_normalizado = LOWER(
+                  REGEXP_REPLACE(BTRIM(abastecimento.posto), E'\\\\s+', ' ', 'g')
+              );
+
+            UPDATE frota_abastecimento_solicitacao solicitacao
+            SET posto_id = posto.id
+            FROM frota_posto_combustivel posto
+            WHERE solicitacao.posto_id IS NULL
+              AND BTRIM(COALESCE(solicitacao.posto, '')) <> ''
+              AND posto.nome_normalizado = LOWER(
+                  REGEXP_REPLACE(BTRIM(solicitacao.posto), E'\\\\s+', ' ', 'g')
+              );
+        """)
+
+        logger.info("✅ FROTA: 9 tabelas garantidas (frota_condutor, frota_veiculo, "
                     "frota_movimentacao, frota_documento, frota_manutencao, "
-                    "frota_abastecimento, frota_multa, "
+                    "frota_posto_combustivel, frota_abastecimento, frota_multa, "
                     "frota_abastecimento_solicitacao)")
 
         # =================================================================

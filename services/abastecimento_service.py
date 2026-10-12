@@ -59,6 +59,7 @@ def registrar_abastecimento(veiculo, dados, origem='manual', solicitacao_id=None
         preco_litro=preco_litro,
         combustivel=(dados.get('combustivel') or None),
         posto=(dados.get('posto') or None),
+        posto_id=dados.get('posto_id'),
         condutor_id=dados.get('condutor_id'),
         observacao=(dados.get('observacao') or None),
         comprovante_url=comprovante_url,

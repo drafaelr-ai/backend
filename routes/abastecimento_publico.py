@@ -19,8 +19,9 @@ from flask import Blueprint, jsonify, request
 
 from extensions import db, limiter
 from models.frota_abastecimento_solicitacao import FrotaAbastecimentoSolicitacao
+from models.frota_posto_combustivel import FrotaPostoCombustivel
 from models.frota_veiculo import FrotaVeiculo
-from services import storage_service, abastecimento_service
+from services import storage_service, abastecimento_service, posto_combustivel_service
 from services import recibo_abastecimento_service
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,12 @@ def obter_abastecimento_publico(token):
         sol, erro = _buscar(token)
         if erro:
             return erro
-        return jsonify(sol.to_dict_publico()), 200
+        dados = sol.to_dict_publico()
+        postos = (FrotaPostoCombustivel.query
+                  .filter(FrotaPostoCombustivel.ativo.is_(True))
+                  .order_by(FrotaPostoCombustivel.nome.asc()).all())
+        dados['postos'] = [posto.to_dict_publico() for posto in postos]
+        return jsonify(dados), 200
     except Exception:
         logger.exception("Erro em GET /abastecimento/<token>")
         return jsonify({"erro": "Erro ao carregar o link."}), 500
@@ -278,11 +284,17 @@ def enviar_abastecimento(token):
             return jsonify({"erro": "A data do abastecimento não pode ser futura."}), 400
 
         try:
+            posto_cadastro = posto_combustivel_service.resolver_posto(dados)
+        except posto_combustivel_service.PostoInvalido as exc:
+            return jsonify({"erro": str(exc)}), 400
+
+        try:
             sol.km = km
             sol.litros = litros
             sol.preco_litro = preco_litro
             sol.valor_total = valor_total
-            sol.posto = (dados.get('posto') or '').strip()[:160] or None
+            sol.posto = posto_cadastro.nome if posto_cadastro else None
+            sol.posto_id = posto_cadastro.id if posto_cadastro else None
             sol.data_abastecimento = data_abast
             sol.combustivel = (dados.get('combustivel') or sol.combustivel or None)
             sol.observacao_motorista = (dados.get('observacao') or '').strip()[:300] or None
@@ -297,6 +309,7 @@ def enviar_abastecimento(token):
                     'preco_litro': preco_litro,
                     'combustivel': sol.combustivel,
                     'posto': sol.posto,
+                    'posto_id': sol.posto_id,
                     'condutor_id': sol.condutor_id,
                     'observacao': sol.observacao_motorista,
                 },

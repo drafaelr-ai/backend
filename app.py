@@ -198,3 +198,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
     app.run(host='0.0.0.0', port=port, debug=True)
+from models.frota_posto_combustivel import FrotaPostoCombustivel  # noqa: F401
