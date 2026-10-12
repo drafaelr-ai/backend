@@ -60,6 +60,7 @@ from models.frota_veiculo import FrotaVeiculo         # noqa: F401
 from models.frota_movimentacao import FrotaMovimentacao  # noqa: F401
 from models.frota_documento import FrotaDocumento     # noqa: F401
 from models.frota_manutencao import FrotaManutencao   # noqa: F401
+from models.frota_posto_combustivel import FrotaPostoCombustivel  # noqa: F401
 from models.frota_abastecimento import FrotaAbastecimento  # noqa: F401
 from models.frota_multa import FrotaMulta             # noqa: F401
 # Módulo Solicitações (compras)
@@ -198,4 +199,3 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"--- [LOG] Iniciando servidor Flask na porta {port} ---")
     app.run(host='0.0.0.0', port=port, debug=True)
-from models.frota_posto_combustivel import FrotaPostoCombustivel  # noqa: F401
