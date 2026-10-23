@@ -8,9 +8,11 @@ timeout de um segundo do fornecedor.
 """
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from contextlib import contextmanager
 import logging
 import os
 import re
+import tempfile
 from urllib.parse import quote
 
 import requests
@@ -204,6 +206,12 @@ def _configuracao_consulta():
     token = (os.environ.get('EFROTAS_API_TOKEN') or '').strip()
     cert_path = (os.environ.get('EFROTAS_CLIENT_CERT_PATH') or '').strip()
     key_path = (os.environ.get('EFROTAS_CLIENT_KEY_PATH') or '').strip()
+    # O Fly entrega Secrets como variáveis de ambiente. Aceitar o PEM aqui
+    # evita exigir volume ou imagem customizada só para uma dupla de arquivos
+    # de mTLS. Os arquivos temporários são criados apenas durante a chamada e
+    # removidos em seguida, sem nunca expor o conteúdo em logs ou respostas.
+    cert_pem = (os.environ.get('EFROTAS_CLIENT_CERT_PEM') or '').strip()
+    key_pem = (os.environ.get('EFROTAS_CLIENT_KEY_PEM') or '').strip()
     ca_bundle = (os.environ.get('EFROTAS_CA_BUNDLE') or '').strip()
 
     erros = []
@@ -211,7 +219,13 @@ def _configuracao_consulta():
         erros.append('Defina EFROTAS_API_BASE_URL na API.')
     if bool(cert_path) != bool(key_path):
         erros.append('Informe certificado e chave do e-Frotas juntos.')
-    if cert_path and key_path:
+    if bool(cert_pem) != bool(key_pem):
+        erros.append('Informe certificado PEM e chave PEM do e-Frotas juntos.')
+    if cert_pem and cert_path:
+        erros.append('Use o certificado/chave por arquivo ou por Secret PEM, não os dois.')
+    if cert_pem and key_pem:
+        modo = 'certificado'
+    elif cert_path and key_path:
         if not os.path.isfile(cert_path) or not os.path.isfile(key_path):
             erros.append('O certificado ou a chave do e-Frotas não foi encontrado no servidor.')
         modo = 'certificado'
@@ -232,6 +246,7 @@ def _configuracao_consulta():
         'base_url': base_url,
         'token': token,
         'cert': (cert_path, key_path) if cert_path and key_path else None,
+        'cert_pem': (cert_pem, key_pem) if cert_pem and key_pem else None,
         'verify': ca_bundle or True,
         'modo': modo,
     }
@@ -257,6 +272,30 @@ def _timeout_consulta():
         return 15
 
 
+@contextmanager
+def _certificado_para_requisicao(cfg):
+    """Fornece ``cert`` compatível com requests e remove PEM temporário."""
+    if not cfg['cert_pem']:
+        yield cfg['cert']
+        return
+
+    caminhos = []
+    try:
+        for conteudo, sufixo in zip(cfg['cert_pem'], ('.crt', '.key')):
+            descritor, caminho = tempfile.mkstemp(prefix='efrotas-', suffix=sufixo)
+            caminhos.append(caminho)
+            with os.fdopen(descritor, 'w', encoding='utf-8') as arquivo:
+                arquivo.write(conteudo)
+                arquivo.write('\n')
+        yield tuple(caminhos)
+    finally:
+        for caminho in caminhos:
+            try:
+                os.unlink(caminho)
+            except FileNotFoundError:
+                pass
+
+
 def _requisitar_efrotas(caminho):
     cfg = _configuracao_consulta()
     if not cfg['habilitada']:
@@ -265,13 +304,14 @@ def _requisitar_efrotas(caminho):
     if cfg['token']:
         headers['Authorization'] = f"Bearer {cfg['token']}"
     try:
-        resposta = requests.get(
-            f"{cfg['base_url']}/{caminho.lstrip('/')}",
-            headers=headers,
-            cert=cfg['cert'],
-            verify=cfg['verify'],
-            timeout=_timeout_consulta(),
-        )
+        with _certificado_para_requisicao(cfg) as certificado:
+            resposta = requests.get(
+                f"{cfg['base_url']}/{caminho.lstrip('/')}",
+                headers=headers,
+                cert=certificado,
+                verify=cfg['verify'],
+                timeout=_timeout_consulta(),
+            )
     except requests.RequestException as exc:
         logger.warning('e-Frotas: falha de rede na consulta histórica: %s', exc)
         raise EFrotasConsultaErro('Não foi possível consultar o e-Frotas agora.') from exc

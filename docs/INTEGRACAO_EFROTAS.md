@@ -51,13 +51,17 @@ configuração abaixo. Nunca exponha esses valores no navegador.
 
 ```dotenv
 EFROTAS_API_BASE_URL=https://efrotas.estaleiro.serpro.gov.br/efrotas/api
-EFROTAS_CLIENT_CERT_PATH=/run/secrets/efrotas-client.crt
-EFROTAS_CLIENT_KEY_PATH=/run/secrets/efrotas-client.key
+EFROTAS_CLIENT_CERT_PEM="-----BEGIN CERTIFICATE-----\n..."
+EFROTAS_CLIENT_KEY_PEM="-----BEGIN PRIVATE KEY-----\n..."
 EFROTAS_TIMEOUT_SECONDS=20
 ```
 
 Em produção, o e-Frotas exige certificado ICP-Brasil de pessoa jurídica
-habilitado no Credencia (mTLS). Em homologação pode-se usar
+habilitado no Credencia (mTLS). No Fly, cadastre os dois blocos PEM como
+**Secrets** com esses nomes: a API cria arquivos temporários protegidos apenas
+durante a conexão e os remove em seguida. Em servidor que já monte arquivos,
+use `EFROTAS_CLIENT_CERT_PATH` e `EFROTAS_CLIENT_KEY_PATH` no lugar dos PEMs;
+nunca configure ambos os formatos. Em homologação pode-se usar
 `EFROTAS_API_TOKEN` como Bearer token no lugar do par de certificado/chave.
 
 No painel, selecione até **cinco veículos** e um período de até **um ano**. A

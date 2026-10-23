@@ -13,6 +13,7 @@ EventoEFrotasInvalido = _MODULO.EventoEFrotasInvalido
 EFrotasConsultaErro = _MODULO.EFrotasConsultaErro
 interpretar_evento_infracao = _MODULO.interpretar_evento_infracao
 consultar_infracoes_por_placa = _MODULO.consultar_infracoes_por_placa
+status_consulta_efrotas = _MODULO.status_consulta_efrotas
 
 
 class EFrotasServiceTest(unittest.TestCase):
@@ -130,6 +131,17 @@ class EFrotasServiceTest(unittest.TestCase):
         }, clear=True), patch.object(_MODULO.requests, 'get', return_value=resposta):
             with self.assertRaisesRegex(EFrotasConsultaErro, 'formato incompatível'):
                 consultar_infracoes_por_placa('ABC1D23', date(2025, 1, 1), date(2025, 12, 31))
+
+    def test_secret_pem_habilita_consulta_de_producao_sem_arquivo_montado(self):
+        with patch.dict('os.environ', {
+            'EFROTAS_API_BASE_URL': 'https://efrotas.estaleiro.serpro.gov.br/efrotas/api',
+            'EFROTAS_CLIENT_CERT_PEM': '-----BEGIN CERTIFICATE-----\ncertificado\n-----END CERTIFICATE-----',
+            'EFROTAS_CLIENT_KEY_PEM': '-----BEGIN PRIVATE KEY-----\nchave\n-----END PRIVATE KEY-----',
+        }, clear=True):
+            status = status_consulta_efrotas()
+
+        self.assertTrue(status['habilitada'])
+        self.assertEqual(status['modo'], 'certificado')
 
     def test_recusa_evento_sem_identificador_oficial(self):
         with self.assertRaisesRegex(EventoEFrotasInvalido, 'numeroAutoInfracao'):
