@@ -63,6 +63,8 @@ from models.frota_manutencao import FrotaManutencao   # noqa: F401
 from models.frota_posto_combustivel import FrotaPostoCombustivel  # noqa: F401
 from models.frota_abastecimento import FrotaAbastecimento  # noqa: F401
 from models.frota_multa import FrotaMulta             # noqa: F401
+from models.frota_efrotas_evento import FrotaEFrotasEvento  # noqa: F401
+from models.frota_efrotas_sincronizacao import FrotaEFrotasSincronizacao  # noqa: F401
 # Módulo Solicitações (compras)
 from models.solicitacao_compra import SolicitacaoCompra    # noqa: F401
 from models.solicitacao_item import SolicitacaoItem        # noqa: F401
@@ -83,6 +85,7 @@ from routes import (
     cronograma_bp, orcamento_eng_bp, obras_bp, superlink_bp,
     rh_bp, frota_bp, abastecimento_publico_bp, solicitacoes_bp,
     almoxarifado_bp, home_bp, planejamento_bp, telegram_bp,
+    efrotas_bp,
 )
 
 setup_logging()
@@ -177,6 +180,7 @@ def create_app(config_class=Config):
     app.register_blueprint(home_bp)
     app.register_blueprint(planejamento_bp)
     app.register_blueprint(telegram_bp)
+    app.register_blueprint(efrotas_bp)
 
     return app
 

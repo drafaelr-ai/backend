@@ -42,6 +42,8 @@ from .frota_posto_combustivel import FrotaPostoCombustivel  # noqa: F401
 from .frota_abastecimento import FrotaAbastecimento  # noqa: F401
 from .frota_abastecimento_solicitacao import FrotaAbastecimentoSolicitacao  # noqa: F401
 from .frota_multa import FrotaMulta  # noqa: F401
+from .frota_efrotas_evento import FrotaEFrotasEvento  # noqa: F401
+from .frota_efrotas_sincronizacao import FrotaEFrotasSincronizacao  # noqa: F401
 # --- Módulo Solicitações (compras) ---
 from .solicitacao_compra import SolicitacaoCompra  # noqa: F401
 from .solicitacao_item import SolicitacaoItem  # noqa: F401

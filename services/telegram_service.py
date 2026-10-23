@@ -28,6 +28,7 @@ CATEGORIAS = {
     'solicitacoes': 'Solicitações de compra',
     'boletos': 'Boletos e vencimentos',
     'financeiro': 'Pagamentos e orçamentos',
+    'frota': 'Frota e veículos',
     'outros': 'Demais avisos',
 }
 
@@ -46,6 +47,8 @@ def categoria_do_tipo(tipo):
         return 'boletos'
     if t.startswith(('pagamento', 'orcamento', 'lancamento', 'parcela')):
         return 'financeiro'
+    if t.startswith('frota_'):
+        return 'frota'
     return 'outros'
 
 

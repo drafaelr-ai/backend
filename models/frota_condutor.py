@@ -17,11 +17,15 @@ class FrotaCondutor(db.Model):
     funcionario_id = db.Column(
         db.Integer, db.ForeignKey('funcionario.id', ondelete='SET NULL'), nullable=True,
     )
+    usuario_id = db.Column(
+        db.Integer, db.ForeignKey('user.id', ondelete='SET NULL'), nullable=True,
+    )
     status = db.Column(db.String(20), nullable=False, default='ativo')  # ativo | inativo
     observacao = db.Column(db.String(300), nullable=True)
     data_criacao = db.Column(db.DateTime, default=datetime.utcnow)
 
     funcionario = db.relationship('Funcionario', lazy=True)
+    usuario = db.relationship('User', lazy=True)
 
     def _cnh_status(self):
         if not self.cnh_validade:
@@ -45,6 +49,8 @@ class FrotaCondutor(db.Model):
             'cnh_status': self._cnh_status(),
             'funcionario_id': self.funcionario_id,
             'funcionario_nome': self.funcionario.nome if self.funcionario else None,
+            'usuario_id': self.usuario_id,
+            'usuario_nome': self.usuario.username if self.usuario else None,
             'status': self.status,
             'observacao': self.observacao,
             'data_criacao': self.data_criacao.isoformat() if self.data_criacao else None,

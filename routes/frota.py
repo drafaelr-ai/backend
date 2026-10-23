@@ -19,6 +19,8 @@ Erros de validação são SEMPRE 400 — nunca 422 (fetchWithAuth desloga em 401
 import re
 import secrets
 import logging
+import os
+import time
 from calendar import monthrange
 from datetime import datetime, date, timedelta
 
@@ -37,10 +39,20 @@ from models.frota_posto_combustivel import FrotaPostoCombustivel
 from models.frota_abastecimento import FrotaAbastecimento
 from models.frota_abastecimento_solicitacao import FrotaAbastecimentoSolicitacao
 from models.frota_multa import FrotaMulta
+from models.frota_efrotas_evento import FrotaEFrotasEvento
+from models.frota_efrotas_sincronizacao import FrotaEFrotasSincronizacao
 from models.funcionario import Funcionario
 from models.obra import Obra
+from models.user import User
 from services import storage_service, admin_read_service
 from services import abastecimento_service, posto_combustivel_service
+from services.efrotas_import_service import processar_evento_efrotas
+from services.efrotas_service import (
+    EFrotasConfiguracaoErro,
+    EFrotasConsultaErro,
+    consultar_infracoes_por_placa,
+    status_consulta_efrotas,
+)
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
 
 logger = logging.getLogger(__name__)
@@ -65,6 +77,8 @@ _DOC_TIPOS = {'crlv', 'seguro', 'ipva', 'licenciamento', 'outro'}
 _MANUT_TIPOS = {'preventiva', 'corretiva'}
 _MULTA_STATUS = {'pendente', 'paga', 'contestada'}
 _DESTINO_TIPOS = {'obra', 'imovel', 'sem_local'}
+_EFROTAS_MAX_DIAS_POR_SINCRONIZACAO = 366
+_EFROTAS_MAX_VEICULOS_POR_SINCRONIZACAO = 5
 
 
 # ---------------------------------------------------------------- helpers
@@ -105,6 +119,26 @@ def _to_int(valor):
         return int(valor)
     except (TypeError, ValueError):
         return None
+
+
+def _to_bool(valor):
+    """Converte flags JSON/form sem considerar a string 'false' como verdade."""
+    if isinstance(valor, str):
+        return valor.strip().lower() in {'1', 'true', 'sim', 'yes'}
+    return bool(valor)
+
+
+def _eh_gestor(user):
+    return bool(user and user.role in ('master', 'administrador'))
+
+
+def _janelas_anuais(data_inicio, data_fim):
+    """O e-Frotas limita a consulta por placa a uma janela anual."""
+    inicio = data_inicio
+    while inicio <= data_fim:
+        fim = min(inicio + timedelta(days=365), data_fim)
+        yield inicio, fim
+        inicio = fim + timedelta(days=1)
 
 
 def _obra_ids_permitidos(user):
@@ -384,6 +418,8 @@ def editar_veiculo(veiculo_id):
             if status not in _VEICULO_STATUS:
                 return jsonify({"erro": f"status inválido (use {sorted(_VEICULO_STATUS)})"}), 400
             veiculo.status = status
+            if status == 'inativo':
+                veiculo.condutor_atual_id = None
         for campo in ('renavam', 'chassi', 'marca', 'cor', 'combustivel', 'observacao'):
             if campo in dados:
                 setattr(veiculo, campo, (dados.get(campo) or '').strip() or None)
@@ -413,6 +449,7 @@ def remover_veiculo(veiculo_id):
         if not _veiculo_visivel(veiculo, get_current_user()):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
         veiculo.status = 'inativo'
+        veiculo.condutor_atual_id = None
         db.session.commit()
         return jsonify({"ok": True}), 200
     except Exception as e:
@@ -425,25 +462,52 @@ def remover_veiculo(veiculo_id):
 @jwt_required()
 def atribuir_condutor(veiculo_id):
     try:
-        veiculo = db.session.get(FrotaVeiculo, veiculo_id)
+        veiculo = (FrotaVeiculo.query
+                   .filter(FrotaVeiculo.id == veiculo_id)
+                   .with_for_update()
+                   .first())
         if not veiculo:
             return jsonify({"erro": "Veículo não encontrado"}), 404
         if not _veiculo_visivel(veiculo, get_current_user()):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        if veiculo.status == 'inativo':
+            return jsonify({"erro": "Não é possível atribuir condutor a veículo inativo."}), 400
 
         dados = request.get_json(silent=True) or {}
         condutor_id = _to_int(dados.get('condutor_id'))
         if dados.get('condutor_id') and not condutor_id:
             return jsonify({"erro": "condutor_id inválido"}), 400
+        if (veiculo.condutor_atual_id
+                and veiculo.condutor_atual_id != condutor_id
+                and not _to_bool(dados.get('transferir_veiculo'))):
+            nome_atual = veiculo.condutor_atual.nome if veiculo.condutor_atual else 'outro condutor'
+            return jsonify({
+                "erro": f"Este veículo já está atribuído a {nome_atual}. "
+                        "Confirme a alteração para continuar."
+            }), 409
         if condutor_id:
             condutor = db.session.get(FrotaCondutor, condutor_id)
             if not condutor:
                 return jsonify({"erro": "Condutor não encontrado"}), 400
             if condutor.status != 'ativo':
                 return jsonify({"erro": "Condutor está inativo"}), 400
+            outro_veiculo = (FrotaVeiculo.query
+                              .filter(FrotaVeiculo.condutor_atual_id == condutor_id,
+                                      FrotaVeiculo.id != veiculo.id,
+                                      FrotaVeiculo.status != 'inativo')
+                              .with_for_update()
+                              .first())
+            if outro_veiculo:
+                return jsonify({
+                    "erro": f"Condutor já está atribuído ao veículo {outro_veiculo.placa}. "
+                            "Faça a troca pelo cadastro do condutor."
+                }), 400
         veiculo.condutor_atual_id = condutor_id
         db.session.commit()
         return jsonify(veiculo.to_dict()), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"erro": "O condutor acabou de ser atribuído a outro veículo. Atualize a tela e tente novamente."}), 409
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PATCH /frota/veiculos/<id>/condutor")
@@ -531,6 +595,70 @@ def criar_movimentacao(veiculo_id):
 
 # ---------------------------------------------------------------- condutores
 
+def _usuario_notificacao_valido(usuario_id, solicitante):
+    """Só gestores podem ligar um login a um motorista (controle de privacidade)."""
+    if not usuario_id:
+        return None, None
+    if not solicitante or solicitante.role not in ('master', 'administrador'):
+        return None, (jsonify({'erro': 'Somente gestores podem vincular o login do condutor.'}), 403)
+    usuario = db.session.get(User, usuario_id)
+    if not usuario:
+        return None, (jsonify({'erro': 'Usuário do sistema não encontrado.'}), 400)
+    return usuario, None
+
+
+def _definir_veiculo_do_condutor(condutor, veiculo_id, solicitante, transferir=False):
+    """Mantém uma atribuição atual por condutor, numa única transação."""
+    veiculo_id_bruto = veiculo_id
+    veiculo_id = _to_int(veiculo_id_bruto)
+    if veiculo_id is None and veiculo_id_bruto not in (None, ''):
+        return None, (jsonify({'erro': 'veiculo_id inválido.'}), 400)
+    destino = None
+    if veiculo_id:
+        if condutor.status != 'ativo':
+            return None, (jsonify({'erro': 'Ative o condutor antes de atribuir um veículo.'}), 400)
+        destino = (FrotaVeiculo.query
+                   .filter(FrotaVeiculo.id == veiculo_id)
+                   .with_for_update()
+                   .first())
+        if not destino:
+            return None, (jsonify({'erro': 'Veículo não encontrado.'}), 400)
+        if destino.status == 'inativo':
+            return None, (jsonify({'erro': 'Não é possível atribuir veículo inativo.'}), 400)
+        if not _veiculo_visivel(destino, solicitante):
+            return None, (jsonify({'erro': 'Acesso negado a este veículo.'}), 403)
+        if destino.condutor_atual_id and destino.condutor_atual_id != condutor.id:
+            if not transferir:
+                nome = destino.condutor_atual.nome if destino.condutor_atual else 'outro condutor'
+                return None, (jsonify({
+                    'erro': f'Este veículo já está atribuído a {nome}. Confirme a transferência para continuar.'
+                }), 409)
+    atuais = (FrotaVeiculo.query
+               .filter(FrotaVeiculo.condutor_atual_id == condutor.id,
+                       FrotaVeiculo.status != 'inativo')
+               .with_for_update()
+               .all())
+    for veiculo in atuais:
+        if not destino or veiculo.id != destino.id:
+            veiculo.condutor_atual_id = None
+    if destino:
+        destino.condutor_atual_id = condutor.id
+    return destino, None
+
+
+@frota_bp.route('/usuarios-notificaveis', methods=['GET'])
+@jwt_required()
+def listar_usuarios_notificaveis():
+    """Lista mínima para um gestor vincular a conta que receberá a multa."""
+    user = get_current_user()
+    if not user or user.role not in ('master', 'administrador'):
+        return jsonify({'erro': 'Acesso negado.'}), 403
+    usuarios = User.query.order_by(User.username).all()
+    return jsonify([
+        {'id': usuario.id, 'username': usuario.username, 'role': usuario.role}
+        for usuario in usuarios
+    ]), 200
+
 @frota_bp.route('/condutores', methods=['GET'])
 @jwt_required()
 def listar_condutores():
@@ -543,18 +671,23 @@ def listar_condutores():
         condutores = query.order_by(FrotaCondutor.nome).all()
 
         # Veículo atual de cada condutor (para a tela de condutores).
-        veiculos = dict(
-            db.session.query(FrotaVeiculo.condutor_atual_id, FrotaVeiculo.placa)
-            .filter(FrotaVeiculo.condutor_atual_id.isnot(None),
-                    FrotaVeiculo.status != 'inativo')
-            .all()
-        )
+        veiculos = {
+            condutor_id: (veiculo_id, placa)
+            for condutor_id, veiculo_id, placa in db.session.query(
+                FrotaVeiculo.condutor_atual_id, FrotaVeiculo.id, FrotaVeiculo.placa
+            ).filter(
+                FrotaVeiculo.condutor_atual_id.isnot(None),
+                FrotaVeiculo.status != 'inativo',
+            ).all()
+        }
         out = []
         for c in condutores:
             if not _condutor_visivel(c, user):
                 continue
             d = c.to_dict()
-            d['veiculo_atual_placa'] = veiculos.get(c.id)
+            veiculo_atual = veiculos.get(c.id)
+            d['veiculo_atual_id'] = veiculo_atual[0] if veiculo_atual else None
+            d['veiculo_atual_placa'] = veiculo_atual[1] if veiculo_atual else None
             out.append(d)
         return jsonify(out), 200
     except Exception as e:
@@ -573,6 +706,10 @@ def criar_condutor():
         funcionario_id = _to_int(dados.get('funcionario_id'))
         if funcionario_id and not db.session.get(Funcionario, funcionario_id):
             return jsonify({"erro": "Funcionário não encontrado"}), 400
+        usuario_id = _to_int(dados.get('usuario_id'))
+        _, erro = _usuario_notificacao_valido(usuario_id, get_current_user())
+        if erro:
+            return erro
 
         condutor = FrotaCondutor(
             nome=nome,
@@ -582,11 +719,26 @@ def criar_condutor():
             cnh_categoria=(dados.get('cnh_categoria') or '').strip().upper() or None,
             cnh_validade=_parse_date(dados.get('cnh_validade')),
             funcionario_id=funcionario_id,
+            usuario_id=usuario_id,
             observacao=(dados.get('observacao') or '').strip() or None,
         )
         db.session.add(condutor)
+        db.session.flush()
+        if 'veiculo_id' in dados:
+            _, erro = _definir_veiculo_do_condutor(
+                condutor,
+                dados.get('veiculo_id'),
+                get_current_user(),
+                _to_bool(dados.get('transferir_veiculo')),
+            )
+            if erro:
+                db.session.rollback()
+                return erro
         db.session.commit()
         return jsonify(condutor.to_dict()), 201
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'erro': 'O condutor acabou de ser atribuído a outro veículo. Atualize a tela e tente novamente.'}), 409
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em POST /frota/condutores")
@@ -614,6 +766,13 @@ def editar_condutor(condutor_id):
             if funcionario_id and not db.session.get(Funcionario, funcionario_id):
                 return jsonify({"erro": "Funcionário não encontrado"}), 400
             condutor.funcionario_id = funcionario_id
+        if 'usuario_id' in dados:
+            usuario_id = _to_int(dados.get('usuario_id'))
+            if usuario_id != condutor.usuario_id:
+                _, erro = _usuario_notificacao_valido(usuario_id, get_current_user())
+                if erro:
+                    return erro
+                condutor.usuario_id = usuario_id
         if 'status' in dados:
             status = (dados.get('status') or '').strip()
             if status not in ('ativo', 'inativo'):
@@ -626,13 +785,65 @@ def editar_condutor(condutor_id):
             condutor.cnh_categoria = (dados.get('cnh_categoria') or '').strip().upper() or None
         if 'cnh_validade' in dados:
             condutor.cnh_validade = _parse_date(dados.get('cnh_validade'))
+        if condutor.status == 'inativo':
+            # Inativar não pode deixar um motorista indisponível como o
+            # condutor atual de um veículo. As multas e abastecimentos já
+            # registrados continuam apontando para ele como histórico.
+            for veiculo in (FrotaVeiculo.query
+                             .filter(FrotaVeiculo.condutor_atual_id == condutor.id,
+                                     FrotaVeiculo.status != 'inativo')
+                             .with_for_update()
+                             .all()):
+                veiculo.condutor_atual_id = None
+        elif 'veiculo_id' in dados:
+            _, erro = _definir_veiculo_do_condutor(
+                condutor,
+                dados.get('veiculo_id'),
+                get_current_user(),
+                _to_bool(dados.get('transferir_veiculo')),
+            )
+            if erro:
+                db.session.rollback()
+                return erro
 
         db.session.commit()
         return jsonify(condutor.to_dict()), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'erro': 'O condutor acabou de ser atribuído a outro veículo. Atualize a tela e tente novamente.'}), 409
     except Exception as e:
         db.session.rollback()
         logger.exception("Erro em PUT /frota/condutores/<id>")
         return jsonify({"erro": "Erro ao editar condutor"}), 500
+
+
+@frota_bp.route('/condutores/<int:condutor_id>/veiculo', methods=['PATCH'])
+@jwt_required()
+def definir_veiculo_do_condutor(condutor_id):
+    """Atalho explícito para a atribuição atômica do formulário de condutor."""
+    try:
+        condutor = db.session.get(FrotaCondutor, condutor_id)
+        if not condutor:
+            return jsonify({'erro': 'Condutor não encontrado.'}), 404
+        solicitante = get_current_user()
+        if not _condutor_visivel(condutor, solicitante):
+            return jsonify({'erro': 'Acesso negado.'}), 403
+        dados = request.get_json(silent=True) or {}
+        _, erro = _definir_veiculo_do_condutor(
+            condutor, dados.get('veiculo_id'), solicitante, _to_bool(dados.get('transferir_veiculo')),
+        )
+        if erro:
+            db.session.rollback()
+            return erro
+        db.session.commit()
+        return jsonify(condutor.to_dict()), 200
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'erro': 'O condutor acabou de ser atribuído a outro veículo. Atualize a tela e tente novamente.'}), 409
+    except Exception:
+        db.session.rollback()
+        logger.exception('Erro em PATCH /frota/condutores/<id>/veiculo')
+        return jsonify({'erro': 'Erro ao atribuir veículo ao condutor.'}), 500
 
 
 @frota_bp.route('/condutores/<int:condutor_id>', methods=['DELETE'])
@@ -1356,6 +1567,214 @@ def consumo_veiculo(veiculo_id):
 
 # ---------------------------------------------------------------- multas
 
+@frota_bp.route('/efrotas/status', methods=['GET'])
+@jwt_required()
+def status_efrotas():
+    """Estado seguro da integração para o painel de Multas."""
+    try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({'erro': 'Somente gestores podem consultar a integração e-Frotas.'}), 403
+        ultima = (FrotaEFrotasSincronizacao.query
+                  .order_by(FrotaEFrotasSincronizacao.iniciado_em.desc())
+                  .first())
+        excecoes = (FrotaEFrotasEvento.query
+                     .filter(FrotaEFrotasEvento.status.in_(('pendente', 'erro')))
+                     .count())
+        consulta = status_consulta_efrotas()
+        return jsonify({
+            'webhook_configurado': bool((os.environ.get('EFROTAS_WEBHOOK_TOKEN') or '').strip()),
+            'consulta': consulta,
+            'ultima_sincronizacao': ultima.to_dict() if ultima else None,
+            'excecoes_pendentes': excecoes,
+        }), 200
+    except Exception:
+        logger.exception('Erro em GET /frota/efrotas/status')
+        return jsonify({'erro': 'Erro ao consultar o status do e-Frotas.'}), 500
+
+
+@frota_bp.route('/efrotas/excecoes', methods=['GET'])
+@jwt_required()
+def listar_excecoes_efrotas():
+    """Eventos que precisam de veículo/dado corrigido antes de reprocessar."""
+    try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({'erro': 'Somente gestores podem ver exceções do e-Frotas.'}), 403
+        eventos = (FrotaEFrotasEvento.query
+                   .filter(FrotaEFrotasEvento.status.in_(('pendente', 'erro')))
+                   .order_by(FrotaEFrotasEvento.recebido_em.desc())
+                   .limit(100)
+                   .all())
+        return jsonify([evento.to_dict() for evento in eventos]), 200
+    except Exception:
+        logger.exception('Erro em GET /frota/efrotas/excecoes')
+        return jsonify({'erro': 'Erro ao listar exceções do e-Frotas.'}), 500
+
+
+@frota_bp.route('/efrotas/excecoes/<int:evento_id>/reprocessar', methods=['POST'])
+@jwt_required()
+def reprocessar_excecao_efrotas(evento_id):
+    try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({'erro': 'Somente gestores podem reprocessar exceções do e-Frotas.'}), 403
+        evento = db.session.get(FrotaEFrotasEvento, evento_id)
+        if not evento:
+            return jsonify({'erro': 'Evento não encontrado.'}), 404
+        resultado = processar_evento_efrotas(
+            evento.payload, notificar=True, atribuir_condutor=False,
+        )
+        return jsonify({'ok': True, **resultado}), 200
+    except Exception:
+        logger.exception('Erro em POST /frota/efrotas/excecoes/<id>/reprocessar')
+        return jsonify({'erro': 'Erro ao reprocessar o evento e-Frotas.'}), 500
+
+
+@frota_bp.route('/efrotas/sincronizacoes', methods=['GET'])
+@jwt_required()
+def listar_sincronizacoes_efrotas():
+    try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({'erro': 'Somente gestores podem ver sincronizações do e-Frotas.'}), 403
+        itens = (FrotaEFrotasSincronizacao.query
+                 .order_by(FrotaEFrotasSincronizacao.iniciado_em.desc())
+                 .limit(20)
+                 .all())
+        return jsonify([item.to_dict() for item in itens]), 200
+    except Exception:
+        logger.exception('Erro em GET /frota/efrotas/sincronizacoes')
+        return jsonify({'erro': 'Erro ao listar sincronizações do e-Frotas.'}), 500
+
+
+@frota_bp.route('/efrotas/sincronizacoes', methods=['POST'])
+@jwt_required()
+def sincronizar_infracoes_efrotas():
+    """Importa infrações pendentes por placa em janelas anuais, sem alertas.
+
+    A consulta oficial não retorna multas que já foram pagas/canceladas. A
+    execução é serial e auditada para respeitar o limite do fornecedor e poder
+    ser repetida sem criar duplicidades.
+    """
+    user = get_current_user()
+    if not _eh_gestor(user):
+        return jsonify({'erro': 'Somente gestores podem sincronizar o e-Frotas.'}), 403
+
+    dados = request.get_json(silent=True) or {}
+    data_inicio = _parse_date(dados.get('data_inicio'))
+    data_fim = _parse_date(dados.get('data_fim')) or date.today()
+    if not data_inicio:
+        return jsonify({'erro': 'Informe data_inicio no formato YYYY-MM-DD.'}), 400
+    if data_fim < data_inicio:
+        return jsonify({'erro': 'data_fim não pode ser anterior a data_inicio.'}), 400
+    if data_fim > date.today():
+        return jsonify({'erro': 'data_fim não pode estar no futuro.'}), 400
+    if (data_fim - data_inicio).days > _EFROTAS_MAX_DIAS_POR_SINCRONIZACAO:
+        return jsonify({
+            'erro': 'Escolha um período de no máximo um ano por sincronização. '
+                    'Para um histórico maior, faça uma consulta por ano.'
+        }), 400
+
+    ids_brutos = dados.get('veiculo_ids')
+    if ids_brutos is not None and not isinstance(ids_brutos, list):
+        return jsonify({'erro': 'veiculo_ids deve ser uma lista.'}), 400
+    ids = {_to_int(valor) for valor in (ids_brutos or [])}
+    ids.discard(None)
+    veiculos = _filtro_visibilidade(
+        FrotaVeiculo.query, FrotaVeiculo.obra_id, user
+    ).filter(FrotaVeiculo.status != 'inativo')
+    if ids:
+        veiculos = veiculos.filter(FrotaVeiculo.id.in_(ids))
+    veiculos = veiculos.order_by(FrotaVeiculo.placa).all()
+    if ids and len(veiculos) != len(ids):
+        return jsonify({'erro': 'Um ou mais veículos não existem ou não estão acessíveis.'}), 400
+    if not veiculos:
+        return jsonify({'erro': 'Nenhum veículo elegível para sincronizar.'}), 400
+    if len(veiculos) > _EFROTAS_MAX_VEICULOS_POR_SINCRONIZACAO:
+        return jsonify({
+            'erro': f'Selecione no máximo {_EFROTAS_MAX_VEICULOS_POR_SINCRONIZACAO} veículos por sincronização. '
+                    'Faça lotes sucessivos para evitar timeout.'
+        }), 400
+
+    sync = FrotaEFrotasSincronizacao(
+        solicitado_por_id=user.id,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
+        placas=[veiculo.placa for veiculo in veiculos],
+    )
+    db.session.add(sync)
+    db.session.commit()
+
+    try:
+        estado_consulta = status_consulta_efrotas()
+        if not estado_consulta['habilitada']:
+            raise EFrotasConfiguracaoErro(estado_consulta['mensagem'])
+        for indice, veiculo in enumerate(veiculos):
+            for janela_inicio, janela_fim in _janelas_anuais(data_inicio, data_fim):
+                try:
+                    infracoes = consultar_infracoes_por_placa(
+                        veiculo.placa, janela_inicio, janela_fim,
+                    )
+                    sync.eventos_recebidos += len(infracoes)
+                    for infracao in infracoes:
+                        resultado = processar_evento_efrotas(
+                            infracao,
+                            notificar=False,
+                            atribuir_condutor=False,
+                            placa_consultada=veiculo.placa,
+                        )
+                        situacao = resultado.get('situacao')
+                        if situacao == 'importada':
+                            sync.importadas += 1
+                        elif situacao == 'atualizada':
+                            sync.atualizadas += 1
+                        elif situacao == 'duplicada':
+                            sync.duplicadas += 1
+                        elif situacao == 'pendente':
+                            sync.ignoradas += 1
+                        else:
+                            sync.erros += 1
+                    db.session.commit()
+                except EFrotasConsultaErro as exc:
+                    sync.erros += 1
+                    sync.mensagem = str(exc)[:500]
+                    db.session.commit()
+                # 5 chamadas/s é conservador frente ao limite documentado do
+                # fornecedor e evita que uma frota grande seja bloqueada.
+                if indice < len(veiculos) - 1 or janela_fim < data_fim:
+                    time.sleep(0.2)
+
+        sync.status = 'parcial' if sync.erros else 'concluida'
+        sync.finalizado_em = datetime.utcnow()
+        if not sync.mensagem:
+            sync.mensagem = (
+                'Consulta concluída. O e-Frotas retorna apenas infrações pendentes; '
+                'quitadas ou canceladas devem permanecer no histórico manual/CSV.'
+            )
+        db.session.commit()
+        return jsonify(sync.to_dict()), 200
+    except EFrotasConfiguracaoErro as exc:
+        sync.status = 'erro'
+        sync.mensagem = str(exc)[:500]
+        sync.finalizado_em = datetime.utcnow()
+        db.session.commit()
+        return jsonify({'erro': str(exc), 'sincronizacao': sync.to_dict()}), 503
+    except Exception:
+        db.session.rollback()
+        logger.exception('Erro em POST /frota/efrotas/sincronizacoes')
+        # A tentativa já existe, por isso a UI não fica sem diagnóstico.
+        try:
+            sync = db.session.get(FrotaEFrotasSincronizacao, sync.id)
+            if sync:
+                sync.status = 'erro'
+                sync.mensagem = 'Erro interno durante a sincronização.'
+                sync.finalizado_em = datetime.utcnow()
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return jsonify({'erro': 'Erro ao sincronizar infrações do e-Frotas.'}), 500
+
 @frota_bp.route('/multas', methods=['GET'])
 @jwt_required()
 def listar_multas():
@@ -1370,6 +1789,27 @@ def listar_multas():
         status = request.args.get('status')
         if status:
             query = query.filter(FrotaMulta.status_pagamento == status)
+        origem = (request.args.get('origem') or '').strip().lower()
+        if origem in {'manual', 'efrotas'}:
+            query = query.filter(FrotaMulta.origem == origem)
+        situacao_efrotas = (request.args.get('situacao_efrotas') or '').strip().lower()
+        if situacao_efrotas in {'ativa', 'suspensa', 'cancelada'}:
+            query = query.filter(FrotaMulta.situacao_efrotas == situacao_efrotas)
+        de = _parse_date(request.args.get('de'))
+        if de:
+            query = query.filter(FrotaMulta.data_infracao >= de)
+        ate = _parse_date(request.args.get('ate'))
+        if ate:
+            query = query.filter(FrotaMulta.data_infracao <= ate)
+        busca = (request.args.get('q') or '').strip()
+        if busca:
+            termo = f'%{busca}%'
+            query = query.filter(or_(
+                FrotaVeiculo.placa.ilike(termo),
+                FrotaMulta.numero_auto_infracao.ilike(termo),
+                FrotaMulta.codigo_orgao_autuador.ilike(termo),
+                FrotaMulta.descricao.ilike(termo),
+            ))
         condutor_id = request.args.get('condutor_id')
         if condutor_id:
             query = query.filter(FrotaMulta.condutor_id == _to_int(condutor_id))
@@ -1441,6 +1881,16 @@ def editar_multa(item_id):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
 
         dados, arquivo = _dados_e_arquivo()
+        # A fonte oficial continua sendo o e-Frotas. A equipe pode registrar
+        # gestão interna (responsável, pagamento, contestação, observação e
+        # anexo), mas não deve sobrescrever AIT, valor, data ou descrição que
+        # serão atualizados por um evento oficial posterior.
+        if multa.origem == 'efrotas':
+            campos_oficiais = {'data_infracao', 'valor', 'pontos', 'descricao'}
+            if any(campo in dados for campo in campos_oficiais):
+                return jsonify({
+                    'erro': 'Dados oficiais de uma infração e-Frotas não podem ser alterados manualmente.'
+                }), 400
         if 'data_infracao' in dados:
             data_infracao = _parse_date(dados.get('data_infracao'))
             if not data_infracao:
@@ -1496,6 +1946,11 @@ def remover_multa(item_id):
             return jsonify({"erro": "Multa não encontrada"}), 404
         if not _veiculo_visivel(multa.veiculo, get_current_user()):
             return jsonify({"erro": "Acesso negado a esta obra"}), 403
+        if multa.origem == 'efrotas':
+            return jsonify({
+                'erro': 'Infrações importadas do e-Frotas são preservadas para auditoria. '
+                        'Atualize o pagamento, a contestação ou aguarde uma alteração oficial.'
+            }), 400
         db.session.delete(multa)
         db.session.commit()
         return jsonify({"ok": True}), 200
@@ -1604,6 +2059,24 @@ def obter_dashboard():
             if _condutor_visivel(c, user)
         ]
 
+        multas_pendentes = []
+        multas_prazos_urgentes = []
+        if veiculo_ids:
+            multas_pendentes = (FrotaMulta.query
+                                .filter(FrotaMulta.veiculo_id.in_(veiculo_ids),
+                                        FrotaMulta.status_pagamento == 'pendente',
+                                        or_(
+                                            FrotaMulta.situacao_efrotas.is_(None),
+                                            FrotaMulta.situacao_efrotas != 'cancelada',
+                                        ))
+                                .order_by(FrotaMulta.data_infracao.desc())
+                                .all())
+            multas_prazos_urgentes = [
+                multa for multa in multas_pendentes
+                if (multa.data_limite_defesa or multa.data_vencimento_penalidade)
+                and (multa.data_limite_defesa or multa.data_vencimento_penalidade) <= hoje + timedelta(days=7)
+            ]
+
         # Custo por local (snapshot) na competência: manutenções + abastecimentos.
         custo_local = {}
         if veiculo_ids:
@@ -1640,6 +2113,8 @@ def obter_dashboard():
             'documentos_vencidos': [d.to_dict() for d in docs_vencidos],
             'documentos_a_vencer': [d.to_dict() for d in docs_a_vencer],
             'cnhs_a_vencer': [c.to_dict() for c in cnhs_alerta],
+            'multas_pendentes': [m.to_dict() for m in multas_pendentes[:8]],
+            'multas_prazos_urgentes': [m.to_dict() for m in multas_prazos_urgentes[:8]],
             'custo_por_local': custo_por_local,
         }), 200
     except Exception as e:

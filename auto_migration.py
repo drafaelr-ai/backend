@@ -747,6 +747,26 @@ def run_auto_migration():
             CREATE UNIQUE INDEX IF NOT EXISTS idx_frota_veiculo_placa ON frota_veiculo (upper(placa));
             CREATE INDEX IF NOT EXISTS idx_frota_veiculo_obra ON frota_veiculo (obra_id);
             CREATE INDEX IF NOT EXISTS idx_frota_veiculo_status ON frota_veiculo (status);
+            -- Um condutor só pode estar no veículo atual de uma frota ativa.
+            -- Não corrigimos registros antigos de forma arbitrária: se houver
+            -- duplicidade legada, a aplicação continua disponível para a
+            -- equipe revisá-la antes de o índice ser criado.
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM frota_veiculo
+                    WHERE condutor_atual_id IS NOT NULL AND status <> 'inativo'
+                    GROUP BY condutor_atual_id
+                    HAVING COUNT(*) > 1
+                ) THEN
+                    EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS uq_frota_veiculo_condutor_atual
+                             ON frota_veiculo (condutor_atual_id)
+                             WHERE condutor_atual_id IS NOT NULL AND status <> ''inativo''';
+                ELSE
+                    RAISE NOTICE 'Frota: há condutores com mais de um veículo ativo; índice único não criado.';
+                END IF;
+            END $$;
         """)
 
         cur.execute("""
@@ -879,6 +899,74 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_frota_multa_status ON frota_multa (status_pagamento);
         """)
 
+        # Integração e-Frotas: campos aditivos preservam todas as multas que
+        # já foram cadastradas manualmente. O evento bruto é guardado para
+        # auditoria e para diagnosticar mudanças futuras no payload do SERPRO.
+        cur.execute("""
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS origem VARCHAR(30) NOT NULL DEFAULT 'manual';
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS codigo_orgao_autuador VARCHAR(30);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS numero_auto_infracao VARCHAR(80);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS codigo_infracao VARCHAR(30);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS gravidade VARCHAR(30);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS local_autuacao VARCHAR(300);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS municipio_autuacao VARCHAR(120);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS uf_autuacao VARCHAR(2);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS data_notificacao_autuacao DATE;
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS data_notificacao_penalidade DATE;
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS data_limite_defesa DATE;
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS data_vencimento_penalidade DATE;
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS situacao_efrotas VARCHAR(20);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS fase_efrotas VARCHAR(20);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS motivo_situacao_efrotas VARCHAR(300);
+            ALTER TABLE frota_multa ADD COLUMN IF NOT EXISTS atualizado_efrotas_em TIMESTAMP;
+            CREATE INDEX IF NOT EXISTS idx_frota_multa_origem ON frota_multa (origem);
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_frota_multa_efrotas_auto
+                ON frota_multa (veiculo_id, codigo_orgao_autuador, numero_auto_infracao, codigo_infracao)
+                WHERE codigo_orgao_autuador IS NOT NULL
+                  AND numero_auto_infracao IS NOT NULL
+                  AND codigo_infracao IS NOT NULL;
+
+            ALTER TABLE frota_condutor
+                ADD COLUMN IF NOT EXISTS usuario_id INTEGER REFERENCES "user"(id) ON DELETE SET NULL;
+            CREATE INDEX IF NOT EXISTS idx_frota_condutor_usuario ON frota_condutor (usuario_id);
+
+            CREATE TABLE IF NOT EXISTS frota_efrotas_evento (
+                id               SERIAL PRIMARY KEY,
+                id_rastreamento  VARCHAR(100) UNIQUE,
+                tipo_evento      VARCHAR(50),
+                status           VARCHAR(20) NOT NULL DEFAULT 'recebido',
+                erro             VARCHAR(500),
+                payload          JSONB NOT NULL,
+                multa_id         INTEGER REFERENCES frota_multa(id) ON DELETE SET NULL,
+                recebido_em      TIMESTAMP NOT NULL DEFAULT NOW(),
+                processado_em    TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_efrotas_evento_multa
+                ON frota_efrotas_evento (multa_id);
+
+            CREATE TABLE IF NOT EXISTS frota_efrotas_sincronizacao (
+                id                   SERIAL PRIMARY KEY,
+                solicitado_por_id    INTEGER REFERENCES "user"(id) ON DELETE SET NULL,
+                data_inicio          DATE NOT NULL,
+                data_fim             DATE NOT NULL,
+                placas               JSONB,
+                status               VARCHAR(20) NOT NULL DEFAULT 'em_andamento',
+                eventos_recebidos    INTEGER NOT NULL DEFAULT 0,
+                importadas           INTEGER NOT NULL DEFAULT 0,
+                atualizadas          INTEGER NOT NULL DEFAULT 0,
+                duplicadas           INTEGER NOT NULL DEFAULT 0,
+                ignoradas            INTEGER NOT NULL DEFAULT 0,
+                erros                INTEGER NOT NULL DEFAULT 0,
+                mensagem             VARCHAR(500),
+                iniciado_em          TIMESTAMP NOT NULL DEFAULT NOW(),
+                finalizado_em        TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_efrotas_sync_inicio
+                ON frota_efrotas_sincronizacao (iniciado_em DESC);
+            ALTER TABLE frota_efrotas_sincronizacao
+                ADD COLUMN IF NOT EXISTS atualizadas INTEGER NOT NULL DEFAULT 0;
+        """)
+
         # Abastecimento via link do motorista — colunas aditivas no registro de
         # abastecimento + a tabela de autorização. `solicitacao_id` e
         # `criado_por_id` são referências FRACAS (sem FK), no mesmo padrão do
@@ -974,10 +1062,11 @@ def run_auto_migration():
               );
         """)
 
-        logger.info("✅ FROTA: 9 tabelas garantidas (frota_condutor, frota_veiculo, "
+        logger.info("✅ FROTA: 11 tabelas garantidas (frota_condutor, frota_veiculo, "
                     "frota_movimentacao, frota_documento, frota_manutencao, "
                     "frota_posto_combustivel, frota_abastecimento, frota_multa, "
-                    "frota_abastecimento_solicitacao)")
+                    "frota_abastecimento_solicitacao, frota_efrotas_evento, "
+                    "frota_efrotas_sincronizacao)")
 
         # =================================================================
         # MÓDULO SOLICITAÇÕES (compras) — 4 tabelas (aditivo, idempotente)
