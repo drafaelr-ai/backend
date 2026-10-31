@@ -6,6 +6,7 @@ posto. Nada de saldo em coluna: o abastecimento entra por três vias
 ficaria desatualizado na primeira que não passasse por aqui.
 """
 
+import logging
 import re
 import unicodedata
 from datetime import date
@@ -17,6 +18,8 @@ from extensions import db
 from models.frota_abastecimento import FrotaAbastecimento
 from models.frota_posto_combustivel import FrotaPostoCombustivel
 from models.frota_posto_recarga import FrotaPostoRecarga
+
+logger = logging.getLogger(__name__)
 
 _VALOR_MAX = 10_000_000.0
 
@@ -97,7 +100,7 @@ def resolver_posto(dados, *, permitir_criar=True):
 # --------------------------------------------------------------- recargas
 
 def limpar_valor(valor):
-    """Aceita número ou string BR ('1.250,00') e devolve float > 0."""
+    """Aceita número ou string BR ('1.250,00', '1.250') e devolve float > 0."""
     if valor is None or valor == '':
         raise PostoInvalido('Informe o valor da recarga')
     if isinstance(valor, bool):
@@ -106,10 +109,14 @@ def limpar_valor(valor):
         numero = float(valor)
     else:
         texto = str(valor).strip().replace('R$', '').strip()
-        if ',' in texto and '.' in texto:
+        # Vírgula presente: o ponto só pode ser separador de milhar ('1.250,50').
+        if ',' in texto:
             texto = texto.replace('.', '').replace(',', '.')
-        elif ',' in texto:
-            texto = texto.replace(',', '.')
+        # Sem vírgula, grupos de 3 dígitos são milhar BR: '1.250' é mil duzentos
+        # e cinquenta, não um e vinte e cinco. Sem isto o float() lê o ponto como
+        # decimal e a recarga entra mil vezes menor, sem erro nenhum.
+        elif re.fullmatch(r'\d{1,3}(\.\d{3})+', texto):
+            texto = texto.replace('.', '')
         try:
             numero = float(texto)
         except ValueError:
@@ -145,24 +152,61 @@ def criar_recarga(posto, dados, criado_por_id=None):
 
 # ------------------------------------------------------------ saldo/extrato
 
-def _chave_legado():
-    """Nome digitado sem caixa e sem espaços — casa 'Posto  X' com 'posto x'.
+def _indice_por_nome(postos):
+    """Mapa nome normalizado -> posto_id, para casar abastecimento antigo.
 
-    `replace` existe no Postgres e no SQLite, o que mantém a mesma regra no
-    banco de produção e no smoke test. Saldo e extrato usam esta expressão
-    para não divergirem: um abastecimento antigo que entra na conta de um
-    posto precisa aparecer também no extrato dele.
+    O casamento acontece em Python, com `normalizar_nome` — a MESMA função do
+    índice único `nome_normalizado` e do backfill do auto_migration. Comparar
+    com uma expressão SQL equivalente não funciona: `lower()` do Postgres
+    entende acento e o do SQLite não, então a regra do teste divergiria da de
+    produção, e nenhum dos dois normaliza a forma Unicode (NFC/NFD).
+
+    Nome normalizado repetido sai do mapa: dois cadastros com a mesma chave
+    não permitem decidir de quem é o gasto, e chutar debita no posto errado.
     """
-    return func.replace(func.lower(func.trim(FrotaAbastecimento.posto)), ' ', '')
+    por_nome = {}
+    repetidos = set()
+    for posto in postos:
+        chave = normalizar_nome(posto.nome)
+        if chave in por_nome:
+            repetidos.add(chave)
+            continue
+        por_nome[chave] = posto.id
+    for chave in repetidos:
+        por_nome.pop(chave, None)
+        logger.warning(
+            'Postos com nome normalizado repetido (%s): abastecimento antigo '
+            'sem posto_id não foi atribuído a nenhum deles', chave,
+        )
+    return por_nome
 
 
-def _chave_nome(nome):
-    return normalizar_nome(nome).replace(' ', '')
+def _nomes_legados(posto):
+    """Nomes digitados (posto_id nulo) que pertencem a este cadastro."""
+    chave = normalizar_nome(posto.nome)
+    brutos = (db.session.query(FrotaAbastecimento.posto)
+              .filter(FrotaAbastecimento.posto_id.is_(None),
+                      FrotaAbastecimento.posto.isnot(None))
+              .distinct().all())
+    return [nome for (nome,) in brutos if normalizar_nome(nome) == chave]
+
+
+def _condicao_abastecimento(posto):
+    """Abastecimentos que pesam na conta do posto: por id e, nos registros
+    antigos, pelo nome digitado resolvido em Python."""
+    condicao = FrotaAbastecimento.posto_id == posto.id
+    nomes = _nomes_legados(posto)
+    if nomes:
+        condicao = or_(condicao, and_(
+            FrotaAbastecimento.posto_id.is_(None),
+            FrotaAbastecimento.posto.in_(nomes),
+        ))
+    return condicao
 
 
 def _consumo_por_posto(postos):
     """Gasto por posto: casa por posto_id e, nos registros antigos que só
-    tinham o nome digitado, pelo nome normalizado."""
+    tinham o nome digitado, pelo nome normalizado em Python."""
     totais = {p.id: {'total': 0.0, 'qtd': 0, 'ultima': None} for p in postos}
 
     def acumular(posto_id, total, qtd, ultima):
@@ -184,18 +228,20 @@ def _consumo_por_posto(postos):
     for posto_id, total, qtd, ultima in por_id:
         acumular(posto_id, total, qtd, ultima)
 
-    por_nome = {_chave_nome(p.nome): p.id for p in postos}
+    por_nome = _indice_por_nome(postos)
     if por_nome:
         legados = (db.session.query(
-            _chave_legado(),
+            FrotaAbastecimento.posto,
             func.coalesce(func.sum(FrotaAbastecimento.valor), 0),
             func.count(FrotaAbastecimento.id),
             func.max(FrotaAbastecimento.data),
         ).filter(FrotaAbastecimento.posto_id.is_(None),
                  FrotaAbastecimento.posto.isnot(None))
-         .group_by(_chave_legado()).all())
-        for chave, total, qtd, ultima in legados:
-            acumular(por_nome.get(chave), total, qtd, ultima)
+         .group_by(FrotaAbastecimento.posto).all())
+        # acumular() é aditivo, então vários nomes digitados que caem no mesmo
+        # cadastro ('Posto X', 'POSTO  X') somam no mesmo saldo.
+        for nome_cru, total, qtd, ultima in legados:
+            acumular(por_nome.get(normalizar_nome(nome_cru)), total, qtd, ultima)
 
     return totais
 
@@ -262,13 +308,17 @@ def extrato(posto, de=None, ate=None):
 
     O saldo do resumo é sempre o total do posto (não o do período): é o
     número que o operador compara com o extrato do posto.
+
+    O acumulado dos movimentos parte de `saldo_inicial` — o saldo do posto
+    imediatamente antes de `de` — e não de zero. Sem isso a coluna de saldo
+    recomeçaria a cada filtro de data e contradiria o resumo. Com `ate`
+    preenchido e movimento posterior a ele, o acumulado da linha mais
+    recente é o saldo no fim do período, e aí difere do resumo de propósito.
     """
-    filtros_abast = [or_(
-        FrotaAbastecimento.posto_id == posto.id,
-        and_(FrotaAbastecimento.posto_id.is_(None),
-             FrotaAbastecimento.posto.isnot(None),
-             _chave_legado() == _chave_nome(posto.nome)),
-    )]
+    # Mesma regra de saldos(). Fica em variável porque o saldo anterior ao
+    # período reusa a condição sem os filtros de data.
+    cond_abast = _condicao_abastecimento(posto)
+    filtros_abast = [cond_abast]
     filtros_recarga = [FrotaPostoRecarga.posto_id == posto.id]
     if de:
         filtros_abast.append(FrotaAbastecimento.data >= de)
@@ -304,7 +354,21 @@ def extrato(posto, de=None, ate=None):
         })
     movimentos.sort(key=lambda m: (m['data'] or '', m['tipo'], m['id']))
 
-    acumulado = 0.0
+    # Saldo anterior ao período: sem ele a coluna de saldo recomeçaria do zero
+    # a cada filtro de data e contradiria o resumo, que é do posto inteiro.
+    saldo_inicial = 0.0
+    if de:
+        recargas_antes = db.session.query(
+            func.coalesce(func.sum(FrotaPostoRecarga.valor), 0),
+        ).filter(FrotaPostoRecarga.posto_id == posto.id,
+                 FrotaPostoRecarga.data < de).scalar()
+        abast_antes = db.session.query(
+            func.coalesce(func.sum(FrotaAbastecimento.valor), 0),
+        ).filter(cond_abast, FrotaAbastecimento.data < de).scalar()
+        # valor é Numeric: func.sum devolve Decimal, precisa virar float.
+        saldo_inicial = round(float(recargas_antes or 0) - float(abast_antes or 0), 2)
+
+    acumulado = saldo_inicial
     for mov in movimentos:
         acumulado = round(acumulado + mov['valor'], 2)
         mov['saldo_acumulado'] = acumulado
@@ -314,4 +378,5 @@ def extrato(posto, de=None, ate=None):
         (p for p in saldos(incluir_inativos=True)['postos'] if p['posto_id'] == posto.id),
         None,
     )
-    return {'posto': posto.to_dict(), 'movimentos': movimentos, 'resumo': totais}
+    return {'posto': posto.to_dict(), 'saldo_inicial': saldo_inicial,
+            'movimentos': movimentos, 'resumo': totais}

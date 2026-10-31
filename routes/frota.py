@@ -1209,8 +1209,18 @@ def _nomes_usuarios(ids):
 @frota_bp.route('/postos-combustivel/saldos', methods=['GET'])
 @jwt_required()
 def listar_saldos_postos():
-    """Saldo pré-pago por posto (recargas - abastecimentos)."""
+    """Saldo pré-pago por posto (recargas - abastecimentos).
+
+    Só gestor vê: o número é consolidado da empresa e não passa pelo filtro
+    de obra que o resto do módulo aplica. Sem esta guarda, um usuário comum
+    com o módulo Frota liberado veria o gasto de obras que ele não pode ver.
+    """
     try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({
+                "erro": "Somente master ou administrador podem ver o saldo dos postos",
+            }), 403
         incluir_inativos = _to_bool(request.args.get('incluir_inativos'))
         return jsonify(posto_combustivel_service.saldos(
             incluir_inativos=incluir_inativos,
@@ -1223,8 +1233,13 @@ def listar_saldos_postos():
 @frota_bp.route('/postos-combustivel/recargas', methods=['GET'])
 @jwt_required()
 def listar_recargas_postos():
-    """?posto_id= &de= &ate= — últimas recargas lançadas."""
+    """?posto_id= &de= &ate= — últimas recargas lançadas. Só gestor."""
     try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({
+                "erro": "Somente master ou administrador podem ver as recargas dos postos",
+            }), 403
         query = FrotaPostoRecarga.query
         posto_id = _to_int(request.args.get('posto_id'))
         if posto_id:
@@ -1302,8 +1317,17 @@ def remover_recarga_posto(recarga_id):
 @frota_bp.route('/postos-combustivel/<int:posto_id>/extrato', methods=['GET'])
 @jwt_required()
 def extrato_posto(posto_id):
-    """Recargas e abastecimentos do posto na mesma linha do tempo."""
+    """Recargas e abastecimentos do posto na mesma linha do tempo.
+
+    Só gestor: o extrato traz placa e modelo de veículo de qualquer obra.
+    A guarda vem antes da busca do posto para não vazar nem a existência dele.
+    """
     try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({
+                "erro": "Somente master ou administrador podem ver o extrato do posto",
+            }), 403
         posto = db.session.get(FrotaPostoCombustivel, posto_id)
         if not posto:
             return jsonify({"erro": "Posto de combustível não encontrado"}), 404

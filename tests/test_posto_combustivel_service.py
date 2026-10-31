@@ -1,8 +1,8 @@
+import unicodedata
 import unittest
 
 from services.posto_combustivel_service import (
     PostoInvalido,
-    _chave_nome,
     limpar_nome,
     limpar_observacao,
     limpar_valor,
@@ -55,6 +55,20 @@ class RecargaValorTest(unittest.TestCase):
         with self.assertRaises(PostoInvalido):
             limpar_valor(10_000_001)
 
+    def test_milhar_br_sem_centavos(self):
+        # O campo do modal e texto livre: '1.250' digitado e mil duzentos e
+        # cinquenta. Lido como decimal, a recarga entrava mil vezes menor.
+        self.assertEqual(limpar_valor('1.250'), 1250.0)
+        self.assertEqual(limpar_valor('10.000'), 10000.0)
+        self.assertEqual(limpar_valor('R$ 2.500'), 2500.0)
+        self.assertEqual(limpar_valor('1.000.000'), 1000000.0)
+
+    def test_ponto_decimal_continua_valendo(self):
+        self.assertEqual(limpar_valor('250.50'), 250.5)
+        self.assertEqual(limpar_valor('1250.50'), 1250.5)
+        self.assertEqual(limpar_valor('12.34'), 12.34)
+        self.assertEqual(limpar_valor('1.25'), 1.25)
+
     def test_observacao_normaliza_espacos_e_corta_no_limite(self):
         self.assertEqual(limpar_observacao('  Deposito   em  dinheiro '),
                          'Deposito em dinheiro')
@@ -63,16 +77,32 @@ class RecargaValorTest(unittest.TestCase):
         self.assertEqual(len(limpar_observacao('x' * 400)), 300)
 
 
-class ChaveLegadoTest(unittest.TestCase):
+class CasamentoLegadoTest(unittest.TestCase):
+    """normalizar_nome e a UNICA chave do casamento de abastecimento antigo
+    (posto_id nulo). O saldo e o extrato dependem dela; comparar com uma
+    expressao SQL equivalente divergia entre Postgres e SQLite."""
+
     def test_casa_nome_digitado_com_espacos_sobrando(self):
-        # O saldo e o extrato casam abastecimentos antigos (sem posto_id)
-        # por esta chave; se ela divergir, o extrato esconde movimento que
-        # o saldo contabiliza.
-        self.assertEqual(_chave_nome('Posto   Ipiranga  Centro'),
-                         _chave_nome(' posto ipiranga centro '))
+        self.assertEqual(normalizar_nome('Posto   Ipiranga  Centro'),
+                         normalizar_nome(' posto ipiranga centro '))
+
+    def test_espaco_interno_distingue_postos(self):
+        # Chave sem espaco colapsava estes dois cadastros validos e debitava
+        # o abastecimento no posto errado.
+        self.assertNotEqual(normalizar_nome('Auto Posto Sol'),
+                            normalizar_nome('AutoPosto Sol'))
+
+    def test_casa_acento_em_qualquer_forma_unicode(self):
+        # lower() do banco nao normaliza NFD: nome colado de outro sistema
+        # nunca casava e o gasto desaparecia do saldo.
+        self.assertEqual(
+            normalizar_nome('POSTO SÃO JOSÉ'),
+            normalizar_nome(unicodedata.normalize('NFD', 'Posto São José')),
+        )
 
     def test_postos_diferentes_nao_colidem(self):
-        self.assertNotEqual(_chave_nome('Posto Centro'), _chave_nome('Posto Norte'))
+        self.assertNotEqual(normalizar_nome('Posto Centro'),
+                            normalizar_nome('Posto Norte'))
 
 
 if __name__ == '__main__':

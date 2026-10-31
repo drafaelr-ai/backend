@@ -12,6 +12,7 @@ Uso: cd backend && python scripts/smoke_recarga_posto_local.py
 import os
 import sys
 import json
+import unicodedata
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -151,6 +152,17 @@ with app.app_context():
                    json={'valor': 100}, headers=h_master)
         check('posto inexistente -> 404', r.status_code == 404, f'got {r.status_code}')
 
+        print('\n=== milhar BR no campo livre ===')
+        r = c.post(f"/frota/postos-combustivel/{posto_b['id']}/recargas",
+                   json={'valor': '1.250', 'data': semana.isoformat()}, headers=h_master)
+        check("'1.250' vale mil duzentos e cinquenta, nao 1,25",
+              r.status_code == 201 and json.loads(r.data)['valor'] == 1250.0,
+              f'got {r.status_code}: {r.data[:120]}')
+        recarga_milhar_id = json.loads(r.data)['id']
+        r = c.delete(f'/frota/postos-combustivel/recargas/{recarga_milhar_id}',
+                     headers=h_master)
+        check('recarga do teste de milhar removida', r.status_code == 200)
+
         print('\n=== saldo após recargas e abastecimentos ===')
         r = c.post(f"/frota/postos-combustivel/{posto_a['id']}/recargas",
                    json={'valor': 500, 'data': ontem.isoformat()}, headers=h_master)
@@ -242,6 +254,17 @@ with app.app_context():
               f"got {[m['data'] for m in extrato_hoje['movimentos']]}")
         check('resumo do extrato continua sendo o saldo total do posto',
               extrato_hoje['resumo']['saldo'] == 1250.5)
+        # Sem saldo_inicial a coluna de saldo recomeçava do zero a cada filtro
+        # e dizia que o posto estava negativo ao lado de um KPI positivo.
+        check('extrato filtrado parte do saldo anterior ao período',
+              extrato_hoje['saldo_inicial'] == 1750.5,
+              f"got {extrato_hoje.get('saldo_inicial')}")
+        check('saldo acumulado do período fecha no saldo do posto',
+              extrato_hoje['movimentos'][0]['saldo_acumulado'] == 1250.5,
+              f"got {extrato_hoje['movimentos'][0]['saldo_acumulado']}")
+        check('extrato sem filtro tem saldo inicial zero',
+              extrato['saldo_inicial'] == 0.0,
+              f"got {extrato.get('saldo_inicial')}")
 
         r = c.get('/frota/postos-combustivel/999999/extrato', headers=h_master)
         check('extrato de posto inexistente -> 404', r.status_code == 404)
@@ -287,6 +310,65 @@ with app.app_context():
               saldo_de(json.loads(r.data), 'Posto Ipiranga Centro')['saldo'] == 950.5,
               f"got {saldo_de(json.loads(r.data), 'Posto Ipiranga Centro')['saldo']}")
 
+        print('\n=== legado acentuado e colisão de nome ===')
+        r = c.post('/frota/postos-combustivel', json={'nome': 'Posto São José'},
+                   headers=h_master)
+        posto_acento = json.loads(r.data)
+        r = c.post(f"/frota/postos-combustivel/{posto_acento['id']}/recargas",
+                   json={'valor': 1000}, headers=h_master)
+        check('recarga no posto acentuado -> 201', r.status_code == 201)
+        # Nome digitado em caixa alta e em NFD: lower() do banco não resolve
+        # nenhum dos dois, por isso o casamento é feito em Python.
+        db.session.add_all([
+            FrotaAbastecimento(veiculo_id=veic_id, data=hoje, valor=250, litros=40,
+                               posto='POSTO SÃO JOSÉ', posto_id=None),
+            FrotaAbastecimento(veiculo_id=veic_id, data=hoje, valor=150, litros=20,
+                               posto=unicodedata.normalize('NFD', 'posto são josé'),
+                               posto_id=None),
+        ])
+        db.session.commit()
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        acento_saldo = saldo_de(json.loads(r.data), 'Posto São José')
+        check('legado acentuado em caixa alta e em NFD entra no consumo',
+              acento_saldo['total_consumido'] == 400.0,
+              f"got {acento_saldo['total_consumido']}")
+        check('saldo do posto acentuado desconta os dois',
+              acento_saldo['saldo'] == 600.0, f"got {acento_saldo['saldo']}")
+        r = c.get(f"/frota/postos-combustivel/{posto_acento['id']}/extrato",
+                  headers=h_master)
+        check('extrato acentuado mostra os mesmos movimentos do saldo',
+              len(json.loads(r.data)['movimentos']) == 3,
+              f"got {len(json.loads(r.data)['movimentos'])}")
+
+        # 'Auto Posto Sol' e 'AutoPosto Sol' são dois cadastros válidos (o unique
+        # é sobre o nome com o espaço interno). Uma chave sem espaços colapsava
+        # os dois e debitava no posto errado, além de repetir o movimento nos
+        # dois extratos.
+        r = c.post('/frota/postos-combustivel', json={'nome': 'Auto Posto Sol'},
+                   headers=h_master)
+        colide_a = json.loads(r.data)
+        r = c.post('/frota/postos-combustivel', json={'nome': 'AutoPosto Sol'},
+                   headers=h_master)
+        colide_b = json.loads(r.data)
+        check('os dois cadastros coexistem', colide_a['id'] != colide_b['id'])
+        db.session.add(FrotaAbastecimento(
+            veiculo_id=veic_id, data=hoje, valor=300, litros=45,
+            posto='Auto Posto Sol', posto_id=None))
+        db.session.commit()
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        dados = json.loads(r.data)
+        check('o gasto vai para o posto do nome digitado',
+              saldo_de(dados, 'Auto Posto Sol')['total_consumido'] == 300.0,
+              f"got {saldo_de(dados, 'Auto Posto Sol')['total_consumido']}")
+        check('o posto de nome parecido não é debitado',
+              saldo_de(dados, 'AutoPosto Sol')['total_consumido'] == 0.0,
+              f"got {saldo_de(dados, 'AutoPosto Sol')['total_consumido']}")
+        r = c.get(f"/frota/postos-combustivel/{colide_b['id']}/extrato",
+                  headers=h_master)
+        check('o movimento não aparece no extrato do posto parecido',
+              json.loads(r.data)['movimentos'] == [],
+              f"got {json.loads(r.data)['movimentos']}")
+
         print('\n=== gate do módulo ===')
         sem_modulo = User(username='sem_modulo_recarga', role='comum',
                           modulos_permitidos=['obras'])
@@ -298,6 +380,25 @@ with app.app_context():
         r = c.get('/frota/postos-combustivel/saldos', headers=h_sem)
         check('sem o módulo Frota não vê saldo -> 403', r.status_code == 403,
               f'got {r.status_code}')
+
+        print('\n=== quem pode LER saldo/extrato/recargas ===')
+        # O saldo é consolidado da empresa e o extrato traz placa de veículo de
+        # qualquer obra: nenhum dos dois passa pelo filtro de obra do módulo,
+        # então leitura é de gestor. Sem isto o comum via o gasto de obra alheia.
+        for rotulo, caminho in [
+            ('saldos', '/frota/postos-combustivel/saldos'),
+            ('recargas', '/frota/postos-combustivel/recargas'),
+            ('extrato', f"/frota/postos-combustivel/{posto_a['id']}/extrato"),
+        ]:
+            r = c.get(caminho, headers=h_comum)
+            check(f'comum não lê {rotulo} -> 403', r.status_code == 403,
+                  f'got {r.status_code}')
+            r = c.get(caminho, headers=h_admin)
+            check(f'administrador lê {rotulo} -> 200', r.status_code == 200,
+                  f'got {r.status_code}')
+        r = c.get('/frota/postos-combustivel', headers=h_comum)
+        check('comum continua listando postos (alimenta o abastecimento) -> 200',
+              r.status_code == 200, f'got {r.status_code}')
         r = c.get('/frota/postos-combustivel/saldos')
         check('sem JWT não vê saldo', r.status_code in (401, 422),
               f'got {r.status_code}')
