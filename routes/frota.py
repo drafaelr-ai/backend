@@ -36,6 +36,7 @@ from models.frota_movimentacao import FrotaMovimentacao
 from models.frota_documento import FrotaDocumento
 from models.frota_manutencao import FrotaManutencao
 from models.frota_posto_combustivel import FrotaPostoCombustivel
+from models.frota_posto_recarga import FrotaPostoRecarga
 from models.frota_abastecimento import FrotaAbastecimento
 from models.frota_abastecimento_solicitacao import FrotaAbastecimentoSolicitacao
 from models.frota_multa import FrotaMulta
@@ -1190,6 +1191,130 @@ def criar_posto_combustivel():
         db.session.rollback()
         logger.exception("Erro em POST /frota/postos-combustivel")
         return jsonify({"erro": "Erro ao cadastrar posto de combustível"}), 500
+
+
+# ------------------------------------------- recargas / saldo dos postos
+
+def _nomes_usuarios(ids):
+    """criado_por_id é referência fraca: resolve os nomes em uma query só."""
+    alvos = {i for i in ids if i}
+    if not alvos:
+        return {}
+    return {
+        u.id: u.username
+        for u in User.query.filter(User.id.in_(alvos)).all()
+    }
+
+
+@frota_bp.route('/postos-combustivel/saldos', methods=['GET'])
+@jwt_required()
+def listar_saldos_postos():
+    """Saldo pré-pago por posto (recargas - abastecimentos)."""
+    try:
+        incluir_inativos = _to_bool(request.args.get('incluir_inativos'))
+        return jsonify(posto_combustivel_service.saldos(
+            incluir_inativos=incluir_inativos,
+        )), 200
+    except Exception:
+        logger.exception("Erro em GET /frota/postos-combustivel/saldos")
+        return jsonify({"erro": "Erro ao calcular saldo dos postos"}), 500
+
+
+@frota_bp.route('/postos-combustivel/recargas', methods=['GET'])
+@jwt_required()
+def listar_recargas_postos():
+    """?posto_id= &de= &ate= — últimas recargas lançadas."""
+    try:
+        query = FrotaPostoRecarga.query
+        posto_id = _to_int(request.args.get('posto_id'))
+        if posto_id:
+            query = query.filter(FrotaPostoRecarga.posto_id == posto_id)
+        de = _parse_date(request.args.get('de'))
+        if de:
+            query = query.filter(FrotaPostoRecarga.data >= de)
+        ate = _parse_date(request.args.get('ate'))
+        if ate:
+            query = query.filter(FrotaPostoRecarga.data <= ate)
+        itens = (query.order_by(FrotaPostoRecarga.data.desc(),
+                                FrotaPostoRecarga.id.desc())
+                 .limit(300).all())
+        nomes = _nomes_usuarios(r.criado_por_id for r in itens)
+        return jsonify([
+            r.to_dict(criado_por_nome=nomes.get(r.criado_por_id)) for r in itens
+        ]), 200
+    except Exception:
+        logger.exception("Erro em GET /frota/postos-combustivel/recargas")
+        return jsonify({"erro": "Erro ao listar recargas"}), 500
+
+
+@frota_bp.route('/postos-combustivel/<int:posto_id>/recargas', methods=['POST'])
+@jwt_required()
+def criar_recarga_posto(posto_id):
+    """Crédito colocado na conta do posto. Só gestor lança (é dinheiro)."""
+    try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({
+                "erro": "Somente master ou administrador podem lançar recargas",
+            }), 403
+        posto = db.session.get(FrotaPostoCombustivel, posto_id)
+        if not posto or not posto.ativo:
+            return jsonify({"erro": "Posto de combustível não encontrado"}), 404
+
+        dados = request.get_json(silent=True) or {}
+        recarga = posto_combustivel_service.criar_recarga(posto, {
+            'data': _parse_date(dados.get('data')) or date.today(),
+            'valor': dados.get('valor'),
+            'observacao': dados.get('observacao'),
+        }, criado_por_id=user.id if user else None)
+        db.session.commit()
+        return jsonify(recarga.to_dict(
+            criado_por_nome=user.username if user else None,
+        )), 201
+    except posto_combustivel_service.PostoInvalido as exc:
+        db.session.rollback()
+        return jsonify({"erro": str(exc)}), 400
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em POST /frota/postos-combustivel/<id>/recargas")
+        return jsonify({"erro": "Erro ao lançar recarga"}), 500
+
+
+@frota_bp.route('/postos-combustivel/recargas/<int:recarga_id>', methods=['DELETE'])
+@jwt_required()
+def remover_recarga_posto(recarga_id):
+    try:
+        user = get_current_user()
+        if not user or user.role != 'master':
+            return jsonify({"erro": "Somente o master pode excluir recargas"}), 403
+        recarga = db.session.get(FrotaPostoRecarga, recarga_id)
+        if not recarga:
+            return jsonify({"erro": "Recarga não encontrada"}), 404
+        db.session.delete(recarga)
+        db.session.commit()
+        return jsonify({"ok": True}), 200
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em DELETE /frota/postos-combustivel/recargas/<id>")
+        return jsonify({"erro": "Erro ao remover recarga"}), 500
+
+
+@frota_bp.route('/postos-combustivel/<int:posto_id>/extrato', methods=['GET'])
+@jwt_required()
+def extrato_posto(posto_id):
+    """Recargas e abastecimentos do posto na mesma linha do tempo."""
+    try:
+        posto = db.session.get(FrotaPostoCombustivel, posto_id)
+        if not posto:
+            return jsonify({"erro": "Posto de combustível não encontrado"}), 404
+        return jsonify(posto_combustivel_service.extrato(
+            posto,
+            de=_parse_date(request.args.get('de')),
+            ate=_parse_date(request.args.get('ate')),
+        )), 200
+    except Exception:
+        logger.exception("Erro em GET /frota/postos-combustivel/<id>/extrato")
+        return jsonify({"erro": "Erro ao montar o extrato do posto"}), 500
 
 
 # ---------------------------------------------------------------- abastecimentos

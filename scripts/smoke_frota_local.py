@@ -36,7 +36,8 @@ app.register_blueprint(frota_bp)
 TABELAS = [
     'user', 'user_obra_association', 'obra', 'categoria_mo', 'funcionario',
     'frota_condutor', 'frota_veiculo', 'frota_movimentacao', 'frota_documento',
-    'frota_manutencao', 'frota_abastecimento', 'frota_multa',
+    'frota_manutencao', 'frota_posto_combustivel', 'frota_posto_recarga',
+    'frota_abastecimento', 'frota_abastecimento_solicitacao', 'frota_multa',
 ]
 
 PASS = []

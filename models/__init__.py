@@ -39,6 +39,7 @@ from .frota_movimentacao import FrotaMovimentacao  # noqa: F401
 from .frota_documento import FrotaDocumento  # noqa: F401
 from .frota_manutencao import FrotaManutencao  # noqa: F401
 from .frota_posto_combustivel import FrotaPostoCombustivel  # noqa: F401
+from .frota_posto_recarga import FrotaPostoRecarga  # noqa: F401
 from .frota_abastecimento import FrotaAbastecimento  # noqa: F401
 from .frota_abastecimento_solicitacao import FrotaAbastecimentoSolicitacao  # noqa: F401
 from .frota_multa import FrotaMulta  # noqa: F401

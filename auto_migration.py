@@ -856,6 +856,41 @@ def run_auto_migration():
             END $$;
         """)
 
+        # Recargas: crédito pré-pago colocado na conta do posto. O saldo não é
+        # armazenado — é sempre recargas menos abastecimentos daquele posto.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_posto_recarga (
+                id             SERIAL PRIMARY KEY,
+                posto_id       INTEGER NOT NULL REFERENCES frota_posto_combustivel(id) ON DELETE CASCADE,
+                data           DATE NOT NULL,
+                valor          NUMERIC(12,2) NOT NULL,
+                observacao     VARCHAR(300),
+                criado_por_id  INTEGER,
+                data_criacao   TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_frota_posto_recarga_posto
+                ON frota_posto_recarga (posto_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_posto_recarga_data
+                ON frota_posto_recarga (data);
+
+            ALTER TABLE frota_posto_recarga ENABLE ROW LEVEL SECURITY;
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                    REVOKE ALL ON TABLE frota_posto_recarga FROM anon;
+                    REVOKE ALL ON SEQUENCE frota_posto_recarga_id_seq FROM anon;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    REVOKE ALL ON TABLE frota_posto_recarga FROM authenticated;
+                    REVOKE ALL ON SEQUENCE frota_posto_recarga_id_seq FROM authenticated;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+                    REVOKE ALL ON TABLE frota_posto_recarga FROM service_role;
+                    REVOKE ALL ON SEQUENCE frota_posto_recarga_id_seq FROM service_role;
+                END IF;
+            END $$;
+        """)
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS frota_abastecimento (
                 id           SERIAL PRIMARY KEY,
