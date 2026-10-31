@@ -477,7 +477,16 @@ def atribuir_condutor(veiculo_id):
         condutor_id = _to_int(dados.get('condutor_id'))
         if dados.get('condutor_id') and not condutor_id:
             return jsonify({"erro": "condutor_id inválido"}), 400
-        if (veiculo.condutor_atual_id
+        # A confirmação `transferir_veiculo` existe para proteger contra tomar o
+        # veículo de outro condutor sem intenção. Só há transferência a confirmar
+        # quando o payload traz um condutor novo: com `condutor_id` nulo estamos
+        # apenas liberando o veículo, e não existe segundo condutor envolvido —
+        # pedir confirmação aqui travava a remoção (e, em cascata, o DELETE do
+        # condutor, que exige o veículo liberado). Mesma regra já aplicada em
+        # _definir_veiculo_do_condutor(), que só exige `transferir` quando há
+        # veículo de destino. O aviso ao usuário na remoção é da tela, não da API.
+        if (condutor_id
+                and veiculo.condutor_atual_id
                 and veiculo.condutor_atual_id != condutor_id
                 and not _to_bool(dados.get('transferir_veiculo'))):
             nome_atual = veiculo.condutor_atual.nome if veiculo.condutor_atual else 'outro condutor'

@@ -37,6 +37,8 @@ TABELAS = [
     'user', 'user_obra_association', 'obra', 'categoria_mo', 'funcionario',
     'frota_condutor', 'frota_veiculo', 'frota_movimentacao', 'frota_documento',
     'frota_manutencao', 'frota_abastecimento', 'frota_multa',
+    'frota_abastecimento_solicitacao', 'frota_posto_combustivel',
+    'frota_efrotas_evento', 'frota_efrotas_sincronizacao',
 ]
 
 PASS = []
@@ -204,6 +206,39 @@ with app.app_context():
 
         r = c.delete(f'/frota/condutores/{condutor_id}', headers=h_master)
         check('DELETE condutor em uso -> 400', r.status_code == 400)
+
+        # [B-06] A confirmação `transferir_veiculo` só vale para transferência:
+        # condutor NOVO entrando num veículo que já tem outro. Remover (condutor_id
+        # nulo) não é transferência e não pode exigir confirmação — exigir travava
+        # a remoção e, em cascata, o DELETE do condutor. Sem cnh_validade de
+        # propósito: manter as contagens do dashboard intactas.
+        r = c.post('/frota/condutores', json={'nome': 'Maria Smoke'}, headers=h_master)
+        check('POST condutor auxiliar -> 201', r.status_code == 201, f'got {r.status_code}')
+        condutor2_id = json.loads(r.data)['id']
+
+        r = c.patch(f'/frota/veiculos/{veic_id}/condutor',
+                    json={'condutor_id': condutor2_id}, headers=h_master)
+        check('PATCH transferência sem confirmação -> 409', r.status_code == 409,
+              f'got {r.status_code}: {r.data[:160]}')
+
+        r = c.patch(f'/frota/veiculos/{veic_id}/condutor',
+                    json={'condutor_id': condutor2_id, 'transferir_veiculo': True},
+                    headers=h_master)
+        check('PATCH transferência com confirmação -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:160]}')
+
+        r = c.patch(f'/frota/veiculos/{veic_id}/condutor', json={'condutor_id': None},
+                    headers=h_master)
+        check('PATCH remoção sem confirmação -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:160]}')
+
+        # devolve o veículo ao condutor original e limpa o auxiliar
+        r = c.patch(f'/frota/veiculos/{veic_id}/condutor',
+                    json={'condutor_id': condutor_id}, headers=h_master)
+        check('PATCH reatribui condutor original -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:160]}')
+        r = c.delete(f'/frota/condutores/{condutor2_id}', headers=h_master)
+        check('DELETE condutor auxiliar -> 200', r.status_code == 200, f'got {r.status_code}')
 
         print('\n=== documentos ===')
         r = c.post(f'/frota/veiculos/{veic_id}/documentos', json={
