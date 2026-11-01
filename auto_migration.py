@@ -829,10 +829,15 @@ def run_auto_migration():
                 id                SERIAL PRIMARY KEY,
                 nome              VARCHAR(160) NOT NULL,
                 nome_normalizado  VARCHAR(160) NOT NULL,
+                unidade           VARCHAR(10) NOT NULL DEFAULT 'reais',
                 ativo             BOOLEAN NOT NULL DEFAULT TRUE,
                 data_criacao      TIMESTAMP NOT NULL DEFAULT NOW(),
                 data_atualizacao  TIMESTAMP NOT NULL DEFAULT NOW()
             );
+            -- Convenio pre-pago em dinheiro ('reais') ou em litros comprados
+            -- adiantado ('litros'). Cadastros antigos ficam em 'reais'.
+            ALTER TABLE frota_posto_combustivel
+                ADD COLUMN IF NOT EXISTS unidade VARCHAR(10) NOT NULL DEFAULT 'reais';
             CREATE UNIQUE INDEX IF NOT EXISTS idx_frota_posto_nome_normalizado
                 ON frota_posto_combustivel (nome_normalizado);
             CREATE INDEX IF NOT EXISTS idx_frota_posto_ativo_nome
@@ -852,6 +857,52 @@ def run_auto_migration():
                 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
                     REVOKE ALL ON TABLE frota_posto_combustivel FROM service_role;
                     REVOKE ALL ON SEQUENCE frota_posto_combustivel_id_seq FROM service_role;
+                END IF;
+            END $$;
+        """)
+
+        # Recargas: crédito pré-pago colocado na conta do posto. O saldo não é
+        # armazenado — é sempre recargas menos abastecimentos daquele posto.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS frota_posto_recarga (
+                id             SERIAL PRIMARY KEY,
+                posto_id       INTEGER NOT NULL REFERENCES frota_posto_combustivel(id) ON DELETE CASCADE,
+                data           DATE NOT NULL,
+                tipo           VARCHAR(10) NOT NULL DEFAULT 'recarga',
+                valor          NUMERIC(12,2),
+                litros         NUMERIC(10,2),
+                observacao     VARCHAR(300),
+                criado_por_id  INTEGER,
+                data_criacao   TIMESTAMP NOT NULL DEFAULT NOW()
+            );
+            -- 'recarga' e credito comprado; 'ajuste' e a diferenca gravada
+            -- quando o operador digita o saldo que o posto diz que ele tem.
+            ALTER TABLE frota_posto_recarga
+                ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'recarga';
+            -- Em posto de litros o saldo anda por litros; valor fica opcional
+            -- (serve para registrar quanto se pagou, fora da conta do saldo).
+            ALTER TABLE frota_posto_recarga
+                ADD COLUMN IF NOT EXISTS litros NUMERIC(10,2);
+            ALTER TABLE frota_posto_recarga ALTER COLUMN valor DROP NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_frota_posto_recarga_posto
+                ON frota_posto_recarga (posto_id);
+            CREATE INDEX IF NOT EXISTS idx_frota_posto_recarga_data
+                ON frota_posto_recarga (data);
+
+            ALTER TABLE frota_posto_recarga ENABLE ROW LEVEL SECURITY;
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                    REVOKE ALL ON TABLE frota_posto_recarga FROM anon;
+                    REVOKE ALL ON SEQUENCE frota_posto_recarga_id_seq FROM anon;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    REVOKE ALL ON TABLE frota_posto_recarga FROM authenticated;
+                    REVOKE ALL ON SEQUENCE frota_posto_recarga_id_seq FROM authenticated;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+                    REVOKE ALL ON TABLE frota_posto_recarga FROM service_role;
+                    REVOKE ALL ON SEQUENCE frota_posto_recarga_id_seq FROM service_role;
                 END IF;
             END $$;
         """)

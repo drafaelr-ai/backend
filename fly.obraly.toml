@@ -20,6 +20,25 @@ primary_region = "gru"
     hard_limit = 25
     soft_limit = 20
 
+  # Health check do Fly — bate em GET /health (liveness, nao toca o banco).
+  # Sem isto o "flyctl deploy --wait-timeout 300" fica VERDE so porque a
+  # maquina entrou em "started", mesmo que o processo morra em loop (ex.: DDL
+  # do auto_migration.py estourando no boot, que da raise no import do app.py).
+  # Com o check, o deploy so passa quando a rota responde 200 de fato.
+  # O check NAO usa /health/db de proposito: check reprovado tira a maquina da
+  # rotacao do proxy, e uma instabilidade do Supabase derrubaria a API inteira.
+  [[http_service.checks]]
+    # 60s e nao 30s: o boot importa ~60 models e roda o auto_migration contra o
+    # Supabase. Durante o deploy um check reprovado nao e fatal (o flyctl segue
+    # esperando ate o --wait-timeout), mas num restart de maquina ja no ar ele
+    # tiraria a maquina da rotacao do proxy por alguns segundos sem motivo.
+    grace_period = "60s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+
 [[vm]]
   memory = "512mb"
   cpu_kind = "shared"

@@ -1,9 +1,14 @@
-# Deploy do obraly-api no Fly.io a cada push na main.
+# Gate de testes + deploy do obraly-api no Fly.io.
 #
-# Por quê: o frontend já sobe sozinho (Vercel no push da main), mas o backend
-# dependia de alguém rodar `fly deploy` na máquina. Isso deixava as duas
+# Por quê (deploy): o frontend já sobe sozinho (Vercel no push da main), mas o
+# backend dependia de alguém rodar `fly deploy` na máquina. Isso deixava as duas
 # pontas fora de sincronia — a tela nova aparecia no ar chamando endpoints que
 # ainda não existiam (405 no console).
+#
+# Por quê (gate): até agora o push na main ia direto para `flyctl deploy`, sem
+# rodar um teste. O repo tem uma suíte offline grande (smoke com SQLite
+# in-memory + unittest), então o deploy passou a depender dela via `needs:`.
+# Código que quebra a suíte não chega mais em produção.
 #
 # Pré-requisito, uma vez só:
 #   fly tokens create deploy -x 999999h
@@ -20,17 +25,149 @@ on:
       - '**.md'
       - 'deploy_fly.ps1'
       - '.github/**'
-  workflow_dispatch:   # permite disparar o deploy pela aba Actions
-
-# Um deploy por vez: dois pushes seguidos não podem disputar a mesma máquina.
-concurrency:
-  group: deploy-obraly-api
-  cancel-in-progress: false
+  # Em PR rodamos só o gate (o job de deploy se exclui sozinho, ver `if:`).
+  # Aqui NÃO ignoramos '.github/**' de propósito: mudança no próprio workflow é
+  # justamente quando se quer ver a suíte rodando antes do merge.
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'deploy_fly.ps1'
+  workflow_dispatch:
+    inputs:
+      pular_testes:
+        description: 'Deploy de emergência: pular o gate de testes'
+        type: boolean
+        default: false
 
 jobs:
+  testes:
+    name: Suíte offline (smoke + unittest)
+    # Em deploy de emergência o gate é pulado de propósito (só manual).
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.pular_testes) }}
+    runs-on: ubuntu-latest
+    # Um push novo no mesmo ref cancela o teste velho — vale em PR, onde o
+    # resultado antigo já não interessa. Na main não cancelamos.
+    concurrency:
+      group: testes-obraly-api-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    env:
+      # Os scripts de scripts/ importam módulos da raiz (app_admin, extensions,
+      # models...). Sem isso, smoke_admin_blueprints_local.py quebra com
+      # ModuleNotFoundError: no module named 'app_admin' — ele é o único que não
+      # faz sys.path.insert() por conta própria.
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+
+      # 3.11 para bater com produção (Dockerfile.obraly: python:3.11-slim,
+      # runtime.txt: python-3.11.9). Não subir essa versão sem subir as duas:
+      # sintaxe aceita só em 3.12+ passaria no CI e estouraria no boot do Fly.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # requirements.txt inteiro, sem apt-get: todas as rodas (psycopg2-binary,
+      # pillow, reportlab, pdfplumber) são pré-compiladas. Testado em venv limpo.
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Garante que todo o código de produção ao menos compila no 3.11 do Fly.
+      # scripts/ e tests/ ficam fora porque smoke_almoxarifado_ponto_local.py usa
+      # f-string aninhada do PEP 701 (só 3.12+) e não faz parse aqui.
+      - name: Checar sintaxe no Python de produção (3.11)
+        run: |
+          python -m compileall -q \
+            -x '(^|/)(scripts|tests|fly-deploy|venv|node_modules|\.github|\.git)(/|$)' .
+
+      # NOTA: de propósito não definimos DB_PASSWORD nem JWT_SECRET_KEY aqui.
+      # Os scripts do gate montam o próprio app (SQLite in-memory + segredo
+      # fake). Definir DB_PASSWORD faria auto_migration.py tentar conectar no
+      # Postgres de produção durante o CI.
+      - name: Rodar suíte
+        run: |
+          set -uo pipefail
+          falhou=0
+
+          # Fora do gate — qualquer mudança aqui tem que ser justificada:
+          #   smoke_frota_local.py            2 FAIL pré-existentes (B-06 em
+          #     obraly-root/docs/BUGS_LATENTES.md: PATCH /frota/veiculos/<id>/condutor
+          #     exige transferir_veiculo até para REMOVER condutor). Os outros
+          #     75 checks do script passam; voltar a incluí-lo quando B-06 fechar.
+          #   smoke_superlink.py              importa app.py, que no import roda
+          #     auto_migration + create_app e exige DB_PASSWORD/JWT_SECRET_KEY e
+          #     rede até o Postgres de produção. Não roda offline. A cobertura de
+          #     Superlink fica com smoke_superlink_isolation.py (22 checks), que
+          #     monta o próprio app.
+          #   smoke_almoxarifado_ponto_local.py  SyntaxError no 3.11 (f-string
+          #     aninhada PEP 701, linha 115). Fora do gate até ser reescrito.
+          excluidos="smoke_frota_local.py smoke_superlink.py smoke_almoxarifado_ponto_local.py"
+
+          esta_excluido() {
+            for e in $excluidos; do [ "$1" = "$e" ] && return 0; done
+            return 1
+          }
+
+          echo "::group::smoke"
+          for f in scripts/smoke_*.py; do
+            base=$(basename "$f")
+            if esta_excluido "$base"; then
+              echo "SKIP  $base (fora do gate, ver comentário no workflow)"
+              continue
+            fi
+            echo "----- $base -----"
+            if python "$f"; then
+              echo "OK    $base"
+            else
+              echo "FALHA $base"
+              falhou=1
+            fi
+          done
+          echo "::endgroup::"
+
+          echo "::group::unittest"
+          for f in tests/test_*.py; do
+            base=$(basename "$f")
+            echo "----- $base -----"
+            if python "$f"; then
+              echo "OK    $base"
+            else
+              echo "FALHA $base"
+              falhou=1
+            fi
+          done
+          echo "::endgroup::"
+
+          # O glob roda todo scripts/smoke_*.py que não esteja na lista acima:
+          # script novo entra no gate sozinho.
+          if [ "$falhou" -ne 0 ]; then
+            echo "Gate vermelho: ver as linhas FALHA acima. Deploy bloqueado."
+            exit 1
+          fi
+          echo "Gate verde."
+
   deploy:
     name: fly deploy
+    needs: testes
+    # PR nunca deploya — só roda o gate. E o deploy só acontece com o gate
+    # verde; a única exceção é o workflow_dispatch com pular_testes marcado
+    # (escape hatch manual, para hotfix quando o próprio gate estiver quebrado).
+    if: >-
+      always()
+      && github.event_name != 'pull_request'
+      && (needs.testes.result == 'success'
+          || (github.event_name == 'workflow_dispatch' && inputs.pular_testes))
     runs-on: ubuntu-latest
+    # Um deploy por vez: dois pushes seguidos não podem disputar a mesma máquina.
+    # (Era concurrency de workflow; virou de job para que o gate de um PR não
+    # fique na fila atrás de um deploy da main. A garantia do deploy é a mesma.)
+    concurrency:
+      group: deploy-obraly-api
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +182,40 @@ jobs:
           --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Confere a API DEPOIS de subir. O `flyctl deploy` acima já espera o
+      # health check declarado em fly.obraly.toml, mas esse check bate no
+      # internal_port direto; este passo valida a borda pública (proxy do Fly
+      # + force_https), que é por onde o frontend fala de verdade.
+      - name: Smoke pós-deploy — GET /health
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          URL="https://obraly-api.fly.dev/health"
+          for tentativa in $(seq 1 10); do
+            codigo="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 10 "$URL" || echo 000)"
+            echo "tentativa ${tentativa}/10 — HTTP ${codigo}"
+            if [ "${codigo}" = "200" ]; then
+              echo "corpo: $(cat /tmp/health.json)"
+              echo "API no ar em ${URL}"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "::error::${URL} não retornou 200 em 10 tentativas — a aplicação não está servindo."
+          flyctl logs --app obraly-api --no-tail | tail -100 || true
+          exit 1
+
+      # Estado do banco: informativo DE PROPÓSITO (continue-on-error).
+      # Mesma razão pela qual /health/db fica fora do check do Fly: uma
+      # instabilidade do Supabase não deve marcar o deploy como quebrado.
+      - name: Estado do banco pós-deploy — GET /health/db (informativo)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          codigo="$(curl -sS -o /tmp/health_db.json -w '%{http_code}' --max-time 15 https://obraly-api.fly.dev/health/db || echo 000)"
+          echo "HTTP ${codigo} — corpo: $(cat /tmp/health_db.json 2>/dev/null || echo '(vazio)')"
+          if [ "${codigo}" != "200" ]; then
+            echo "::warning::/health/db não retornou 200 (HTTP ${codigo}); ver 'fly logs --app obraly-api'"
+          fi

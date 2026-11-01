@@ -1,0 +1,570 @@
+"""
+Smoke test local da recarga de saldo nos postos — sem banco real
+(SQLite in-memory) e sem rede.
+
+O que se testa aqui: o saldo derivado (recargas - abastecimentos), as
+validações do valor, quem pode lançar e excluir, o extrato na linha do
+tempo e o casamento dos abastecimentos antigos que só tinham o nome do
+posto digitado (sem posto_id).
+
+Uso: cd backend && python scripts/smoke_recarga_posto_local.py
+"""
+import os
+import sys
+import json
+import unicodedata
+from datetime import date, timedelta
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from flask import Flask
+from flask_jwt_extended import create_access_token
+
+from extensions import db, jwt, limiter
+import models  # noqa: F401 — registra todos os models no metadata
+from models import User, Obra, FrotaVeiculo, FrotaAbastecimento
+from models import FrotaPostoCombustivel, FrotaPostoRecarga
+from routes.frota import frota_bp
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = 'smoke-test-secret'
+app.config['RATELIMIT_ENABLED'] = False
+db.init_app(app)
+jwt.init_app(app)
+limiter.init_app(app)
+app.register_blueprint(frota_bp)
+
+TABELAS = [
+    'user', 'user_obra_association', 'obra', 'categoria_mo', 'funcionario',
+    'frota_condutor', 'frota_veiculo', 'frota_movimentacao', 'frota_documento',
+    'frota_manutencao', 'frota_posto_combustivel', 'frota_posto_recarga',
+    'frota_abastecimento', 'frota_multa', 'frota_abastecimento_solicitacao',
+]
+
+PASS = []
+FAIL = []
+
+
+def check(label, condition, detail=''):
+    if condition:
+        PASS.append(label)
+        print(f'  PASS  {label}')
+    else:
+        FAIL.append(label)
+        print(f'  FAIL  {label}  {detail}')
+
+
+def saldo_de(dados, nome):
+    for posto in dados['postos']:
+        if posto['posto_nome'] == nome:
+            return posto
+    return None
+
+
+with app.app_context():
+    db.metadata.create_all(bind=db.engine, tables=[db.metadata.tables[t] for t in TABELAS])
+
+    obra = Obra(nome='Obra Recarga')
+    master = User(username='master_recarga', role='master', modulos_permitidos=['obras'])
+    master.set_password('smoke123')
+    admin = User(username='admin_recarga', role='administrador',
+                 modulos_permitidos=['frota'])
+    admin.set_password('smoke123')
+    comum = User(username='comum_recarga', role='comum', modulos_permitidos=['frota'])
+    comum.set_password('smoke123')
+    db.session.add_all([obra, master, admin, comum])
+    db.session.commit()
+
+    veiculo = FrotaVeiculo(placa='RCG1A23', modelo='Hilux', tipo='caminhonete',
+                           combustivel='diesel', km_atual=50000,
+                           local_tipo='obra', obra_id=obra.id)
+    db.session.add(veiculo)
+    db.session.commit()
+    veic_id = veiculo.id
+
+    h_master = {'Authorization': f'Bearer {create_access_token(identity=str(master.id))}'}
+    h_admin = {'Authorization': f'Bearer {create_access_token(identity=str(admin.id))}'}
+    h_comum = {'Authorization': f'Bearer {create_access_token(identity=str(comum.id))}'}
+
+    hoje = date.today()
+    ontem = hoje - timedelta(days=1)
+    semana = hoje - timedelta(days=7)
+
+    with app.test_client() as c:
+        print('\n=== saldo sem posto cadastrado ===')
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        dados = json.loads(r.data)
+        check('GET saldos sem postos -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:200]}')
+        check('saldos vazio devolve lista e resumo zerados',
+              dados['postos'] == [] and dados['resumo']['saldo'] == 0.0)
+
+        print('\n=== cadastro dos postos ===')
+        r = c.post('/frota/postos-combustivel', json={'nome': 'Posto Ipiranga Centro'},
+                   headers=h_master)
+        posto_a = json.loads(r.data)
+        r = c.post('/frota/postos-combustivel', json={'nome': 'Posto Shell BR-101'},
+                   headers=h_master)
+        posto_b = json.loads(r.data)
+        check('dois postos cadastrados', bool(posto_a.get('id') and posto_b.get('id')))
+
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        dados = json.loads(r.data)
+        check('posto sem movimento aparece com saldo 0',
+              saldo_de(dados, 'Posto Ipiranga Centro')['saldo'] == 0.0)
+
+        print('\n=== quem pode lançar recarga ===')
+        r = c.post(f"/frota/postos-combustivel/{posto_a['id']}/recargas",
+                   json={'valor': '100,00'}, headers=h_comum)
+        check('comum não lança recarga -> 403', r.status_code == 403,
+              f'got {r.status_code}')
+        r = c.post(f"/frota/postos-combustivel/{posto_a['id']}/recargas",
+                   json={'valor': '1.250,50', 'data': semana.isoformat(),
+                         'observacao': '  Depósito   em   dinheiro  '},
+                   headers=h_admin)
+        check('administrador lança recarga -> 201', r.status_code == 201,
+              f'got {r.status_code}: {r.data[:200]}')
+        recarga = json.loads(r.data)
+        check('valor em formato BR é convertido', recarga['valor'] == 1250.5,
+              f"got {recarga.get('valor')}")
+        check('observação normaliza espaços',
+              recarga['observacao'] == 'Depósito em dinheiro',
+              f"got {recarga.get('observacao')!r}")
+        check('recarga registra quem lançou',
+              recarga['criado_por_nome'] == 'admin_recarga')
+
+        print('\n=== validações do valor ===')
+        for rotulo, corpo in [
+            ('valor ausente', {}),
+            ('valor vazio', {'valor': ''}),
+            ('valor zero', {'valor': 0}),
+            ('valor negativo', {'valor': '-50'}),
+            ('valor não numérico', {'valor': 'abc'}),
+            ('valor acima do teto', {'valor': 99_000_000}),
+        ]:
+            r = c.post(f"/frota/postos-combustivel/{posto_a['id']}/recargas",
+                       json=corpo, headers=h_master)
+            check(f'{rotulo} -> 400', r.status_code == 400, f'got {r.status_code}')
+
+        r = c.post('/frota/postos-combustivel/999999/recargas',
+                   json={'valor': 100}, headers=h_master)
+        check('posto inexistente -> 404', r.status_code == 404, f'got {r.status_code}')
+
+        print('\n=== milhar BR no campo livre ===')
+        r = c.post(f"/frota/postos-combustivel/{posto_b['id']}/recargas",
+                   json={'valor': '1.250', 'data': semana.isoformat()}, headers=h_master)
+        check("'1.250' vale mil duzentos e cinquenta, nao 1,25",
+              r.status_code == 201 and json.loads(r.data)['valor'] == 1250.0,
+              f'got {r.status_code}: {r.data[:120]}')
+        recarga_milhar_id = json.loads(r.data)['id']
+        r = c.delete(f'/frota/postos-combustivel/recargas/{recarga_milhar_id}',
+                     headers=h_master)
+        check('recarga do teste de milhar removida', r.status_code == 200)
+
+        print('\n=== saldo após recargas e abastecimentos ===')
+        r = c.post(f"/frota/postos-combustivel/{posto_a['id']}/recargas",
+                   json={'valor': 500, 'data': ontem.isoformat()}, headers=h_master)
+        check('segunda recarga -> 201', r.status_code == 201)
+
+        r = c.post('/frota/abastecimentos', json={
+            'veiculo_id': veic_id, 'data': hoje.isoformat(), 'valor': '300,00',
+            'litros': 50, 'km': 50500, 'posto_id': posto_a['id'],
+        }, headers=h_master)
+        check('abastecimento no posto A -> 201', r.status_code == 201,
+              f'got {r.status_code}: {r.data[:200]}')
+
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        dados = json.loads(r.data)
+        posto_a_saldo = saldo_de(dados, 'Posto Ipiranga Centro')
+        check('total recarregado soma as duas recargas',
+              posto_a_saldo['total_recarregado'] == 1750.5,
+              f"got {posto_a_saldo['total_recarregado']}")
+        check('total consumido vem do abastecimento',
+              posto_a_saldo['total_consumido'] == 300.0,
+              f"got {posto_a_saldo['total_consumido']}")
+        check('saldo = recargas - abastecimentos',
+              posto_a_saldo['saldo'] == 1450.5, f"got {posto_a_saldo['saldo']}")
+        check('contadores de recargas e abastecimentos',
+              posto_a_saldo['recargas'] == 2 and posto_a_saldo['abastecimentos'] == 1)
+        check('última recarga é a data mais recente informada',
+              posto_a_saldo['ultima_recarga'] == ontem.isoformat())
+        check('resumo soma todos os postos',
+              dados['resumo']['saldo'] == 1450.5,
+              f"got {dados['resumo']['saldo']}")
+
+        print('\n=== abastecimento antigo, só com o nome digitado ===')
+        legado = FrotaAbastecimento(
+            veiculo_id=veic_id, data=hoje, valor=200, litros=30,
+            posto='  posto   IPIRANGA   centro ', posto_id=None,
+        )
+        db.session.add(legado)
+        db.session.commit()
+        legado_id = legado.id
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        posto_a_saldo = saldo_de(json.loads(r.data), 'Posto Ipiranga Centro')
+        check('registro antigo sem posto_id entra no consumo pelo nome',
+              posto_a_saldo['total_consumido'] == 500.0,
+              f"got {posto_a_saldo['total_consumido']}")
+        check('saldo desconta o registro antigo', posto_a_saldo['saldo'] == 1250.5,
+              f"got {posto_a_saldo['saldo']}")
+
+        print('\n=== saldo negativo ===')
+        r = c.post('/frota/abastecimentos', json={
+            'veiculo_id': veic_id, 'data': hoje.isoformat(), 'valor': 400,
+            'litros': 60, 'posto_id': posto_b['id'],
+        }, headers=h_master)
+        check('abastecimento no posto B (sem recarga) -> 201', r.status_code == 201)
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        dados = json.loads(r.data)
+        check('posto sem recarga fica com saldo negativo',
+              saldo_de(dados, 'Posto Shell BR-101')['saldo'] == -400.0)
+        check('resumo conta os postos negativos',
+              dados['resumo']['postos_negativos'] == 1)
+        check('ordenação mostra o pior saldo primeiro',
+              dados['postos'][0]['posto_nome'] == 'Posto Shell BR-101')
+
+        print('\n=== extrato do posto ===')
+        r = c.get(f"/frota/postos-combustivel/{posto_a['id']}/extrato", headers=h_master)
+        extrato = json.loads(r.data)
+        check('GET extrato -> 200', r.status_code == 200, f'got {r.status_code}')
+        tipos = [m['tipo'] for m in extrato['movimentos']]
+        check('extrato traz recargas e abastecimentos', len(tipos) == 4,
+              f'got {tipos}')
+        check('extrato vem do mais recente para o mais antigo',
+              extrato['movimentos'][-1]['data'] == semana.isoformat())
+        check('abastecimento entra como valor negativo',
+              all(m['valor'] < 0 for m in extrato['movimentos'] if m['tipo'] == 'abastecimento'))
+        check('saldo acumulado do movimento mais antigo é a primeira recarga',
+              extrato['movimentos'][-1]['saldo_acumulado'] == 1250.5)
+        check('saldo acumulado final bate com o saldo do posto',
+              extrato['movimentos'][0]['saldo_acumulado'] == 1250.5
+              and extrato['resumo']['saldo'] == 1250.5,
+              f"got {extrato['movimentos'][0]['saldo_acumulado']}")
+        check('extrato identifica a placa do veículo',
+              any(m['veiculo_placa'] == 'RCG1A23' for m in extrato['movimentos']))
+
+        r = c.get(f"/frota/postos-combustivel/{posto_a['id']}/extrato"
+                  f'?de={hoje.isoformat()}', headers=h_master)
+        extrato_hoje = json.loads(r.data)
+        check('filtro de data recorta os movimentos',
+              all(m['data'] == hoje.isoformat() for m in extrato_hoje['movimentos'])
+              and len(extrato_hoje['movimentos']) == 2,
+              f"got {[m['data'] for m in extrato_hoje['movimentos']]}")
+        check('resumo do extrato continua sendo o saldo total do posto',
+              extrato_hoje['resumo']['saldo'] == 1250.5)
+        # Sem saldo_inicial a coluna de saldo recomeçava do zero a cada filtro
+        # e dizia que o posto estava negativo ao lado de um KPI positivo.
+        check('extrato filtrado parte do saldo anterior ao período',
+              extrato_hoje['saldo_inicial'] == 1750.5,
+              f"got {extrato_hoje.get('saldo_inicial')}")
+        check('saldo acumulado do período fecha no saldo do posto',
+              extrato_hoje['movimentos'][0]['saldo_acumulado'] == 1250.5,
+              f"got {extrato_hoje['movimentos'][0]['saldo_acumulado']}")
+        check('extrato sem filtro tem saldo inicial zero',
+              extrato['saldo_inicial'] == 0.0,
+              f"got {extrato.get('saldo_inicial')}")
+
+        r = c.get('/frota/postos-combustivel/999999/extrato', headers=h_master)
+        check('extrato de posto inexistente -> 404', r.status_code == 404)
+
+        print('\n=== lista de recargas ===')
+        r = c.get('/frota/postos-combustivel/recargas', headers=h_master)
+        lista = json.loads(r.data)
+        check('GET recargas -> 200', r.status_code == 200)
+        check('lista traz as duas recargas com o nome do posto',
+              len(lista) == 2
+              and all(x['posto_nome'] == 'Posto Ipiranga Centro' for x in lista))
+        check('lista ordenada da mais recente para a mais antiga',
+              lista[0]['data'] == ontem.isoformat())
+        r = c.get(f"/frota/postos-combustivel/recargas?de={ontem.isoformat()}",
+                  headers=h_master)
+        check('filtro de data na lista de recargas', len(json.loads(r.data)) == 1)
+        r = c.get(f"/frota/postos-combustivel/recargas?posto_id={posto_b['id']}",
+                  headers=h_master)
+        check('filtro por posto na lista de recargas', json.loads(r.data) == [])
+
+        print('\n=== exclusão de recarga ===')
+        recarga_id = lista[0]['id']
+        r = c.delete(f'/frota/postos-combustivel/recargas/{recarga_id}', headers=h_admin)
+        check('administrador não exclui recarga -> 403', r.status_code == 403,
+              f'got {r.status_code}')
+        r = c.delete(f'/frota/postos-combustivel/recargas/{recarga_id}', headers=h_master)
+        check('master exclui recarga -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:200]}')
+        check('recarga some do banco',
+              db.session.get(FrotaPostoRecarga, recarga_id) is None)
+        r = c.delete('/frota/postos-combustivel/recargas/999999', headers=h_master)
+        check('excluir recarga inexistente -> 404', r.status_code == 404)
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        check('saldo cai após excluir a recarga',
+              saldo_de(json.loads(r.data), 'Posto Ipiranga Centro')['saldo'] == 750.5,
+              f"got {saldo_de(json.loads(r.data), 'Posto Ipiranga Centro')['saldo']}")
+
+        print('\n=== recarga morre com o posto (ON DELETE CASCADE no Postgres) ===')
+        db.session.delete(db.session.get(FrotaAbastecimento, legado_id))
+        db.session.commit()
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        check('remover abastecimento devolve o saldo',
+              saldo_de(json.loads(r.data), 'Posto Ipiranga Centro')['saldo'] == 950.5,
+              f"got {saldo_de(json.loads(r.data), 'Posto Ipiranga Centro')['saldo']}")
+
+        print('\n=== legado acentuado e colisão de nome ===')
+        r = c.post('/frota/postos-combustivel', json={'nome': 'Posto São José'},
+                   headers=h_master)
+        posto_acento = json.loads(r.data)
+        r = c.post(f"/frota/postos-combustivel/{posto_acento['id']}/recargas",
+                   json={'valor': 1000}, headers=h_master)
+        check('recarga no posto acentuado -> 201', r.status_code == 201)
+        # Nome digitado em caixa alta e em NFD: lower() do banco não resolve
+        # nenhum dos dois, por isso o casamento é feito em Python.
+        db.session.add_all([
+            FrotaAbastecimento(veiculo_id=veic_id, data=hoje, valor=250, litros=40,
+                               posto='POSTO SÃO JOSÉ', posto_id=None),
+            FrotaAbastecimento(veiculo_id=veic_id, data=hoje, valor=150, litros=20,
+                               posto=unicodedata.normalize('NFD', 'posto são josé'),
+                               posto_id=None),
+        ])
+        db.session.commit()
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        acento_saldo = saldo_de(json.loads(r.data), 'Posto São José')
+        check('legado acentuado em caixa alta e em NFD entra no consumo',
+              acento_saldo['total_consumido'] == 400.0,
+              f"got {acento_saldo['total_consumido']}")
+        check('saldo do posto acentuado desconta os dois',
+              acento_saldo['saldo'] == 600.0, f"got {acento_saldo['saldo']}")
+        r = c.get(f"/frota/postos-combustivel/{posto_acento['id']}/extrato",
+                  headers=h_master)
+        check('extrato acentuado mostra os mesmos movimentos do saldo',
+              len(json.loads(r.data)['movimentos']) == 3,
+              f"got {len(json.loads(r.data)['movimentos'])}")
+
+        # 'Auto Posto Sol' e 'AutoPosto Sol' são dois cadastros válidos (o unique
+        # é sobre o nome com o espaço interno). Uma chave sem espaços colapsava
+        # os dois e debitava no posto errado, além de repetir o movimento nos
+        # dois extratos.
+        r = c.post('/frota/postos-combustivel', json={'nome': 'Auto Posto Sol'},
+                   headers=h_master)
+        colide_a = json.loads(r.data)
+        r = c.post('/frota/postos-combustivel', json={'nome': 'AutoPosto Sol'},
+                   headers=h_master)
+        colide_b = json.loads(r.data)
+        check('os dois cadastros coexistem', colide_a['id'] != colide_b['id'])
+        db.session.add(FrotaAbastecimento(
+            veiculo_id=veic_id, data=hoje, valor=300, litros=45,
+            posto='Auto Posto Sol', posto_id=None))
+        db.session.commit()
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        dados = json.loads(r.data)
+        check('o gasto vai para o posto do nome digitado',
+              saldo_de(dados, 'Auto Posto Sol')['total_consumido'] == 300.0,
+              f"got {saldo_de(dados, 'Auto Posto Sol')['total_consumido']}")
+        check('o posto de nome parecido não é debitado',
+              saldo_de(dados, 'AutoPosto Sol')['total_consumido'] == 0.0,
+              f"got {saldo_de(dados, 'AutoPosto Sol')['total_consumido']}")
+        r = c.get(f"/frota/postos-combustivel/{colide_b['id']}/extrato",
+                  headers=h_master)
+        check('o movimento não aparece no extrato do posto parecido',
+              json.loads(r.data)['movimentos'] == [],
+              f"got {json.loads(r.data)['movimentos']}")
+
+        print('\n=== posto em litros ===')
+        r = c.post('/frota/postos-combustivel',
+                   json={'nome': 'Posto Convênio Litros', 'unidade': 'litros'},
+                   headers=h_master)
+        check('cadastra posto com unidade litros -> 201',
+              r.status_code == 201 and json.loads(r.data)['unidade'] == 'litros',
+              f'got {r.status_code}: {r.data[:160]}')
+        posto_litros = json.loads(r.data)
+
+        r = c.post(f"/frota/postos-combustivel/{posto_litros['id']}/recargas",
+                   json={'valor': 5000}, headers=h_master)
+        check('recarga em posto de litros exige litros -> 400',
+              r.status_code == 400, f'got {r.status_code}: {r.data[:160]}')
+
+        r = c.post(f"/frota/postos-combustivel/{posto_litros['id']}/recargas",
+                   json={'litros': '800', 'valor': '4.800,00',
+                         'data': semana.isoformat()}, headers=h_master)
+        check('recarga de 800 litros com valor pago -> 201', r.status_code == 201,
+              f'got {r.status_code}: {r.data[:200]}')
+        rec_litros = json.loads(r.data)
+        check('a quantidade do movimento é em litros',
+              rec_litros['litros'] == 800.0 and rec_litros['quantidade'] == 800.0,
+              f'got {rec_litros}')
+        check('o valor pago fica registrado, fora da conta do saldo',
+              rec_litros['valor'] == 4800.0, f"got {rec_litros['valor']}")
+
+        r = c.post('/frota/abastecimentos', json={
+            'veiculo_id': veic_id, 'data': hoje.isoformat(), 'valor': 300,
+            'litros': 50, 'posto_id': posto_litros['id'],
+        }, headers=h_master)
+        check('abastecimento no posto de litros -> 201', r.status_code == 201)
+        # Abastecimento sem litros não tem como descontar de um saldo em litros.
+        db.session.add(FrotaAbastecimento(
+            veiculo_id=veic_id, data=hoje, valor=200, litros=None,
+            posto_id=posto_litros['id']))
+        db.session.commit()
+
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        dados = json.loads(r.data)
+        litros_saldo = saldo_de(dados, 'Posto Convênio Litros')
+        check('saldo do posto de litros anda em litros',
+              litros_saldo['saldo'] == 750.0, f"got {litros_saldo['saldo']}")
+        check('consumo em litros ignora o valor em reais',
+              litros_saldo['total_consumido'] == 50.0,
+              f"got {litros_saldo['total_consumido']}")
+        check('abastecimento sem litros é contado e sinalizado',
+              litros_saldo['abastecimentos'] == 2
+              and litros_saldo['abastecimentos_sem_litros'] == 1,
+              f"got {litros_saldo['abastecimentos']}/"
+              f"{litros_saldo['abastecimentos_sem_litros']}")
+        check('o valor pago aparece ao lado do saldo em litros',
+              litros_saldo['total_pago'] == 4800.0,
+              f"got {litros_saldo['total_pago']}")
+        check('resumo não soma litro com real',
+              dados['resumo']['saldo_litros'] == 750.0
+              and dados['resumo']['postos_em_litros'] == 1,
+              f"got {dados['resumo']}")
+
+        r = c.get(f"/frota/postos-combustivel/{posto_litros['id']}/extrato",
+                  headers=h_master)
+        ext_litros = json.loads(r.data)
+        check('extrato do posto de litros vem na unidade dele',
+              ext_litros['unidade'] == 'litros')
+        check('extrato em litros fecha no saldo',
+              ext_litros['movimentos'][0]['saldo_acumulado'] == 750.0,
+              f"got {ext_litros['movimentos'][0]['saldo_acumulado']}")
+        check('abastecimento sem litros é marcado no extrato',
+              any(m.get('sem_quantidade') for m in ext_litros['movimentos']))
+
+        print('\n=== ajuste: o operador digita o saldo que o posto diz ===')
+        r = c.put(f"/frota/postos-combustivel/{posto_litros['id']}/saldo",
+                  json={'saldo': '700'}, headers=h_comum)
+        check('comum não ajusta saldo -> 403', r.status_code == 403,
+              f'got {r.status_code}')
+        r = c.put(f"/frota/postos-combustivel/{posto_litros['id']}/saldo",
+                  json={'saldo': '700'}, headers=h_admin)
+        check('administrador ajusta saldo -> 200', r.status_code == 200,
+              f'got {r.status_code}: {r.data[:200]}')
+        ajuste = json.loads(r.data)
+        check('o saldo passa a ser o informado', ajuste['saldo'] == 700.0,
+              f"got {ajuste['saldo']}")
+        check('o que fica gravado é a diferença, não o número cru',
+              ajuste['ajuste']['litros'] == -50.0,
+              f"got {ajuste['ajuste']}")
+        check('o ajuste é de tipo ajuste', ajuste['ajuste']['tipo'] == 'ajuste')
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        check('saldo conferido depois do ajuste',
+              saldo_de(json.loads(r.data), 'Posto Convênio Litros')['saldo'] == 700.0)
+
+        # O saldo segue derivado: um abastecimento novo continua descontando.
+        db.session.add(FrotaAbastecimento(
+            veiculo_id=veic_id, data=hoje, valor=120, litros=20,
+            posto_id=posto_litros['id']))
+        db.session.commit()
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        check('ajuste não congela o saldo: abastecimento novo desconta',
+              saldo_de(json.loads(r.data), 'Posto Convênio Litros')['saldo'] == 680.0,
+              f"got {saldo_de(json.loads(r.data), 'Posto Convênio Litros')['saldo']}")
+
+        r = c.put(f"/frota/postos-combustivel/{posto_litros['id']}/saldo",
+                  json={'saldo': 680}, headers=h_master)
+        check('ajuste sem diferença não gera movimento -> 200',
+              r.status_code == 200 and json.loads(r.data)['ajuste'] is None,
+              f'got {r.data[:160]}')
+
+        r = c.put(f"/frota/postos-combustivel/{posto_a['id']}/saldo",
+                  json={'saldo': '-200'}, headers=h_master)
+        check('saldo negativo é aceito (posto no vermelho) -> 200',
+              r.status_code == 200 and json.loads(r.data)['saldo'] == -200.0,
+              f'got {r.status_code}: {r.data[:160]}')
+        r = c.put(f"/frota/postos-combustivel/{posto_a['id']}/saldo",
+                  json={'saldo': 'abc'}, headers=h_master)
+        check('saldo não numérico -> 400', r.status_code == 400, f'got {r.status_code}')
+        r = c.put(f"/frota/postos-combustivel/{posto_a['id']}/saldo",
+                  json={}, headers=h_master)
+        check('saldo ausente -> 400', r.status_code == 400, f'got {r.status_code}')
+
+        print('\n=== editar posto ===')
+        r = c.patch(f"/frota/postos-combustivel/{posto_litros['id']}",
+                    json={'unidade': 'reais'}, headers=h_master)
+        check('trocar unidade de posto com movimento -> 400',
+              r.status_code == 400, f'got {r.status_code}: {r.data[:200]}')
+        r = c.post('/frota/postos-combustivel', json={'nome': 'Posto Recem Criado'},
+                   headers=h_master)
+        novo_posto = json.loads(r.data)
+        r = c.patch(f"/frota/postos-combustivel/{novo_posto['id']}",
+                    json={'unidade': 'litros'}, headers=h_master)
+        check('trocar unidade de posto sem movimento -> 200',
+              r.status_code == 200 and json.loads(r.data)['unidade'] == 'litros',
+              f'got {r.status_code}: {r.data[:160]}')
+        r = c.patch(f"/frota/postos-combustivel/{novo_posto['id']}",
+                    json={'nome': 'Posto Ipiranga Centro'}, headers=h_master)
+        check('renomear para nome já usado -> 400', r.status_code == 400,
+              f'got {r.status_code}')
+        r = c.patch(f"/frota/postos-combustivel/{novo_posto['id']}",
+                    json={'nome': 'Posto Renomeado', 'ativo': False},
+                    headers=h_master)
+        check('renomear e inativar -> 200',
+              r.status_code == 200 and json.loads(r.data)['ativo'] is False,
+              f'got {r.status_code}: {r.data[:160]}')
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_master)
+        check('posto inativo sai da lista de saldos',
+              saldo_de(json.loads(r.data), 'Posto Renomeado') is None)
+        r = c.patch(f"/frota/postos-combustivel/{novo_posto['id']}",
+                    json={'unidade': 'barris'}, headers=h_master)
+        check('unidade inválida -> 400', r.status_code == 400, f'got {r.status_code}')
+        r = c.patch('/frota/postos-combustivel/999999', json={'nome': 'X Y'},
+                    headers=h_master)
+        check('editar posto inexistente -> 404', r.status_code == 404,
+              f'got {r.status_code}')
+        r = c.patch(f"/frota/postos-combustivel/{novo_posto['id']}",
+                    json={'nome': 'Qualquer Nome'}, headers=h_comum)
+        check('comum não edita posto -> 403', r.status_code == 403,
+              f'got {r.status_code}')
+
+        print('\n=== gate do módulo ===')
+        sem_modulo = User(username='sem_modulo_recarga', role='comum',
+                          modulos_permitidos=['obras'])
+        sem_modulo.set_password('smoke123')
+        db.session.add(sem_modulo)
+        db.session.commit()
+        h_sem = {'Authorization':
+                 f'Bearer {create_access_token(identity=str(sem_modulo.id))}'}
+        r = c.get('/frota/postos-combustivel/saldos', headers=h_sem)
+        check('sem o módulo Frota não vê saldo -> 403', r.status_code == 403,
+              f'got {r.status_code}')
+
+        print('\n=== quem pode LER saldo/extrato/recargas ===')
+        # O saldo é consolidado da empresa e o extrato traz placa de veículo de
+        # qualquer obra: nenhum dos dois passa pelo filtro de obra do módulo,
+        # então leitura é de gestor. Sem isto o comum via o gasto de obra alheia.
+        for rotulo, caminho in [
+            ('saldos', '/frota/postos-combustivel/saldos'),
+            ('recargas', '/frota/postos-combustivel/recargas'),
+            ('extrato', f"/frota/postos-combustivel/{posto_a['id']}/extrato"),
+        ]:
+            r = c.get(caminho, headers=h_comum)
+            check(f'comum não lê {rotulo} -> 403', r.status_code == 403,
+                  f'got {r.status_code}')
+            r = c.get(caminho, headers=h_admin)
+            check(f'administrador lê {rotulo} -> 200', r.status_code == 200,
+                  f'got {r.status_code}')
+        r = c.get('/frota/postos-combustivel', headers=h_comum)
+        check('comum continua listando postos (alimenta o abastecimento) -> 200',
+              r.status_code == 200, f'got {r.status_code}')
+        r = c.get('/frota/postos-combustivel/saldos')
+        check('sem JWT não vê saldo', r.status_code in (401, 422),
+              f'got {r.status_code}')
+
+print(f'\n{"=" * 40}')
+print(f'PASS: {len(PASS)}  FAIL: {len(FAIL)}')
+if FAIL:
+    print('FALHAS:')
+    for f in FAIL:
+        print(f'  - {f}')
+    sys.exit(1)
+else:
+    print('Todos os cenarios passaram.')
+    sys.exit(0)

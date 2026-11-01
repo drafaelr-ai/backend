@@ -12,7 +12,7 @@ Architecture:
 import os
 import logging
 
-from flask import Flask, request
+from flask import Flask, jsonify, request
 
 from logging_setup import setup_logging
 from extensions import db, jwt, cors, limiter
@@ -157,6 +157,56 @@ def create_app(config_class=Config):
     def shutdown_session(exception=None):
         db.session.remove()
     logger.info("--- [LOG] Teardown de sessão configurado ---")
+
+    # === HEALTH CHECKS — públicos, sem JWT, fora de qualquer gate de módulo ===
+    # Registrados direto no app (não em blueprint) justamente para não herdar
+    # nenhum before_request de módulo (frota/rh/solicitacoes/almoxarifado/
+    # planejamento exigem JWT + módulo liberado no before_request do próprio
+    # blueprint). Isentos do rate limit: o check do Fly bate de 15 em 15s e não
+    # pode ser barrado pelo Flask-Limiter. Hoje o limiter sobe com
+    # default_limits=[] (extensions.py), então nada global os pegaria, mas a
+    # isenção é explícita para que um default_limits futuro não cegue o deploy.
+
+    @app.route('/health', methods=['GET'])
+    @limiter.exempt
+    def health():
+        """Liveness — 200 sempre que o processo está de pé. NÃO toca o banco.
+
+        É esta rota que o Fly usa como health check ([[http_service.checks]] em
+        fly.obraly.toml). Ela é de propósito cega para o banco: o check do Fly
+        decide se a máquina continua na rotação do proxy, então um SELECT 1
+        aqui faria uma instabilidade do Supabase tirar a API inteira do ar por
+        um problema que não é da aplicação.
+
+        Isso não enfraquece o gate de deploy: o caso que queremos pegar — DDL do
+        auto_migration.py estourando no boot — já cai aqui, porque
+        run_auto_migration() dá raise no import deste módulo, o worker do
+        gunicorn não sobe e esta rota simplesmente não responde.
+
+        Para saber o estado do banco, use /health/db.
+        """
+        return jsonify({"status": "healthy", "module": "obraly-api"}), 200
+
+    @app.route('/health/db', methods=['GET'])
+    @limiter.exempt
+    def health_db():
+        """Readiness — SELECT 1 para dizer se o banco está respondendo.
+
+        Separada de /health e deliberadamente FORA do check do Fly: serve para
+        diagnóstico manual e para o passo pós-deploy do CI. Responde 503
+        (serviço indisponível) quando o banco não responde — não é erro de
+        validação, por isso não é 400.
+
+        O corpo não devolve a mensagem da exceção: a rota é pública e o erro do
+        psycopg2 carrega host/usuário/string de conexão. O detalhe fica no log
+        (logger.exception), visível em `fly logs --app obraly-api`.
+        """
+        try:
+            db.session.execute(db.text('SELECT 1'))
+            return jsonify({"status": "healthy", "db": "ok"}), 200
+        except Exception:
+            logger.exception("Erro em /health/db — banco não respondeu ao SELECT 1")
+            return jsonify({"status": "degradado", "db": "erro"}), 503
 
     app.register_blueprint(notificacoes_bp)
     app.register_blueprint(bi_bp)
