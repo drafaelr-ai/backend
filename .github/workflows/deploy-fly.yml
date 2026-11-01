@@ -94,18 +94,23 @@ jobs:
           falhou=0
 
           # Fora do gate — qualquer mudança aqui tem que ser justificada:
-          #   smoke_frota_local.py            2 FAIL pré-existentes (B-06 em
-          #     obraly-root/docs/BUGS_LATENTES.md: PATCH /frota/veiculos/<id>/condutor
-          #     exige transferir_veiculo até para REMOVER condutor). Os outros
-          #     75 checks do script passam; voltar a incluí-lo quando B-06 fechar.
           #   smoke_superlink.py              importa app.py, que no import roda
           #     auto_migration + create_app e exige DB_PASSWORD/JWT_SECRET_KEY e
           #     rede até o Postgres de produção. Não roda offline. A cobertura de
-          #     Superlink fica com smoke_superlink_isolation.py (22 checks), que
-          #     monta o próprio app.
-          #   smoke_almoxarifado_ponto_local.py  SyntaxError no 3.11 (f-string
-          #     aninhada PEP 701, linha 115). Fora do gate até ser reescrito.
-          excluidos="smoke_frota_local.py smoke_superlink.py smoke_almoxarifado_ponto_local.py"
+          #     Superlink fica com smoke_superlink_isolation.py, que monta o
+          #     próprio app, e a montagem do app.py principal com
+          #     smoke_app_local.py.
+          #
+          # Dois scripts saíram desta lista em 01/11/2026, consertados:
+          #   smoke_frota_local.py            os 2 FAIL eram o B-06 — a rota
+          #     exigia confirmação de transferência até para REMOVER o condutor.
+          #     Hoje fecha 77/77.
+          #   smoke_almoxarifado_ponto_local.py  era B-09, f-string aninhada que
+          #     não faz parse no 3.11. Corrigida — e, com o script voltando a
+          #     rodar, apareceu embaixo um teste com data fixa ('2026-08-10')
+          #     que virou passado e derrubava a alocação de equipamento locado.
+          #     As datas agora são relativas a hoje.
+          excluidos="smoke_superlink.py"
 
           esta_excluido() {
             for e in $excluidos; do [ "$1" = "$e" ] && return 0; done

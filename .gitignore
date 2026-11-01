@@ -205,3 +205,12 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# Diretório de staging do deploy do admin: é ARTEFATO DE BUILD, gerado pelo
+# deploy_fly.ps1 (que espelha models_admin/, routes_admin/, services_admin/ e
+# os arquivos soltos antes de deployar). Estava commitado e ficou 12 arquivos
+# atrás da raiz — e os passos do DEPLOY.md mandavam deployar de dentro dele.
+# Quem fizesse isso reintroduzia em produção a falta de rate limiting no login
+# e o SSO criando usuário como role='admin' em vez de 'operador'. O
+# .dockerignore já o exclui do contexto de build; agora o git também.
+fly-deploy/

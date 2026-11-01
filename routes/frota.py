@@ -55,6 +55,7 @@ from services.efrotas_service import (
     status_consulta_efrotas,
 )
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
+from services.numero_br import para_numero
 
 logger = logging.getLogger(__name__)
 
@@ -97,20 +98,13 @@ def _parse_date(valor):
 
 
 def _to_num(valor):
-    """Converte número ou string BR ('2.640,00') em float. None se vazio."""
-    if valor is None or valor == '':
-        return None
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    s = str(valor).strip().replace('R$', '').strip()
-    if ',' in s and '.' in s:          # 2.640,00 → 2640.00
-        s = s.replace('.', '').replace(',', '.')
-    elif ',' in s:                     # 2640,00 → 2640.00
-        s = s.replace(',', '.')
-    try:
-        return float(s)
-    except Exception:
-        return None
+    """Converte número ou string BR ('2.640,00', '1.250') em float.
+
+    Delega para services.numero_br: a regra do milhar vive num lugar só,
+    com teste próprio. Antes cada rota tinha sua cópia, e todas liam
+    '1.250' como 1.25.
+    """
+    return para_numero(valor)
 
 
 def _to_int(valor):
@@ -478,7 +472,12 @@ def atribuir_condutor(veiculo_id):
         condutor_id = _to_int(dados.get('condutor_id'))
         if dados.get('condutor_id') and not condutor_id:
             return jsonify({"erro": "condutor_id inválido"}), 400
-        if (veiculo.condutor_atual_id
+        # Só transferência pede confirmação: tirar o condutor do veículo
+        # (condutor_id nulo) não tem para quem transferir e não toma o veículo
+        # de ninguém. Exigir a flag aí travava a remoção com 409 — quem quiser
+        # um "tem certeza?" na remoção faz isso na tela, que já faz.
+        if (condutor_id
+                and veiculo.condutor_atual_id
                 and veiculo.condutor_atual_id != condutor_id
                 and not _to_bool(dados.get('transferir_veiculo'))):
             nome_atual = veiculo.condutor_atual.nome if veiculo.condutor_atual else 'outro condutor'

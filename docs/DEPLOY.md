@@ -16,28 +16,31 @@ Smoke manual pós-deploy: abrir `https://obraly.uk` em aba anônima, login, nave
 
 ## Backend Main (Fly.io)
 
-### Pré-requisitos
+### O deploy é AUTOMÁTICO (atualizado em 01/11/2026)
 
-- Estar autenticado: `fly auth login`
-- **Diretório correto:** o `fly.toml` vive em `backend-fase4/fly-deploy/obraly-api/`, não na raiz do backend.
-  Rodar `fly deploy` de fora desse diretório resulta em erro `app does not have a Dockerfile`.
+`git push origin main` basta: `.github/workflows/deploy-fly.yml` roda a suíte
+offline, deploya e confere `GET /health` na borda pública. Suíte vermelha não
+deploya. Não é mais preciso rodar `fly deploy` na mão, nem entrar em
+`fly-deploy/`.
 
-### Procedimento
+O procedimento manual abaixo serve para **rollback** ou deploy fora do fluxo.
+
+### Procedimento manual (rollback / fora do fluxo)
 
 ```powershell
-# 1. Abrir janela paralela com rollback ready (NÃO executa ainda):
-fly releases rollback --app obraly-api
+# 1. Guardar a versão atual, para poder voltar:
+fly releases --app obraly-api
+# (`fly releases rollback` NÃO existe — rollback é `fly deploy --image <tag>`)
 
-# 2. Push dos commits:
-cd C:\PROJETOS\obraly\backend-fase4
-git push origin <branch>
+# 2. Deploy, da RAIZ do backend, com os flags explícitos:
+cd C:\PROJETOS\obraly\backend
+fly deploy --app obraly-api --config fly.obraly.toml --dockerfile Dockerfile.obraly
 
-# 3. Deploy:
-cd C:\PROJETOS\obraly\backend-fase4\fly-deploy\obraly-api
-fly deploy --no-cache --app obraly-api
-
-# Aguarda: "Deployment succeeded" + "machines in good state"
+# Aguarda: "Deployment succeeded" + health check verde
 ```
+
+O `fly.toml` NÃO vive na raiz — por isso os flags `--config` e `--dockerfile`
+são obrigatórios. É exatamente o que o workflow faz.
 
 ### Ritual CORS (obrigatório pós-deploy)
 
@@ -122,9 +125,22 @@ Qualquer divergência nas contagens: **ROLLBACK IMEDIATO**.
 ### Steps
 
 ```powershell
-cd C:\PROJETOS\obraly\backend-fase4\fly-deploy\obraly-admin
-fly deploy --app obraly-admin-api
+# Da RAIZ do backend, com os flags explícitos:
+cd C:\PROJETOS\obraly\backend
+fly deploy --app obraly-admin-api --config fly.admin.toml --dockerfile Dockerfile.admin
 ```
+
+> **NÃO deploye de dentro de `fly-deploy/obraly-admin-api/`.** Aquele diretório
+> é artefato de build gerado pelo `deploy_fly.ps1`, que o sincroniza com a raiz
+> antes de deployar. Ele esteve **commitado e 12 arquivos atrasado**, e estes
+> passos mandavam entrar nele e deployar sem sincronizar — o que reintroduzia em
+> produção a falta de rate limiting no login (`@limiter.limit("10 per minute")`
+> ausente) e o SSO criando usuário com `role='admin'` em vez de `'operador'`,
+> dando visibilidade sobre TODOS os imóveis e lançamentos. Desde 01/11/2026 o
+> diretório é ignorado pelo git (já era pelo `.dockerignore`).
+>
+> `deploy_fly.ps1` continua válido: ele espelha `models_admin/`,
+> `routes_admin/`, `services_admin/` e os arquivos soltos antes do deploy.
 
 ---
 

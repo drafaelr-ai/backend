@@ -11,6 +11,28 @@ from config import _build_database_url
 
 logger = logging.getLogger(__name__)
 
+# Chave fixa do advisory lock que serializa a migration entre processos.
+# Por que existe: o Dockerfile sobe `gunicorn --workers 2` sem `--preload`,
+# então cada worker importa app.py por conta própria e esta função roda em
+# DOIS processos ao mesmo tempo a cada boot. Medido com gunicorn e Postgres
+# reais: o banner da migration aparece duas vezes, de PIDs diferentes.
+#
+# Hoje não quebra, mas por acidente: o processo perdedor fica bloqueado num
+# ALTER TABLE alheio antes de chegar nos trechos sensíveis. Isolando um bloco
+# novo de CREATE TABLE + sequence, a corrida quebra com
+# "duplicate key value violates unique constraint pg_class_relname_nsp_index"
+# — o IF NOT EXISTS do perdedor não vê a tabela não-commitada do vencedor.
+#
+# Com o lock, o segundo processo ESPERA (não pula): ele precisa que a migration
+# esteja pronta antes de começar a servir requisição. Depois disso a DDL dele
+# é idempotente e passa voando.
+_LOCK_MIGRATION = 728194055
+
+# A espera pelo lock é limitada para ficar abaixo do --wait-timeout 300 do
+# `flyctl deploy`: se passar disso, o deploy falha com o health check vermelho,
+# que é o resultado certo — migration travada precisa de gente olhando.
+_LOCK_ESPERA = '240s'
+
 
 def run_auto_migration():
     """Executa migration automaticamente no startup"""
@@ -18,6 +40,7 @@ def run_auto_migration():
     logger.info("🔧 AUTO-MIGRATION: Corrigindo estrutura do banco...")
     logger.info("=" * 70)
 
+    conn = None
     try:
         import psycopg2
 
@@ -30,6 +53,13 @@ def run_auto_migration():
 
         conn = psycopg2.connect(url)
         cur = conn.cursor()
+
+        # Serializa com o outro worker antes de qualquer DDL. O lock é de
+        # sessão: se este processo morrer, o Postgres o devolve sozinho.
+        cur.execute("SET statement_timeout = %s;", (_LOCK_ESPERA,))
+        cur.execute("SELECT pg_advisory_lock(%s);", (_LOCK_MIGRATION,))
+        logger.info("auto_migration: lock de migration adquirido")
+
         cur.execute("SET statement_timeout = '900s';")
 
         # 1. Verificar colunas em pagamento_futuro
@@ -1509,3 +1539,12 @@ def run_auto_migration():
         logger.exception(f"❌ Erro na auto-migration: {e}")
         traceback.print_exc()
         raise
+    finally:
+        # Fechar a conexão devolve o advisory lock. Importa no caminho de
+        # erro: sem isto o outro worker esperaria os 240s inteiros por um
+        # lock que já não tem dono útil.
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                logger.debug("auto_migration: conexão já estava fechada")

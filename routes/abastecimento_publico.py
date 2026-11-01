@@ -23,6 +23,7 @@ from models.frota_posto_combustivel import FrotaPostoCombustivel
 from models.frota_veiculo import FrotaVeiculo
 from services import storage_service, abastecimento_service, posto_combustivel_service
 from services import recibo_abastecimento_service
+from services.numero_br import para_inteiro, para_numero
 
 logger = logging.getLogger(__name__)
 
@@ -42,28 +43,22 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def _to_num(valor):
-    if valor is None or valor == '':
-        return None
-    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
-        return float(valor)
-    s = str(valor).strip().replace('R$', '').strip()
-    if ',' in s and '.' in s:
-        s = s.replace('.', '').replace(',', '.')
-    elif ',' in s:
-        s = s.replace(',', '.')
-    try:
-        return float(s)
-    except Exception:
-        return None
+    """Valor em dinheiro digitado pelo motorista. Regra em services.numero_br."""
+    return para_numero(valor)
+
+
+def _to_preco(valor):
+    """Preço por litro: aqui o ponto é SEMPRE decimal.
+
+    '5.899' no cupom é R$ 5,899 por litro — a regra do milhar que vale para
+    dinheiro leria 5899, que é absurdo para um litro de combustível.
+    """
+    return para_numero(valor, milhar=False)
 
 
 def _to_int(valor):
-    if valor is None or valor == '':
-        return None
-    try:
-        return int(float(str(valor).replace('.', '').replace(',', '.')))
-    except (TypeError, ValueError):
-        return None
+    """KM digitado pelo motorista."""
+    return para_inteiro(valor)
 
 
 def _parse_date(valor):
@@ -265,7 +260,7 @@ def enviar_abastecimento(token):
             return jsonify({"erro": "Informe quantos litros foram abastecidos."}), 400
 
         valor_total = _to_num(dados.get('valor_total'))
-        preco_litro = _to_num(dados.get('preco_litro'))
+        preco_litro = _to_preco(dados.get('preco_litro'))
         if (not valor_total or valor_total <= 0) and preco_litro and preco_litro > 0:
             valor_total = round(litros * preco_litro, 2)
         if not valor_total or valor_total <= 0:
