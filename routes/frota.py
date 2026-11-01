@@ -1178,6 +1178,7 @@ def criar_posto_combustivel():
         ).first()
         posto = posto_combustivel_service.resolver_posto({
             'novo_posto_nome': nome,
+            'unidade': dados.get('unidade'),
         })
         db.session.commit()
         return jsonify(posto.to_dict()), 200 if existente else 201
@@ -1230,6 +1231,113 @@ def listar_saldos_postos():
         return jsonify({"erro": "Erro ao calcular saldo dos postos"}), 500
 
 
+@frota_bp.route('/postos-combustivel/<int:posto_id>', methods=['PATCH'])
+@jwt_required()
+def editar_posto_combustivel(posto_id):
+    """Renomeia o posto, troca a unidade do saldo ou inativa. Só gestor."""
+    try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({
+                "erro": "Somente master ou administrador podem editar postos",
+            }), 403
+        posto = db.session.get(FrotaPostoCombustivel, posto_id)
+        if not posto:
+            return jsonify({"erro": "Posto de combustível não encontrado"}), 404
+
+        dados = request.get_json(silent=True) or {}
+        if 'nome' in dados:
+            nome = posto_combustivel_service.limpar_nome(dados.get('nome'))
+            if not nome:
+                return jsonify({"erro": "nome é obrigatório"}), 400
+            normalizado = posto_combustivel_service.normalizar_nome(nome)
+            conflito = FrotaPostoCombustivel.query.filter(
+                FrotaPostoCombustivel.nome_normalizado == normalizado,
+                FrotaPostoCombustivel.id != posto.id,
+            ).first()
+            if conflito:
+                return jsonify({"erro": "Já existe um posto com este nome"}), 400
+            posto.nome = nome
+            posto.nome_normalizado = normalizado
+        if 'unidade' in dados:
+            # Trocar a unidade reinterpreta os movimentos já lançados: o saldo
+            # passa a somar a outra coluna. Por isso só é permitido enquanto o
+            # posto não tem movimento — depois disso o caminho é cadastrar
+            # outro posto, para não reescrever história.
+            nova = posto_combustivel_service.limpar_unidade(dados.get('unidade'))
+            atual = posto_combustivel_service.unidade_de(posto)
+            if nova != atual:
+                tem_movimento = (FrotaPostoRecarga.query
+                                 .filter_by(posto_id=posto.id).first() is not None)
+                if tem_movimento:
+                    return jsonify({
+                        "erro": "Este posto já tem recargas lançadas; a unidade não "
+                                "pode mudar. Cadastre outro posto com a unidade certa.",
+                    }), 400
+                posto.unidade = nova
+        if 'ativo' in dados:
+            posto.ativo = _to_bool(dados.get('ativo'))
+
+        db.session.commit()
+        return jsonify(posto.to_dict()), 200
+    except posto_combustivel_service.PostoInvalido as exc:
+        db.session.rollback()
+        return jsonify({"erro": str(exc)}), 400
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"erro": "Já existe um posto com este nome"}), 400
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em PATCH /frota/postos-combustivel/<id>")
+        return jsonify({"erro": "Erro ao editar posto de combustível"}), 500
+
+
+@frota_bp.route('/postos-combustivel/<int:posto_id>/saldo', methods=['PUT'])
+@jwt_required()
+def ajustar_saldo_posto(posto_id):
+    """O operador digita o saldo que o posto diz que ele tem.
+
+    O que fica gravado é a DIFERENÇA em relação ao saldo calculado, como um
+    movimento de ajuste. Assim o saldo continua derivado (movimentos menos
+    abastecimentos) e segue caindo sozinho a cada abastecimento — e o
+    histórico de quem lançou o quê não é apagado.
+    """
+    try:
+        user = get_current_user()
+        if not _eh_gestor(user):
+            return jsonify({
+                "erro": "Somente master ou administrador podem ajustar o saldo",
+            }), 403
+        posto = db.session.get(FrotaPostoCombustivel, posto_id)
+        if not posto or not posto.ativo:
+            return jsonify({"erro": "Posto de combustível não encontrado"}), 404
+
+        dados = request.get_json(silent=True) or {}
+        if 'saldo' not in dados:
+            return jsonify({"erro": "saldo é obrigatório"}), 400
+        ajuste, saldo = posto_combustivel_service.ajustar_saldo(
+            posto, dados.get('saldo'),
+            criado_por_id=user.id if user else None,
+            observacao=dados.get('observacao'),
+        )
+        db.session.commit()
+        return jsonify({
+            "ok": True,
+            "saldo": saldo,
+            "unidade": posto_combustivel_service.unidade_de(posto),
+            "ajuste": ajuste.to_dict(
+                criado_por_nome=user.username if user else None,
+            ) if ajuste else None,
+        }), 200
+    except posto_combustivel_service.PostoInvalido as exc:
+        db.session.rollback()
+        return jsonify({"erro": str(exc)}), 400
+    except Exception:
+        db.session.rollback()
+        logger.exception("Erro em PUT /frota/postos-combustivel/<id>/saldo")
+        return jsonify({"erro": "Erro ao ajustar o saldo do posto"}), 500
+
+
 @frota_bp.route('/postos-combustivel/recargas', methods=['GET'])
 @jwt_required()
 def listar_recargas_postos():
@@ -1280,6 +1388,7 @@ def criar_recarga_posto(posto_id):
         recarga = posto_combustivel_service.criar_recarga(posto, {
             'data': _parse_date(dados.get('data')) or date.today(),
             'valor': dados.get('valor'),
+            'litros': dados.get('litros'),
             'observacao': dados.get('observacao'),
         }, criado_por_id=user.id if user else None)
         db.session.commit()
