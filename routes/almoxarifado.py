@@ -31,6 +31,7 @@ from services.locacao_financeira_service import (
     fornecedor_da_locacao,
     validar_item_orcamento_da_obra,
 )
+from services.numero_br import para_numero
 
 logger = logging.getLogger(__name__)
 
@@ -64,19 +65,8 @@ def _gate_modulo_almoxarifado():
 
 
 def _to_num(valor):
-    if valor is None or valor == '':
-        return None
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    texto = str(valor).strip().replace('R$', '').strip()
-    if ',' in texto and '.' in texto:
-        texto = texto.replace('.', '').replace(',', '.')
-    elif ',' in texto:
-        texto = texto.replace(',', '.')
-    try:
-        return float(texto)
-    except (TypeError, ValueError):
-        return None
+    """Número BR ('2.640,00', '1.250'). Regra única em services.numero_br."""
+    return para_numero(valor)
 
 
 def _to_int(valor):

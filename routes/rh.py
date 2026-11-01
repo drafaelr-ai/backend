@@ -23,6 +23,7 @@ from models.ponto_marcacao import PontoMarcacao
 from models.obra import Obra
 from services import cct_parser_service, rh_service, storage_service
 from services import get_current_user, user_has_access_to_obra, user_tem_modulo
+from services.numero_br import para_numero
 
 logger = logging.getLogger(__name__)
 
@@ -57,20 +58,13 @@ def _parse_date(valor):
 
 
 def _to_num(valor):
-    """Converte número ou string BR ('2.640,00') em float. None se vazio."""
-    if valor is None or valor == '':
-        return None
-    if isinstance(valor, (int, float)):
-        return float(valor)
-    s = str(valor).strip().replace('R$', '').strip()
-    if ',' in s and '.' in s:          # 2.640,00 → 2640.00
-        s = s.replace('.', '').replace(',', '.')
-    elif ',' in s:                     # 2640,00 → 2640.00
-        s = s.replace(',', '.')
-    try:
-        return float(s)
-    except Exception:
-        return None
+    """Converte número ou string BR ('2.640,00', '1.250') em float.
+
+    Delega para services.numero_br: a regra do milhar vive num lugar só,
+    com teste próprio. Antes cada rota tinha sua cópia, e todas liam
+    '1.250' como 1.25.
+    """
+    return para_numero(valor)
 
 
 def _parse_int_arg(nome, valor):
