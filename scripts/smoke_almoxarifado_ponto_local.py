@@ -112,7 +112,18 @@ with app.app_context():
     headers_rh = {'Authorization': f'Bearer {create_access_token(identity=str(rh.id))}'}
     headers_sem_modulo = {'Authorization': f'Bearer {create_access_token(identity=str(sem_modulo.id))}'}
     headers_admin_leitura = {'Authorization': f'Bearer {create_access_token(identity=str(admin_leitura.id))}'}
-    headers_financeiro = {'Authorization': f'Bearer {create_access_token(identity=str(financeiro.id), additional_claims={'role': 'administrador'})}'}
+    # O token fica numa variável antes da f-string: aspas simples aninhadas
+    # dentro de f-string só fazem parse no Python 3.12+ (PEP 701), e produção
+    # roda 3.11 (Dockerfile.obraly). Assim este smoke volta a rodar no gate.
+    token_financeiro = create_access_token(
+        identity=str(financeiro.id), additional_claims={'role': 'administrador'},
+    )
+    headers_financeiro = {'Authorization': f'Bearer {token_financeiro}'}
+
+    # Vencimento SEMPRE relativo a hoje: a rota recusa vencimento anterior
+    # a data de alocacao, entao data fixa no codigo viravam bomba de tempo —
+    # passava quando foi escrita e quebrava meses depois.
+    venc_futuro = (date.today() + timedelta(days=30)).isoformat()
 
     with app.test_client() as client:
         response = client.get('/almoxarifado/dashboard')
@@ -245,13 +256,13 @@ with app.app_context():
         check('entrada de equipamento locado autorizada', response.status_code == 201, response.status_code)
         response = client.post('/almoxarifado/movimentacoes', headers=headers_almox, json={
             'item_id': locacao_id, 'tipo': 'alocacao_obra', 'quantidade': 1, 'obra_id': obra_a.id,
-            'dias_locacao': 45, 'data_vencimento': '2026-08-10',
+            'dias_locacao': 45, 'data_vencimento': venc_futuro,
             'orcamento_item_id': item_orcamento_locacao.id,
         })
         check('perfil operacional nao cria compromisso financeiro', response.status_code == 403, response.status_code)
         response = client.post('/almoxarifado/movimentacoes', headers=headers_financeiro, json={
             'item_id': locacao_id, 'tipo': 'alocacao_obra', 'quantidade': 1, 'obra_id': obra_a.id,
-            'dias_locacao': 45, 'data_vencimento': '2026-08-10',
+            'dias_locacao': 45, 'data_vencimento': venc_futuro,
             'orcamento_item_id': item_orcamento_locacao.id,
         })
         check('equipamento locado pode ser alocado à obra', response.status_code == 201, response.status_code)
@@ -259,7 +270,7 @@ with app.app_context():
         pagamentos_locacao = alocacao.get('financeiro', [])
         check('locacao gera parcelas financeiras proporcionais', len(pagamentos_locacao) == 2, len(pagamentos_locacao))
         check('locacao gera valor de 45 dias', round(sum(p['valor'] for p in pagamentos_locacao), 2) == 375, pagamentos_locacao)
-        check('primeiro vencimento respeita a data informada', pagamentos_locacao[0]['data_vencimento'] == '2026-08-10', pagamentos_locacao[0]['data_vencimento'] if pagamentos_locacao else None)
+        check('primeiro vencimento respeita a data informada', pagamentos_locacao[0]['data_vencimento'] == venc_futuro, pagamentos_locacao[0]['data_vencimento'] if pagamentos_locacao else None)
         response = client.get(
             f'/sid/cronograma-financeiro/{obra_a.id}/pagamentos-futuros', headers=headers_financeiro,
         )
@@ -275,7 +286,7 @@ with app.app_context():
         primeiro_pagamento_id = pagamentos_locacao[0]['id']
         response = client.post(
             f'/obras/{obra_a.id}/cronograma/marcar-multiplos-pagos', headers=headers_financeiro,
-            json={'itens': [{'tipo': 'futuro', 'id': primeiro_pagamento_id}], 'data_pagamento': '2026-08-10'},
+            json={'itens': [{'tipo': 'futuro', 'id': primeiro_pagamento_id}], 'data_pagamento': venc_futuro},
         )
         check('baixa no financeiro da obra funciona', response.status_code == 200 and response.get_json()['resultados'][0]['status'] == 'success', response.status_code)
         lancamento_locacao = Lancamento.query.filter_by(
