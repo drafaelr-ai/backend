@@ -7,6 +7,10 @@ from flask_jwt_extended import jwt_required
 from extensions_admin import db
 from models_admin import Imovel, AdminBoleto
 from services_admin import get_current_user, extrair_dados_boleto_pdf_admin
+from services_admin import storage_admin_service
+
+# Boleto bancario e 1-2 paginas.
+_MAX_PDF_BYTES = 10 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +79,34 @@ def criar_boleto_admin(imovel_id):
             data_vencimento=datetime.strptime(data.get('data_vencimento'), '%Y-%m-%d').date(),
             orcamento_item_id=data.get('orcamento_item_id') or None,
             arquivo_nome=data.get('arquivo_nome'),
-            arquivo_pdf=data.get('arquivo_pdf') or data.get('arquivo_base64'),
         )
+
+        # B-11: o PDF vai para o Storage e no banco fica so o path. Enquanto o
+        # bucket e as credenciais do admin nao estiverem configurados,
+        # `disponivel()` e False e o comportamento segue identico ao de antes
+        # (base64 na coluna) — e por isso que esta mudanca pode esperar o
+        # deploy manual do admin sem mudar nada em producao.
+        conteudo = data.get('arquivo_pdf') or data.get('arquivo_base64')
+        if conteudo:
+            if storage_admin_service.disponivel():
+                try:
+                    boleto.arquivo_path = storage_admin_service.upload_base64(
+                        conteudo,
+                        'boletos',
+                        nome=data.get('arquivo_nome') or 'boleto.pdf',
+                        bucket=storage_admin_service.BUCKET_BOLETOS_ADMIN,
+                        max_bytes=_MAX_PDF_BYTES,
+                    )
+                except ValueError as exc:
+                    return jsonify({'erro': str(exc)}), 400
+                except Exception:
+                    logger.exception('Falha ao subir o PDF do boleto admin')
+                    return jsonify({
+                        'erro': 'Nao foi possivel guardar o PDF do boleto. Tente de novo.',
+                    }), 502
+            else:
+                boleto.arquivo_pdf = conteudo
+
         db.session.add(boleto)
         db.session.commit()
         logger.info(f"Boleto criado: {boleto.id} no imóvel {imovel_id}")
@@ -186,6 +216,21 @@ def obter_arquivo_boleto_admin(imovel_id, boleto_id):
     boleto = AdminBoleto.query.get_or_404(boleto_id)
     if user.role != 'admin' and boleto.imovel.usuario_id != user.id:
         return jsonify({'erro': 'Acesso negado'}), 403
+    # Caminho novo: arquivo no Storage, devolvido como URL assinada de 1h.
+    # `arquivo_base64` segue na resposta pelos registros antigos; o cliente
+    # aceita os dois, entao a migracao do banco pode vir depois.
+    if boleto.arquivo_path:
+        try:
+            url = storage_admin_service.signed_url(
+                boleto.arquivo_path,
+                expires=3600,
+                bucket=storage_admin_service.BUCKET_BOLETOS_ADMIN,
+            )
+        except Exception:
+            logger.exception('Falha ao assinar a URL do PDF do boleto admin')
+            return jsonify({'erro': 'Nao foi possivel abrir o PDF agora.'}), 502
+        return jsonify({'arquivo_nome': boleto.arquivo_nome, 'arquivo_url': url})
+
     if not boleto.arquivo_pdf:
         return jsonify({'erro': 'Boleto não possui arquivo'}), 404
     return jsonify({'arquivo_nome': boleto.arquivo_nome, 'arquivo_base64': boleto.arquivo_pdf})

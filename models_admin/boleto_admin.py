@@ -23,9 +23,13 @@ class AdminBoleto(db.Model):
     data_pagamento = db.Column(db.Date, nullable=True)
     orcamento_item_id = db.Column(db.Integer, nullable=True)
 
-    # Arquivo PDF (base64)
+    # Arquivo PDF
+    # `arquivo_path` e o caminho no bucket do Storage e e o caminho novo.
+    # `arquivo_pdf` guarda base64 e existe pelos registros antigos: um PDF de
+    # 300 KB virava ~400 KB de texto numa coluna do Postgres, por linha.
     arquivo_nome = db.Column(db.String(255), nullable=True)
-    arquivo_pdf = db.Column(db.Text, nullable=True)
+    arquivo_path = db.Column(db.String(500), nullable=True)
+    arquivo_pdf = db.Column(db.Text, nullable=True)  # legado: base64
 
     # Timestamps
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -64,7 +68,7 @@ class AdminBoleto(db.Model):
             'status': self.status,
             'data_pagamento': self.data_pagamento.isoformat() if self.data_pagamento else None,
             'arquivo_nome': self.arquivo_nome,
-            'tem_pdf': bool(self.arquivo_pdf),
+            'tem_pdf': bool(self.arquivo_path or self.arquivo_pdf),
             'dias_para_vencer': dias_para_vencer,
             'urgencia': urgencia,
             'orcamento_item_id': self.orcamento_item_id,
