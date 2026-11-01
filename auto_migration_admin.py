@@ -62,6 +62,9 @@ def run_auto_migration_admin():
 
         # Coluna orcamento_item_id em admin_boleto (aditiva, idempotente)
         cur.execute("ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS orcamento_item_id INTEGER;")
+        # B-11: o PDF passa a viver no Storage; arquivo_pdf (base64) fica
+        # pelos registros antigos, que seguem sendo servidos dela.
+        cur.execute("ALTER TABLE admin_boleto ADD COLUMN IF NOT EXISTS arquivo_path VARCHAR(500);")
         logger.info("auto_migration_admin: orcamento_item_id em admin_boleto garantida")
 
         # Coluna refs: [{tabela, id}] para query ao vivo (aditiva, idempotente)
