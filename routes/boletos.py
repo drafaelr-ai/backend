@@ -13,6 +13,11 @@ from models.obra import Obra
 from models.boleto import Boleto
 from services import get_current_user, user_has_access_to_obra, criar_notificacao
 from utils import formatar_real
+from services import storage_service
+
+BUCKET_BOLETOS = 'boletos-arquivos'
+# Teto do PDF de boleto: boleto bancário é 1-2 páginas.
+_MAX_PDF_BYTES = 10 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -309,9 +314,31 @@ def criar_boleto(obra_id):
             vinculado_servico_id=data.get('vinculado_servico_id'),
             orcamento_item_id=data.get('orcamento_item_id') or None,
             arquivo_nome=data.get('arquivo_nome'),
-            arquivo_pdf=data.get('arquivo_pdf') or data.get('arquivo_base64')
         )
-        
+
+        # B-04: o PDF vai para o Storage e no banco fica só o path. Antes ia
+        # base64 para uma coluna TEXT — ~400 KB de texto por boleto, em cada
+        # linha. Se o upload falhar, o boleto NÃO é criado: um boleto sem o
+        # arquivo que o usuário anexou é pior que um erro visível.
+        conteudo = data.get('arquivo_pdf') or data.get('arquivo_base64')
+        if conteudo:
+            try:
+                novo_boleto.arquivo_path = storage_service.upload_base64(
+                    conteudo,
+                    'boletos',
+                    nome=data.get('arquivo_nome') or 'boleto.pdf',
+                    bucket=BUCKET_BOLETOS,
+                    content_type='application/pdf',
+                    max_bytes=_MAX_PDF_BYTES,
+                )
+            except ValueError as exc:
+                return jsonify({"erro": str(exc)}), 400
+            except Exception:
+                logger.exception("Falha ao subir o PDF do boleto para o Storage")
+                return jsonify({
+                    "erro": "Não foi possível guardar o PDF do boleto. Tente de novo.",
+                }), 502
+
         db.session.add(novo_boleto)
         db.session.commit()
         
@@ -468,9 +495,28 @@ def obter_arquivo_boleto(obra_id, boleto_id):
         if not boleto or boleto.obra_id != obra_id:
             return jsonify({"erro": "Boleto não encontrado"}), 404
         
+        # Caminho novo: o arquivo está no Storage e devolvemos URL assinada de
+        # curta duração. `arquivo_base64` continua na resposta pelos registros
+        # antigos — o cliente aceita os dois, então a migração do banco pode
+        # acontecer depois, sem janela de indisponibilidade.
+        if boleto.arquivo_path:
+            try:
+                url = storage_service.signed_url(
+                    boleto.arquivo_path, expires=3600, bucket=BUCKET_BOLETOS,
+                )
+            except Exception:
+                logger.exception("Falha ao assinar a URL do PDF do boleto")
+                return jsonify({
+                    "erro": "Não foi possível abrir o PDF do boleto agora.",
+                }), 502
+            return jsonify({
+                "arquivo_nome": boleto.arquivo_nome,
+                "arquivo_url": url,
+            }), 200
+
         if not boleto.arquivo_pdf:
             return jsonify({"erro": "Boleto não possui arquivo anexado"}), 404
-        
+
         return jsonify({
             "arquivo_nome": boleto.arquivo_nome,
             "arquivo_base64": boleto.arquivo_pdf

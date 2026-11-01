@@ -6,6 +6,8 @@ Usa a REST do Storage direto via `requests` (SUPABASE_URL + SUPABASE_SERVICE_KEY
 evitando a dependência pesada do supabase-py.
 """
 import os
+import base64
+import binascii
 import uuid
 import logging
 
@@ -120,6 +122,51 @@ def upload_arquivo(file, pasta, bucket=BUCKET):
     if resp.status_code not in (200, 201):
         raise RuntimeError(f'Upload falhou ({resp.status_code}): {resp.text[:200]}')
     logger.info("storage: upload OK -> %s/%s", bucket, path)
+    return path
+
+
+def upload_base64(conteudo, pasta, nome='arquivo', bucket=BUCKET,
+                  content_type='application/octet-stream', max_bytes=None):
+    """Sobe conteúdo que chegou como base64 (inclusive data URL) e devolve o path.
+
+    Existe porque vários clientes antigos mandam o arquivo embutido no JSON em
+    base64, em vez de multipart. Antes isso ia direto para uma coluna TEXT do
+    Postgres — um PDF de boleto de 300 KB virava ~400 KB de texto no banco, em
+    cada linha. Aqui o base64 é decodificado uma vez e o que fica guardado é só
+    o path no bucket.
+    """
+    if not conteudo:
+        raise ValueError('Conteúdo vazio')
+    texto = str(conteudo)
+    # data URL ('data:application/pdf;base64,JVBERi0...') — corta o cabeçalho.
+    if ',' in texto and texto.strip().lower().startswith('data:'):
+        cabecalho, texto = texto.split(',', 1)
+        if 'pdf' in cabecalho.lower():
+            content_type = 'application/pdf'
+    elif ',' in texto[:120]:
+        texto = texto.split(',', 1)[1]
+    try:
+        dados = base64.b64decode(texto, validate=False)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError('Base64 inválido') from exc
+    if not dados:
+        raise ValueError('Conteúdo vazio após decodificar')
+    if max_bytes and len(dados) > max_bytes:
+        raise ValueError(
+            f'Arquivo tem {len(dados) // 1024} KB, acima do limite de '
+            f'{max_bytes // 1024} KB',
+        )
+
+    filename = secure_filename(nome or 'arquivo') or 'arquivo'
+    path = f'{pasta}/{uuid.uuid4().hex}_{filename}'
+    url = f'{_base_url()}/storage/v1/object/{bucket}/{path}'
+    headers = _headers({'Content-Type': content_type, 'x-upsert': 'true'})
+    resp = requests.post(url, headers=headers, data=dados, timeout=60)
+    if _bucket_nao_encontrado(resp) and ensure_bucket(bucket):
+        resp = requests.post(url, headers=headers, data=dados, timeout=60)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f'Upload falhou ({resp.status_code}): {resp.text[:200]}')
+    logger.info("storage: upload base64 OK -> %s/%s (%s bytes)", bucket, path, len(dados))
     return path
 
 

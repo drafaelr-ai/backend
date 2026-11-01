@@ -29,7 +29,12 @@ class Boleto(db.Model):
 
     # Arquivo PDF
     arquivo_nome = db.Column(db.String(255), nullable=True)
-    arquivo_pdf = deferred(db.Column(db.Text, nullable=True))  # Base64 do PDF
+    # `arquivo_path` é o caminho no bucket do Storage e é o caminho novo.
+    # `arquivo_pdf` guarda base64 e existe só pelos registros antigos: um PDF
+    # de 300 KB virava ~400 KB de texto numa coluna do Postgres, por linha.
+    # Fica `deferred` para não vir em nenhuma listagem sem ser pedido.
+    arquivo_path = db.Column(db.String(500), nullable=True)
+    arquivo_pdf = deferred(db.Column(db.Text, nullable=True))  # legado: base64
 
     # Alertas enviados
     alerta_7dias = db.Column(db.Boolean, default=False)

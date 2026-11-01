@@ -210,6 +210,7 @@ def run_auto_migration():
 
                     -- Arquivo PDF
                     arquivo_nome VARCHAR(255),
+                    arquivo_path VARCHAR(500),
                     arquivo_pdf TEXT,
 
                     -- Alertas enviados
@@ -852,6 +853,13 @@ def run_auto_migration():
             CREATE INDEX IF NOT EXISTS idx_frota_manut_veiculo ON frota_manutencao (veiculo_id);
             CREATE INDEX IF NOT EXISTS idx_frota_manut_obra ON frota_manutencao (obra_id);
             CREATE INDEX IF NOT EXISTS idx_frota_manut_data ON frota_manutencao (data);
+        """)
+
+        # B-04: o PDF do boleto passa a viver no Storage; a coluna arquivo_pdf
+        # (base64) fica para os registros antigos, que seguem sendo servidos
+        # dela. Aditivo e idempotente.
+        cur.execute("""
+            ALTER TABLE boleto ADD COLUMN IF NOT EXISTS arquivo_path VARCHAR(500);
         """)
 
         cur.execute("""
