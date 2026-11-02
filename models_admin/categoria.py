@@ -8,7 +8,9 @@ class Categoria(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
     tipo = db.Column(db.String(20), nullable=False)  # despesa, receita
-    icone = db.Column(db.String(10), default='💰')
+    # Classe do Tabler Icons (ex.: 'ti-coins'). Registros antigos podem
+    # trazer emoji; o front normaliza em src/utils/iconeCategoria.js.
+    icone = db.Column(db.String(40), default='ti-coins')
     cor = db.Column(db.String(7), default='#6b7280')  # Cor hex
     ordem = db.Column(db.Integer, default=0)
     ativo = db.Column(db.Boolean, default=True)
