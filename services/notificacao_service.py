@@ -23,12 +23,20 @@ def criar_notificacao(usuario_destino_id, tipo, titulo, mensagem=None, obra_id=N
         db.session.add(notificacao)
         db.session.commit()
         logger.info(f"--- [NOTIF] Notificação criada: {tipo} para usuário {usuario_destino_id} ---")
-        # Espelho no Telegram (best-effort, pós-commit): jamais desfaz o sino.
+        # Espelhos (best-effort, pós-commit): jamais desfazem o sino.
         try:
             from services.telegram_service import notificar_usuario as _tg
             _tg(usuario_destino_id, titulo, mensagem, tipo=tipo)
         except Exception as e:
             logger.warning(f"--- [NOTIF] Telegram indisponível (segue só no sino): {e} ---")
+        # Push para o aplicativo nativo. Sem FCM_CREDENTIALS_JSON vira no-op,
+        # e o envio em si acontece em thread daemon — não atrasa a resposta.
+        try:
+            from services.push_service import notificar_usuario as _push
+            _push(usuario_destino_id, titulo, mensagem, tipo=tipo,
+                  notificacao_id=notificacao.id, obra_id=obra_id)
+        except Exception as e:
+            logger.warning(f"--- [NOTIF] Push indisponível (segue só no sino): {e} ---")
         return notificacao
     except Exception as e:
         db.session.rollback()

@@ -145,3 +145,80 @@ def deletar_notificacao(notificacao_id):
         db.session.rollback()
         logger.error(f"--- [ERRO] DELETE /notificacoes/{notificacao_id}: {e} ---")
         return jsonify({"erro": "Erro interno no servidor"}), 500
+
+
+# ─── Aparelhos para push nativo ──────────────────────────────────────────────
+# O APK já chamava estas duas rotas desde que o push nativo foi escrito no
+# frontend (frontend/src/pwa/nativePush.js), mas elas nunca existiram aqui: o
+# POST voltava 404 e o token do FCM se perdia, então nenhum aviso jamais saiu
+# para a bandeja do aparelho.
+
+@notificacoes_bp.route('/dispositivos', methods=['POST', 'OPTIONS'])
+@jwt_required()
+def registrar_dispositivo_push():
+    """Vincula o token do FCM deste aparelho ao usuário logado."""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    try:
+        dados = request.get_json(silent=True) or {}
+        token = (dados.get('token') or '').strip()
+        plataforma = (dados.get('plataforma') or '').strip().lower() or None
+
+        # 400, nunca 422: o fetchWithAuth do front desloga em 401/422.
+        if not token:
+            return jsonify({"erro": "Informe o token do aparelho."}), 400
+        if len(token) > 255:
+            return jsonify({"erro": "Token do aparelho inválido."}), 400
+        if plataforma and plataforma not in ('android', 'ios', 'web'):
+            return jsonify({"erro": "Plataforma inválida."}), 400
+
+        from services.push_service import registrar_dispositivo
+        dispositivo = registrar_dispositivo(int(get_jwt_identity()), token, plataforma)
+        return jsonify(dispositivo.to_dict()), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"--- [ERRO] POST /notificacoes/dispositivos: {e} ---")
+        return jsonify({"erro": "Erro interno no servidor"}), 500
+
+
+@notificacoes_bp.route('/dispositivos', methods=['DELETE', 'OPTIONS'])
+@jwt_required()
+def remover_dispositivo_push():
+    """Desfaz o vínculo deste aparelho no logout."""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    try:
+        dados = request.get_json(silent=True) or {}
+        token = (dados.get('token') or '').strip()
+        if not token:
+            return jsonify({"erro": "Informe o token do aparelho."}), 400
+
+        from services.push_service import remover_dispositivo
+        removidos = remover_dispositivo(int(get_jwt_identity()), token)
+        return jsonify({"removidos": removidos}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.exception(f"--- [ERRO] DELETE /notificacoes/dispositivos: {e} ---")
+        return jsonify({"erro": "Erro interno no servidor"}), 500
+
+
+@notificacoes_bp.route('/push/status', methods=['GET', 'OPTIONS'])
+@jwt_required()
+def status_push():
+    """Diagnóstico: o push está configurado no servidor, e este usuário tem
+    algum aparelho vinculado? Serve para responder "por que não chega" sem
+    precisar abrir o banco."""
+    if request.method == 'OPTIONS':
+        return make_response(jsonify({"message": "OPTIONS allowed"}), 200)
+    try:
+        from services.push_service import configurado
+        from models.dispositivo_push import DispositivoPush
+        uid = int(get_jwt_identity())
+        aparelhos = DispositivoPush.query.filter_by(usuario_id=uid).all()
+        return jsonify({
+            "configurado": configurado(),
+            "aparelhos": [a.to_dict() for a in aparelhos],
+        }), 200
+    except Exception as e:
+        logger.exception(f"--- [ERRO] GET /notificacoes/push/status: {e} ---")
+        return jsonify({"erro": "Erro interno no servidor"}), 500

@@ -945,6 +945,40 @@ def run_auto_migration():
             END $$;
         """)
 
+        # Aparelhos registrados para push nativo. O APK manda o token do FCM
+        # em POST /notificacoes/dispositivos desde que o push foi escrito no
+        # frontend; até agora não havia onde guardar.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS dispositivo_push (
+                id          SERIAL PRIMARY KEY,
+                usuario_id  INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+                token       VARCHAR(255) NOT NULL UNIQUE,
+                plataforma  VARCHAR(20),
+                criado_em   TIMESTAMP DEFAULT NOW(),
+                visto_em    TIMESTAMP DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS idx_dispositivo_push_usuario
+                ON dispositivo_push (usuario_id);
+
+            ALTER TABLE dispositivo_push ENABLE ROW LEVEL SECURITY;
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+                    REVOKE ALL ON TABLE dispositivo_push FROM anon;
+                    REVOKE ALL ON SEQUENCE dispositivo_push_id_seq FROM anon;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+                    REVOKE ALL ON TABLE dispositivo_push FROM authenticated;
+                    REVOKE ALL ON SEQUENCE dispositivo_push_id_seq FROM authenticated;
+                END IF;
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+                    REVOKE ALL ON TABLE dispositivo_push FROM service_role;
+                    REVOKE ALL ON SEQUENCE dispositivo_push_id_seq FROM service_role;
+                END IF;
+            END $$;
+        """)
+        logger.info("auto_migration: tabela dispositivo_push garantida")
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS frota_abastecimento (
                 id           SERIAL PRIMARY KEY,
