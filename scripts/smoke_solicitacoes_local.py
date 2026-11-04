@@ -421,6 +421,13 @@ with app.app_context():
         check('status Aguardando aprovação', json.loads(r.data)['status'] == 'Aguardando aprovação')
         check('notif: aprovador recebeu aguardando_aprovacao',
               len(notifs(ids['aprovador_smoke'], 'solicitacao_aguardando_aprovacao')) == 1)
+        # O master pode aprovar (_eh_aprovador devolve True para ele), mas o
+        # aviso ia so para cfg.aprovadores_ids — entao ele podia aprovar e
+        # nunca era avisado. Numa instalacao sem aprovador configurado, a
+        # lista e vazia e ninguem recebia nada, em canal nenhum.
+        check('notif: master tambem recebeu aguardando_aprovacao',
+              len(notifs(ids['master_smoke'], 'solicitacao_aguardando_aprovacao')) == 1,
+              'master pode aprovar, logo precisa ser avisado')
         r = c.patch(f'/solicitacoes/{sol_id}/enviar-aprovacao', headers=h_alert)
         check('enviar-aprovacao repetido -> 400', r.status_code == 400)
 

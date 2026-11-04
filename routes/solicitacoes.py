@@ -237,6 +237,20 @@ def _eh_aprovador(user, cfg):
     return bool(cfg and user.id in (cfg.aprovadores_ids or []))
 
 
+def _ids_que_aprovam(cfg):
+    """Quem deve ser avisado de que há compra esperando aprovação.
+
+    Espelha _eh_aprovador de propósito, inclusive os masters. Antes o aviso
+    ia só para cfg.aprovadores_ids, e isso abria dois buracos: master podia
+    aprovar mas nunca era avisado, e numa instalação que nunca abriu a tela
+    de configuração a lista é vazia — a solicitação ficava parada em
+    'Aguardando aprovação' sem ninguém receber nada, em nenhum canal.
+    """
+    ids = set(cfg.aprovadores_ids or []) if cfg else set()
+    ids.update(u.id for u in User.query.filter_by(role='master').all())
+    return list(ids)
+
+
 def _eh_comprador(user, cfg, s=None):
     """Quem dá baixa na compra: master, aprovadores, os compradores
     configurados (alertados — quem faz a pesquisa de preços) e quem registrou
@@ -820,7 +834,7 @@ def enviar_aprovacao(sol_id):
 
     cfg = _config()
     _notificar_ids(
-        cfg.aprovadores_ids if cfg else [],
+        _ids_que_aprovam(cfg),
         tipo='solicitacao_aguardando_aprovacao',
         titulo=f"⏳ Solicitação #{s.id} aguarda aprovação",
         mensagem=f"{_resumo_itens(s)} — obra {s.obra.nome if s.obra else ''} ({len(s.cotacoes)} cotação(ões)).",
