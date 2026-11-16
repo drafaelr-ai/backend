@@ -422,6 +422,9 @@ def criar_solicitacao():
     tipo = (dados.get('tipo') or 'Material').strip()
     if tipo not in _TIPOS:
         return jsonify({"erro": f"tipo inválido (use {sorted(_TIPOS)})"}), 400
+    justificativa = (dados.get('observacao') or '').strip()
+    if tipo == 'Material' and not justificativa:
+        return jsonify({"erro": "justificativa é obrigatória para solicitação de Material."}), 400
 
     itens_dados = dados.get('itens')
     if isinstance(itens_dados, str):
@@ -453,7 +456,7 @@ def criar_solicitacao():
             solicitante_id=user.id,
             data_necessidade=_parse_date(dados.get('data_necessidade')),
             tipo=tipo,
-            observacao=(dados.get('observacao') or '').strip() or None,
+            observacao=justificativa or None,
             token_publico=secrets.token_urlsafe(24),
             itens=itens,
         )
@@ -594,6 +597,9 @@ def editar_solicitacao(sol_id):
     tipo = (dados.get('tipo') or 'Material').strip()
     if tipo not in _TIPOS:
         return jsonify({"erro": f"tipo inválido (use {sorted(_TIPOS)})"}), 400
+    justificativa = (dados.get('observacao') or '').strip()
+    if tipo == 'Material' and not justificativa:
+        return jsonify({"erro": "justificativa é obrigatória para solicitação de Material."}), 400
 
     itens_dados = dados.get('itens')
     if isinstance(itens_dados, str):
@@ -623,7 +629,7 @@ def editar_solicitacao(sol_id):
         s.obra_id = obra_id
         s.tipo = tipo
         s.data_necessidade = _parse_date(dados.get('data_necessidade'))
-        s.observacao = (dados.get('observacao') or '').strip() or None
+        s.observacao = justificativa or None
         s.itens = novos_itens
         db.session.commit()
     except Exception as e:
